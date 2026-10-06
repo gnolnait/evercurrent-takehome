@@ -1,0 +1,38 @@
+# Private working notes (recon, harness surveys, brainstorm). Not part of the deliverable.
+notes/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.pem
+.secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+dist/
+build/
+
+# Project state that must not be committed
+.review/
+.test-proof/
+data/live/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/

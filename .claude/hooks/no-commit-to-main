@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# no-commit-to-main - PreToolUse(Bash) guard: block `git commit` on a protected
+# base branch (`main`). Work belongs on a feature branch.
+#
+# This wrapper is a pure fail-closed rc FENCE: it runs the python guard as a
+# CHILD and coerces any non-verdict exit to a block, because Claude Code treats
+# every exit other than 2 as non-blocking (a python syntax/import error or a
+# missing interpreter would otherwise fail OPEN). All logic — the quote/heredoc
+# aware event parse (git_commit_events.py) and the branch-state walk
+# (no_commit_to_main_impl.evaluate_commit) — lives in python, the SAME code the
+# production guard_runner dispatches to.
+#
+# In production this hook is NOT registered directly; guard_runner runs the same
+# evaluate_commit. The standalone hook exists so the adversarial test suite
+# drives the production code path.
+set -uo pipefail
+
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence blocks.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+
+set +e
+"$PY" "$(dirname "$0")/no-commit-to-main.py"
+rc=$?
+set -e
+case "$rc" in
+  0|2) exit "$rc" ;;
+  *)
+    printf '%s\n' \
+      "BLOCKED: the no-commit-to-main guard could not run (python exit $rc);" \
+      "failing closed. Check the python interpreter (python3/python on PATH, or" \
+      "CLAUDE_HOOK_PYTHON) and .claude/hooks/no-commit-to-main.py." >&2 || :
+    exit 2
+    ;;
+esac

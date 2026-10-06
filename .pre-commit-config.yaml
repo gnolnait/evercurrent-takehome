@@ -1,0 +1,58 @@
+# Run with prek (https://github.com/j178/prek), a drop-in pre-commit runner:
+#   uv tool install prek && prek install && prek install --hook-type pre-push
+# Commit: fast, auto-fixing checks only. Push: the type check and the test suite.
+# Everything here is also what CI runs, so a green push is a green CI.
+
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+exclude: ^(notes/|data/cassettes/|uv\.lock$)
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: detect-private-key
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: agents-md-sync
+        name: CLAUDE.md is a copy of AGENTS.md
+        entry: python -c "import filecmp,sys; sys.exit(0 if filecmp.cmp('AGENTS.md','CLAUDE.md',shallow=False) else 1)"
+        language: system
+        pass_filenames: false
+        files: ^(AGENTS|CLAUDE)\.md$
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: pytest
+        name: pytest (replay mode)
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: hook-guards
+        name: Claude Code hook guard tests
+        entry: bash -c 'cd .claude/hooks && uv run --project ../.. python -m pytest -q'
+        language: system
+        pass_filenames: false
+        files: ^\.claude/(hooks|settings\.json)
+        stages: [pre-push]

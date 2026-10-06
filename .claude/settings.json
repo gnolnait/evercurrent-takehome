@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*merge_pull_request.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: prove-test-gate-actions exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: prove-test-gate-actions missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-track-edit\"; if [ -x \"$f\" ]; then \"$f\" || :; fi; exit 0",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

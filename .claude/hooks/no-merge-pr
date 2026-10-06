@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# no-merge-pr - PreToolUse guard: the agent must never merge a GitHub pull request.
+#
+# The quote-aware parser (no-merge-pr.py) makes the allow/block decision for
+# EVERY invocation. There is deliberately NO raw-substring pre-filter: shell
+# quoting assembles the trigger token without the contiguous substring —
+# `gh pr m''erge 5` executes a merge and the parser blocks it, but a raw
+# "merge"/"enqueue" substring gate fast-allowed it. A bash pre-filter cannot be
+# kept provably no-narrower than a shlex parser (the earlier "strict superset"
+# claim here was wrong for exactly that reason); always spawning the parser
+# (~20 ms) kills the routing-mismatch class by construction.
+set -euo pipefail
+
+INPUT="$(cat)"
+
+# Run the parser as a CHILD and fail CLOSED on any non-verdict exit. `exec`
+# would surface python's raw exit code, and Claude Code treats every exit other
+# than 2 as non-blocking — so a missing/broken python interpreter (exit 127) or a
+# parser import error (exit 1) would let a merge through.
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence blocks.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+
+set +e
+"$PY" "$(dirname "$0")/no-merge-pr.py" <<<"$INPUT"
+rc=$?
+set -e
+case "$rc" in
+  0|2) exit "$rc" ;;
+  *)
+    # printf-not-heredoc: a heredoc needs a temp file under bash, and a failed
+    # temp creation would exit 1 (non-blocking) before the `exit 2`.
+    printf '%s\n' \
+      "BLOCKED: the no-merge-pr guard could not run (python exit $rc); failing closed." \
+      "Merging PRs is a human decision — let the user merge it themselves. To repair" \
+      "the guard: check the python interpreter and .claude/hooks/no-merge-pr.py." >&2 || :
+    exit 2
+    ;;
+esac

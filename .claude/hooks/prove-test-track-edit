@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# prove-test-track-edit - PostToolUse(Edit|Write|MultiEdit) launcher for
+# prove_test_track_edit.py. Tracking must never block or fail an edit, so this
+# fence always exits 0 whatever the python child does (missing interpreter,
+# crash, malformed payload).
+set -u
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence blocks.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+"$PY" "$(dirname "$0")/prove_test_track_edit.py" || :
+exit 0

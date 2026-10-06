@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# no-bypass-signing - blocks git invocations that skip pre-commit hooks or GPG signing.
+#
+# Per CLAUDE.md Git Safety Protocol:
+#   "NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user
+#    explicitly requests it"
+#
+# Split into a thin bash wrapper + a Python parser, mirroring no-merge-pr /
+# no-merge-pr.py. The wrapper (this file) owns only the cheap, bash-safe
+# responsibilities:
+#
+#   - the BYPASS_GIT_GUARD short-circuit,
+#   - extracting the command string from the PreToolUse JSON (via python), and
+#   - the fail-closed fence around the parser (see below).
+#
+# The real allow/block decision is the quote-aware shlex parse in
+# no-bypass-signing.py, which runs on EVERY git command. There is deliberately
+# no bash-side pre-filter: an earlier version tried to fast-allow "obviously
+# clean" commands with a `case` glob to skip the Python spawn, but a bash glob
+# can't be kept provably no-narrower than the parser without duplicating it, so
+# it silently let trigger-shaped commands (`git -c Commit.GpgSign=false ...`,
+# `git 'am' -n ...`, inline aliases, ...) reach "allow" without ever consulting
+# the parser. Always spawning the parser costs ~20ms per git command and kills
+# that whole routing-mismatch bug class by construction.
+#
+# Why two files and not an inline heredoc: the parser was previously embedded via
+# a here-document nested inside `$(...)` command substitution. bash 3.2 (macOS
+# system bash, what `/usr/bin/env bash` resolves to) cannot parse a heredoc
+# inside command substitution, so the whole script failed to parse and blocked
+# 100% of git commands. Extracting Python into its own file removes the
+# heredoc-in-$() entirely, so this parses on bash 3.2.
+#
+# Bypass (user-controlled): BYPASS_GIT_GUARD=1 must be in the hook's own
+# environment — exported before the Claude Code session launches. An inline
+# `BYPASS_GIT_GUARD=1 git ...` prefix inside a Bash tool call is just text in
+# the command; it never reaches this process and the parser still blocks it.
+#
+# Input: PreToolUse hook receives {tool_name, tool_input, ...} JSON on stdin.
+
+set -euo pipefail
+
+[ "${BYPASS_GIT_GUARD:-}" = "1" ] && exit 0
+
+INPUT="$(cat)"
+
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence blocks.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+
+# Python is how we see the command at all (no jq dependency). If extraction
+# fails for ANY reason (interpreter missing, broken, an unparseable payload, or
+# a payload / tool_input that is not an object)
+# the guard cannot see what it is guarding: fail closed, loudly. On a
+# well-formed payload with no command, extraction still succeeds with empty
+# output -> the allow below. The command is written as raw UTF-8 bytes so a
+# Windows text-mode stdout cannot rewrite its newlines.
+# printf-not-heredoc in every failure handler: under `set -e`, a heredoc needs a
+# temp file, and a failed temp-file creation would exit 1 BEFORE the `exit 2` —
+# which Claude Code treats as non-blocking. `|| :` keeps even a failed printf
+# from preempting the block.
+EXTRACT='import json,sys
+d=json.load(sys.stdin)
+if d is not None and not isinstance(d,dict): sys.exit(1)
+t=d.get("tool_input") if isinstance(d,dict) else None
+if t is not None and not isinstance(t,dict): sys.exit(1)
+c=t.get("command") if isinstance(t,dict) else None
+c="" if c is None or c is False else c
+sys.stdout.buffer.write((c if isinstance(c,str) else json.dumps(c)).encode("utf-8"))'
+if ! CMD="$(printf '%s' "$INPUT" | "$PY" -c "$EXTRACT" 2>/dev/null)"; then
+  printf '%s\n' \
+    "BLOCKED: the no-bypass-signing guard could not extract the command (python" \
+    "missing, broken, or unparseable payload); failing closed. Repair the python" \
+    "interpreter, or the user can relaunch the session with BYPASS_GIT_GUARD=1 exported." >&2 || :
+  exit 2
+fi
+# Empty command on a successfully-parsed payload -> nothing to act on; allow.
+# NB: this, the BYPASS above, and the parser explicitly allowing are the ONLY
+# three routes to exit 0.
+[ -z "$CMD" ] && exit 0
+
+# Stage 2: the real decision. Run Python as a CHILD (not `exec`) so the wrapper
+# stays in control of the exit code and can FAIL CLOSED on any way the parser
+# fails to produce a clean verdict. This is the whole safety contract: once we
+# have a command to inspect, the only route to "allow" (exit 0) is the parser
+# explicitly allowing. A broken/missing `no-bypass-signing.py` (syntax/import
+# error), a missing interpreter, or a signal death all exit non-{0,2} and
+# MUST block, not silently let the bypass through — Claude Code treats every
+# non-2 exit as non-blocking. (`exec` would surface Python's raw exit code, so a
+# syntax error -> exit 1 -> allow: the exact fail-open this guard exists to
+# prevent.)
+PARSER="$(dirname "$0")/no-bypass-signing.py"
+# A missing/unreadable parser makes python exit 2 ("can't open
+# file"), which the rc dispatch below would misread as a parser BLOCK verdict —
+# still the safe direction, but the user would see a raw Python traceback with
+# no explanation. Detect it here so the fail-closed guidance actually prints.
+if [ ! -r "$PARSER" ]; then
+  printf '%s\n' \
+    "BLOCKED: the no-bypass-signing guard could not run ($PARSER missing/unreadable);" \
+    "failing closed. Restore the parser, or the user can relaunch the session with" \
+    "BYPASS_GIT_GUARD=1 exported." >&2 || :
+  exit 2
+fi
+
+set +e
+"$PY" "$PARSER" "$CMD"
+rc=$?
+set -e
+case "$rc" in
+  0) exit 0 ;;   # parser allowed
+  2) exit 2 ;;   # parser blocked (it already wrote the BLOCKED message to stderr)
+  *)
+    printf '%s\n' \
+      "BLOCKED: the no-bypass-signing guard could not run (python exit $rc); failing closed." \
+      "Fix .claude/hooks/no-bypass-signing.py (or the python interpreter), or the user can" \
+      "relaunch the session with BYPASS_GIT_GUARD=1 exported." >&2 || :
+    exit 2
+    ;;
+esac

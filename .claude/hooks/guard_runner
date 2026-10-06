@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# guard_runner - single-spawn PreToolUse dispatch for the three git guards
+# (no-bypass-signing, no-merge-pr, no-commit-to-main). Replaces three
+# bash-wrapper + python-parser spawns with ONE python process.
+#
+# This wrapper is a pure fail-closed rc FENCE and nothing else: it runs the
+# python dispatcher as a CHILD and coerces any non-verdict exit to a block.
+# Claude Code treats every exit other than 2 as non-blocking, so a python
+# syntax/import error (exit 1) or a missing/broken python interpreter (exit 127)
+# would be a fail-OPEN — settings.json cannot coerce exit codes, so this ~7ms
+# bash layer is the cheapest possible place to close that hole. All real logic
+# lives in python: the signing-only BYPASS_GIT_GUARD escape hatch in
+# guard_runner.py, and the stdin payload parse in hook_payload.py (shared with
+# the standalone shims so they cannot drift from this dispatch path).
+# The python child owns the verdict; this layer only coerces its exit code. It
+# inherits our stdin directly (the bash layer no longer inspects the payload —
+# BYPASS scoping and payload parsing both moved into python). `set +e` is
+# essential: an INHERITED errexit (SHELLOPTS=...:errexit) would otherwise make
+# a non-zero python exit bail the wrapper immediately — with python's own code,
+# before `rc=$?` — turning a rc-1 crash into a non-blocking fail-open. Disable
+# it around the child so every exit routes through the fence below.
+set -u
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence blocks.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+set +e
+"$PY" "$(dirname "$0")/guard_runner.py"
+rc=$?
+set -e
+case "$rc" in
+  0|2) exit "$rc" ;;
+  *)
+    printf '%s\n' \
+      "BLOCKED: the git guard runner could not run (python exit $rc); failing" \
+      "closed. Check the python interpreter (python3/python on PATH, or" \
+      "CLAUDE_HOOK_PYTHON) and .claude/hooks/guard_runner.py." >&2 || :
+    exit 2
+    ;;
+esac

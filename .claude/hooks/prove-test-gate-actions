@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# prove-test-gate-actions - PreToolUse(Bash) fence for prove_test_gate_actions.py.
+#
+# A pure fail-closed rc FENCE, same shape as guard_runner: the python child owns
+# the verdict (a deny is JSON on stdout with exit 0; a malformed payload is exit
+# 2) and this layer only coerces any other exit to a block, because Claude Code
+# treats every exit other than 2 as non-blocking. A python syntax/import error
+# (exit 1) or a missing interpreter (exit 127) must not fail OPEN. `set +e`
+# keeps an inherited errexit from bailing before `rc=$?`.
+set -u
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence blocks.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+set +e
+"$PY" "$(dirname "$0")/prove_test_gate_actions.py"
+rc=$?
+set -e
+case "$rc" in
+  0|2) exit "$rc" ;;
+  *)
+    printf '%s\n' \
+      "BLOCKED: the prove-test gate could not run (python exit $rc); failing" \
+      "closed. Check the python interpreter (python3/python on PATH, or" \
+      "CLAUDE_HOOK_PYTHON) and .claude/hooks/prove_test_gate_actions.py." \
+      "Bypass: export BYPASS_PROVE_TEST=1 before launching the session." >&2 || :
+    exit 2
+    ;;
+esac

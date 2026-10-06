@@ -1,0 +1,10 @@
+# Normalise to LF in the repo and on checkout. The bash fences under .claude/hooks and
+# the devcontainer scripts break with CRLF, and uv.lock must round-trip byte-exact.
+* text=auto eol=lf
+*.sh text eol=lf
+.claude/hooks/* text eol=lf
+justfile text eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.sqlite binary
