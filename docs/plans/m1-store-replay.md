@@ -1,7 +1,7 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v2, 2026-10-06, after one review round (Codex `-p review` and two Claude
-lenses). Process stage 1 (`docs/process.md`). Converges before any test is written.
+Status: v3, 2026-10-06, after two review rounds (Codex `-p review` and Claude lenses).
+Process stage 1 (`docs/process.md`). Converges before any test is written.
 
 M1 from `SPEC.md` section 9: skeleton, models, SQLite store, replay ingest, cassette
 wrapper, world schema and generator scaffold, gate checklist config. Tests for store and
@@ -9,13 +9,14 @@ replay. Nothing in M1 calls a model. Everything in M1 runs offline.
 
 ## Units and branches
 
-M1 splits into three units. An integration branch `m1` is cut from `main` and carries
-one stubs commit (interfaces that raise `NotImplementedError`, `digest/settings.py`,
-`digest/models.py` shared types, dependency and `.gitignore` changes). Each unit branch
-forks from `m1` after that commit, lands one test commit and one code commit, is
-reviewed, and is merged locally into `m1`. One pull request takes `m1` to `main` at the
-end of M1. Units 2 and 3 share nothing with unit 1 beyond the stubs commit, so their
-tests and code can run in parallel.
+M1 splits into three units. An integration branch `m1` is cut from `main` once the
+`tooling/ty-type-checker` and `ci/hook-shims-executable` branches are merged, and
+carries one stubs commit: interfaces that raise `NotImplementedError`,
+`digest/settings.py`, `digest/models.py`, the `load_world_header` function, the
+dependency and `.gitignore` changes. Each unit branch forks from `m1` after that
+commit, lands one test commit and one code commit, is reviewed, and is merged locally
+into `m1`. One pull request takes `m1` to `main` at the end of M1. Units 2 and 3 share
+nothing with unit 1 beyond the stubs commit, so their tests and code run in parallel.
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
@@ -34,14 +35,17 @@ and `eval` stubs stay as they are.
   the epoch) for ordering and range queries.
 - Two times per event. `ts` is when the message was posted. `event_ts` is when this
   version of the message was observed: equal to `ts` for the original, later for an
-  edit or a delete. Replay ingest filters on `event_ts`; reads that ask "what was
-  posted by `as_of`" bound on `ts`.
+  edit or a delete. Replay ingest filters on `event_ts`.
+- The store is a snapshot. A store holds the world as observed up to `meta.until`, one
+  version per message. Replay only moves forward: `--until` earlier than `meta.until`
+  is refused; delete the file to start over. A digest for day D (M3 `run --as-of D`) is
+  computed on a store whose `meta.until` is day D, and `run` refuses otherwise. The
+  eval (M4) replays forward one day at a time and runs each day in turn. This is what
+  makes dated playback deterministic without version history.
 - Clock. There is no module-level "now". Every read that depends on time takes an
   explicit `as_of: datetime` (UTC, timezone-aware). `digest replay --until DATE` takes
-  a calendar date and converts it to the end of that day in the world's timezone. The
-  store records the world name, timezone, workspace URL and the latest `until` in
-  `meta`; `until` is the high-water mark that `digest run --as-of` (M3) must not
-  exceed.
+  a calendar date and converts it to the end of that day in the world's timezone.
+  `meta` records `world`, `timezone`, `workspace_url` and `until`.
 - Thread identity. Every event has `thread_ts`. A top-level message has
   `thread_ts == ts`. The thread id is `f"{channel_id}:{thread_ts}"`. There is no
   threads table; nothing reads one.
@@ -50,11 +54,15 @@ and `eval` stubs stay as they are.
   `PhaseWindow` and `load_project`, because the absence detector (M2) and the live
   configuration read them, not only the simulator. `digest/world/` imports from both.
 - Settings. `digest/settings.py` holds one pydantic-settings class `Settings` with
-  prefix `DIGEST_`: `mode` (`replay` | `record` | `live`, default `replay`), `db`
-  (path or None; None means `data/<world>.sqlite` for replay), `cassettes` (path,
-  default `data/cassettes`), `claude_bin` (path, default `claude`). Model ids live in
-  `config/models.yaml` (unit 2), not in `Settings`. `.env.example` already documents
-  the three modes.
+  prefix `DIGEST_`: `mode` (`replay` | `record` | `live`, default `replay`), `backend`
+  (`anthropic_api` | `claude_cli`, default `claude_cli`), `world` (default `kestrel`),
+  `db` (path or None; None means `data/<world>.sqlite`), `cassettes` (path, default
+  `data/cassettes`), `claude_bin` (path, default `claude`). Model ids live in
+  `config/models.yaml` (unit 2). `.env.example` gains `DIGEST_BACKEND` and
+  `DIGEST_WORLD` lines in the stubs commit.
+- Project configuration source. In replay the project configuration is
+  `world.project` from the selected world; in live it is `config/project.yaml`. The
+  absence detector (M2) takes a `ProjectConfig` and does not know which.
 - Logging. Stdlib `logging`, logger per module, event token plus `extra={...}`
   (`.claude/rules/logging.md`). No new logging dependency.
 - Dependencies added in the stubs commit: `pyyaml>=6` (runtime), `types-pyyaml`
@@ -111,6 +119,17 @@ def permalink_for(workspace_url: str, channel_id: str, ts: str, thread_ts: str) 
 appends `?thread_ts={thread_ts}&cid={channel_id}` for a reply. Links are constructed,
 never model-written (D5).
 
+`digest/world/load.py` (stubs commit, implemented, not a stub)
+
+```python
+class WorldHeader(BaseModel, frozen=True):
+    name: str
+    workspace_url: str
+    timezone: str
+
+def load_world_header(path: Path) -> WorldHeader   # yaml.safe_load, reads three keys, ignores the rest
+```
+
 `digest/store.py`
 
 ```python
@@ -129,7 +148,7 @@ class ThreadDelta(BaseModel, frozen=True):
     thread_ts: str
     last_ts: str               # newest event_ts in the thread at as_of
     since_ts: str | None       # last_ts of the previous ok run for (stage, thread, pv, model), or None
-    root: Event                # the thread's top-level message, possibly deleted
+    root: Event | None         # the top-level message; None when the store has no row with ts == thread_ts
     changed: tuple[Event, ...] # rows with since_ts < event_ts <= last_ts, ts order; deleted rows included
 
 class Store:
@@ -163,12 +182,11 @@ def read_events(path: Path, workspace_url: str) -> Iterator[Event]
 def ingest(store: Store, path: Path, until: datetime, workspace_url: str) -> IngestReport
 ```
 
-CLI: `digest replay --world NAME --until YYYY-MM-DD [--db PATH]`. Reads
-`workspace_url` and `timezone` from `data/world/NAME/world.yaml` (unit 3's loader once
-it lands; until then `yaml.safe_load` of those two keys), opens the store at `--db` or
-`data/NAME.sqlite`, refuses a store whose `meta.world` is a different world, ingests
-`data/world/NAME/events.jsonl`, writes `meta` (`world`, `timezone`, `workspace_url`,
-`until`) and prints the report.
+CLI: `digest replay --until YYYY-MM-DD [--world NAME] [--db PATH]`. `--world` defaults
+to `Settings.world`. Reads `load_world_header(data/world/NAME/world.yaml)`, opens the
+store at `--db` or `data/NAME.sqlite`, refuses a store whose `meta.world` is a
+different world or whose `meta.until` is later than the requested day, ingests
+`data/world/NAME/events.jsonl`, writes `meta` and prints the report.
 
 ### Schema
 
@@ -233,9 +251,9 @@ Tokenizer. `tokenchars '-_'` keeps `PN-31010`, `ECO-0142`, `G-DVT1` and `TST-THM
 as single tokens, so a search for `PN-31010` does not match a bare `31010` (verified,
 P15). Entity-key blocking in M3 is exact anyway; FTS is the second net.
 
-Items, claims, profiles, impressions and feedback tables land with the stage that
-first writes them (M2, M3). Their shape depends on the extraction schema, which M2
-fixes. D4 lists them as the target, not as M1 scope.
+Items, claims, entities, profiles, impressions and feedback tables land with the
+stage that first writes them (M2, M3). Their shape depends on the extraction schema,
+which M2 fixes. D4 lists them as the target, not as M1 scope.
 
 ### Behaviours
 
@@ -253,10 +271,8 @@ B1.3 `ts` and `event_ts` must match `^\d{10}\.\d{6}$` and `event_ts >= ts`;
 Slack timeline. `Event.at` and `Event.observed_at` are UTC datetimes.
 
 B1.4 Reads are bounded by `as_of` on `ts`: `events_in_thread`, `search_events` and
-`thread_deltas` never return a row with `at > as_of`. A row whose `event_ts` is later
-than `as_of` is still returned in its current version; the store keeps one version per
-message. `meta.until` is the guard: callers must not ask for an `as_of` later than it
-(M3 enforces this in `run`).
+`thread_deltas` never return a row with `at > as_of`. The store holds one version per
+message (see "The store is a snapshot").
 
 B1.5 FTS: `search_events("PN-31010", as_of)` returns rows whose text contains that
 token and no row whose text contains only `31010`. After an edit, the old text no
@@ -269,10 +285,14 @@ over all its rows with `at <= as_of`, deleted rows included) has no `ok` row in
 `last_ts` of the newest `ok` run for `(stage, thread_id, pv, model)` with a smaller
 `last_ts`, else None. `changed` holds the rows with `since_ts < event_ts <= last_ts`
 (all rows when `since_ts` is None), in `ts_us` order, deleted rows included. `root` is
-the row with `ts == thread_ts`. An edit or a delete of an older message bumps
-`last_ts` and makes the thread pending again. A thread whose every row is deleted is
-still returned once (its `changed` rows carry `deleted=True`) so the consumer can
-retract. Changing `prompt_version` or `model` makes every thread pending again.
+the row with `ts == thread_ts`, or None when the store has no such row (a reply whose
+parent was never ingested; legal in replay and expected in a live backfill window).
+Reactions are not part of `last_ts`: a reaction changes exposure, which M3 reads from
+the row under `as_of`, not what the thread says, which is what extraction reads. An
+edit or a delete of an older message bumps `last_ts` and makes the thread pending
+again. A thread whose every row is deleted is still returned once (its `changed` rows
+carry `deleted=True`) so the consumer can retract. Changing `prompt_version` or
+`model` makes every thread pending again.
 
 B1.7 `record_stage_run` upserts on the five-column key. A `failed` row does not
 satisfy B1.6; the thread stays pending.
@@ -296,9 +316,12 @@ B1.10 `Store.open(":memory:")` works for tests. `Store.open(path)` creates paren
 directories, sets `journal_mode=WAL` and `foreign_keys=ON`, and is safe to call on an
 existing file.
 
-B1.11 `digest replay --world kestrel --until 2026-10-13` on the bundled corpus exits 0
-and prints the report. A missing world, or a store whose `meta.world` differs, prints
-the reason and exits 1.
+B1.11 `digest replay --until 2026-10-13` with the default world on the bundled corpus
+exits 0 and prints the report. A missing world, a store whose `meta.world` differs,
+or an `--until` earlier than `meta.until` prints the reason and exits 1.
+
+B1.12 `load_world_header` reads a world file that has more keys than the three it
+returns and ignores them; a missing key raises.
 
 ### Tests
 
@@ -307,12 +330,13 @@ idempotence over random event lists (B1.1), `ts` round trip through `ts_us` and 
 `thread_deltas` consistency after recording runs (every returned delta, once recorded
 `ok`, disappears; no other delta changes).
 
-`tests/test_replay.py`: B1.8, B1.9, B1.11 (CliRunner, tmp world dir). Property test:
-prefix property over random `until` splits of a generated, `event_ts`-sorted file.
+`tests/test_replay.py`: B1.8, B1.9, B1.11, B1.12 (CliRunner, tmp world dir). Property
+test: prefix property over random `until` splits of a generated, `event_ts`-sorted
+file.
 
 Required null cases (`.claude/rules/testing.md`): an event with empty `mentions`,
-`reactions` and `files`; a `ThreadDelta` with `since_ts=None`; `get_meta` on a
-missing key; a thread whose root is deleted.
+`reactions` and `files`; a `ThreadDelta` with `since_ts=None`; a `ThreadDelta` with
+`root=None`; `get_meta` on a missing key; a thread whose root is deleted.
 
 ### Acceptance
 
@@ -411,9 +435,8 @@ B2.2 Cassette file `data/cassettes/<key>.json` holds `{"key", "request", "respon
 "recorded_at"}`. `request` is the `LLMRequest` dump. `response` is the `LLMResponse`
 dump. The payload is backend-neutral: it is what the backend returned after parsing,
 not the provider's wire message, which is what makes replay backend-agnostic (D15).
-`put` writes atomically (temp file in the same directory, then `os.replace`). `put`
-never overwrites an existing key; it raises, because committed cassettes are the
-test substrate and a silent overwrite would change CI.
+`put` writes atomically (temp file in the same directory, then `os.replace`) and
+overwrites an existing key; git shows the change, and the path is logged.
 
 B2.3 Mode `replay`: hit returns the stored response; miss raises `CassetteMiss` with
 the key, the model and the first 80 characters of the last user message. No backend
@@ -425,11 +448,15 @@ always calls the backend, never reads or writes a cassette. `record` or `live` w
 `backend=None` raises at construction.
 
 B2.5 `extract` sends `request` with `schema = model_cls.model_json_schema()` when
-`request.schema` is None, validates `response.json` with `model_cls.model_validate`,
-and raises `LLMOutputError` (carrying the raw text) when validation fails. No retry in
-M1: the first recording in M2 shows whether retries are needed. `judge` builds the
-schema `{"type": "object", "properties": {"choice": {"enum": [...]}}, "required":
-["choice"]}` and returns the enum member.
+`request.schema` is None and validates `response.json` with
+`model_cls.model_validate`. On a validation failure it calls `complete` once more with
+the same request and validates again; a second failure raises `LLMOutputError`
+carrying the raw text. In replay mode the second call returns the same cassette, so a
+bad recording raises after two validations and no network. This is the single retry
+D15 describes, placed in the wrapper so every backend gets it; D15's wording is
+amended in this commit. `judge` builds the schema `{"type": "object", "properties":
+{"choice": {"enum": [...]}}, "required": ["choice"]}` and returns the enum member,
+with the same retry.
 
 B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model`,
 `system`, `messages`, `max_tokens`, `temperature` and, when `schema` is given,
@@ -456,9 +483,11 @@ carries it, so a CLI recording replays for the same request on the API backend.
 B2.8 `load_model_ids` reads `config/models.yaml` (`extract`, `adjudicate`, `judge`).
 The implementer loads the `claude-api` skill and writes the current model ids for
 Haiku-class, Sonnet-class and Opus-class into that file with a dated comment (D2).
-`from_settings` builds `LLM`: replay mode gets no backend; record and live modes get
-`AnthropicBackend` when `ANTHROPIC_API_KEY` is set, else `ClaudeCliBackend` at
-`settings.claude_bin`.
+`from_settings` builds `LLM`: replay mode gets no backend; `record` gets the backend
+named by `settings.backend` (`ClaudeCliBackend` at `settings.claude_bin`, or
+`AnthropicBackend` with a client from `ANTHROPIC_API_KEY`); `live` requires
+`backend == "anthropic_api"` and raises otherwise, because the CLI backends are
+development tooling (D15).
 
 B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: bool`,
 `backend`, `model`, token counts. Never the prompt text.
@@ -466,10 +495,10 @@ B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: boo
 ### Tests
 
 `tests/test_llm.py`: B2.1 (plus a Hypothesis test: the key is invariant under schema
-key reordering and `max_tokens` changes), B2.2 to B2.9. A `FakeBackend` recording the
-requests it saw is the seam for B2.3 and B2.4; it is a test-local class, not a
-production module. Null cases: a request with `schema=None` through `complete`; a
-response with no `usage` from the CLI.
+key reordering and `max_tokens` changes), B2.2 to B2.9. A `FakeBackend` that records
+the requests it saw and returns scripted responses is the seam for B2.3, B2.4 and
+B2.5; it is a test-local class, not a production module. Null cases: a request with
+`schema=None` through `complete`; a response with no `usage` from the CLI.
 
 ### Acceptance
 
@@ -515,7 +544,8 @@ def load_project(path: Path) -> ProjectConfig
 
 ```python
 EntityType = Literal["part", "assembly", "pcba", "harness", "molded", "battery",
-                     "purchased", "component", "eco", "ecr", "deviation", "fa", "po",
+                     "purchased", "component", "subsystem", "document",
+                     "eco", "ecr", "deviation", "fa", "po",
                      "gate", "build", "test", "release", "vendor"]
 
 class Entity(BaseModel, frozen=True):
@@ -524,6 +554,9 @@ class Entity(BaseModel, frozen=True):
     description: str
     owner: Role | None = None
     vendor: str | None = None
+    subsystem: str | None = None         # id of an entity of type "subsystem"
+    parent: str | None = None            # id of the containing entity (BOM or document set)
+    aliases: tuple[str, ...] = ()        # names people use in chat; the extractor's glossary
     state: dict[Attribute, str] = {}     # initial attribute values, e.g. {"rev": "B"}
 
 class Persona(BaseModel, frozen=True):
@@ -532,6 +565,7 @@ class Persona(BaseModel, frozen=True):
     role: Role
     channels: tuple[str, ...]
     owned_entities: tuple[str, ...] = ()
+    aliases: tuple[str, ...] = ()        # "Alice", "@alice"
 
 class Channel(BaseModel, frozen=True):
     id: str
@@ -543,6 +577,8 @@ class WorldClaim(BaseModel, frozen=True):
     attribute: Attribute
     value: str
     authority: Literal["owner_stated", "plm_bot", "cm_stated", "hearsay"]
+    supersedes: str | None = None        # event id whose claim on the same key this replaces
+    contradicts: tuple[str, ...] = ()    # event ids whose claims on the same key this disagrees with
 
 class TaskTouch(BaseModel, frozen=True):
     task: str                            # ChecklistTask.id
@@ -582,10 +618,10 @@ class World(BaseModel, frozen=True):
 `digest/world/load.py`
 
 ```python
-def load_world(path: Path) -> World
+def load_world(path: Path) -> World      # beside load_world_header from the stubs commit
 ```
 
-CLI: `digest world check --world NAME` loads and validates, prints counts per day and
+CLI: `digest world check [--world NAME]` loads and validates, prints counts per day and
 per channel, exit 0; validation errors print the path and exit 1.
 
 ### Behaviours
@@ -593,10 +629,15 @@ per channel, exit 0; validation errors print the path and exit 1.
 B3.1 Cross-references validate in a `model_validator` on `World`: every
 `event.channel` is a channel id; every `event.poster`, `must_see_for` entry and
 `known_by` key is a persona user_id; every `claim.entity` and `persona.owned_entities`
-entry is an entity id; every `tasks[].task` is a checklist task id in `project`;
-every `persona.channels` entry is a channel id; every `event.day` and `known_by` value
-is in `1..days`; a poster is a member of the channel they post in; event ids are
-unique; entity ids are unique. Each failure names the event or persona id.
+entry is an entity id; every `entity.subsystem` names an entity of type `subsystem`;
+every `entity.parent` names an entity; every `tasks[].task` is a checklist task id in
+`project`; every `claim.supersedes` and `claim.contradicts` entry is an earlier or
+same-day event id that carries a claim on the same `(entity, attribute)`; every
+`persona.channels` entry is a channel id; every `event.day` and `known_by` value is
+in `1..days`; a poster is a member of the channel they post in; event ids, entity
+ids and persona user_ids are unique; the union of all `aliases` (entities and
+personas) has no duplicate, so the glossary is unambiguous. Each failure names the
+event, entity or persona id.
 
 B3.2 `ProjectConfig.phases` must be ascending by `from_date` with distinct dates;
 `phase_on(day)` returns the phase of the latest window with `from_date <= day` and
@@ -613,16 +654,21 @@ Unknown keys are errors (`extra="forbid"` on every model).
 B3.5 The bundled fixture `data/world/kestrel/world.yaml` validates and contains: the
 program "Kestrel K2"; the six roles as personas plus one CM persona for the external
 channel; channels `kestrel-program`, `eng-mech`, `eng-elec-fw`, `supply-chain`,
-`dvt1-build`, `ext-sunrise-cm`; the entity table from the domain research (at least
-PN-11051, PN-31010, PN-21030, PN-51010, PN-61001, ECO-0142, DEV-0007, PO-45002211,
-G-DVT1, G-TR1, TST-THM-02, BLD-DVT1); gates G-EVT2-EXIT (day 1), G-TR1 (day 7),
-G-DVT1 (day 9, buffer 7 working days) with checklists whose task ids the events
-reference; phase windows EVT then DVT; scenario events S1 to S15 and N1 to N5 with
-`known_by`, `must_see_for` and `tasks`. `start_date` 2026-10-12, `days` 10, timezone
-`America/Los_Angeles`. `digest world check --world kestrel` exits 0. The rendered
-`events.jsonl` for the full world is M2 work; M1 ships a human-authored
-`events.jsonl` of about ten lines covering S1 and N1 (part of the human-authored
-anchor slice, SPEC section 6) so `digest replay` has input.
+`dvt1-build`, `ext-sunrise-cm`; subsystems `drive`, `compute`, `safety`, `power`,
+`chassis`, `enclosure`; the entity table from the domain research (at least PN-11051,
+PN-31010, PN-21030, PN-51010, PN-61001, ECO-0142, DEV-0007, PO-45002211, G-DVT1,
+G-TR1, TST-THM-02, BLD-DVT1) with `subsystem` set; three documents (the CM drawing
+pack for PN-11020, the PRD, the program schedule) with `parent` or `subsystem` set
+and a `rev` or `status` in `state`; gates G-EVT2-EXIT (day 1), G-TR1 (day 7), G-DVT1
+(day 9, buffer 7 working days) with checklists whose task ids the events reference;
+phase windows EVT then DVT; scenario events S1 to S15 and N1 to N5 with `known_by`,
+`must_see_for`, `tasks`, and `supersedes` or `contradicts` where the scenario table
+says a claim replaces or disputes another (S2 and S6 on PN-31010 rev; N4 on the
+harness count). `start_date` 2026-10-12, `days` 10, timezone `America/Los_Angeles`.
+`digest world check` exits 0. The rendered `events.jsonl` for the full world is M2
+work; M1 ships a human-authored `events.jsonl` of about ten lines covering S1 and N1
+(part of the human-authored anchor slice, SPEC section 6) so `digest replay` has
+input.
 
 B3.6 `config/project.yaml` is the same `ProjectConfig` shape as `world.project`,
 written for the live workspace. It validates with `load_project`.
@@ -630,17 +676,20 @@ written for the live workspace. It validates with `load_project`.
 ### Tests
 
 `tests/test_project.py`: B3.2, B3.4 (`load_project`), B3.6. `tests/test_world.py`:
-B3.1 (parametrized over each broken reference), B3.3, B3.4, B3.5 (loads the bundled
-file and asserts the named counts), the `world check` CLI on a tmp copy with one broken
-reference. Null cases: a persona with no owned entities; an event with no claims, no
-tasks and no `known_by`; a gate with an empty checklist.
+B3.1 (parametrized over each broken reference, including a duplicate alias and a
+`supersedes` that points at a later day), B3.3, B3.4, B3.5 (loads the bundled file and
+asserts the named counts), the `world check` CLI on a tmp copy with one broken
+reference. Null cases: a persona with no owned entities and no aliases; an entity with
+no subsystem, parent or aliases; an event with no claims, no tasks and no `known_by`;
+a gate with an empty checklist.
 
 ### Acceptance
 
 - SPEC section 6 (world.yaml shape) and section 5 step 4 (gates and checklists from
   config). A2 groundwork (phase windows). A6 groundwork: `TaskTouch` lets M2 derive
-  golden absences (open task, last evidence day, cadence) from the script without
-  reading prose.
+  golden absences from the script. Ledger groundwork: `supersedes` and `contradicts`
+  on scripted claims give M3 its supersession and contradiction labels without a rules
+  engine. Documents as entities let S4, S8 and S12 be stated as stale-document claims.
 
 ## Decisions recorded in this plan
 
@@ -650,22 +699,28 @@ tasks and no `known_by`; a gate with an empty checklist.
 | Which tables in M1 | `meta`, `events`, `events_fts`, `stage_runs` | Only tables with an M1 reader. `stage_runs` has one: `thread_deltas`, which M2 extraction consumes. |
 | `ts` storage | TEXT plus derived INTEGER micros | TEXT keeps the Slack identity exactly (trailing zeros included) and makes equality safe; INTEGER orders and ranges. |
 | Corrections | Separate `event_ts` per row version | A day-5 edit must not be visible in a day-3 replay; one column fixes ingest filtering, delta detection and the deletion contract at once. |
-| Historical versions | One version per message | Reads at an `as_of` before an edit return the edited text. Accepted: `meta.until` bounds `as_of`, and the demo replays forward. Version history is in `docs/later.md`. |
+| Historical reads | Snapshot store; forward-only replay; `run` requires `meta.until` to be the digest day | Version history would add a table and a second time axis to every query for a demo that replays forward anyway. |
+| Reactions and the thread revision | Reactions do not bump `last_ts`; dropped at ingest when later than `until` | Extraction reads what the thread says; exposure is read by M3 from the row. Coupling the two would re-extract a thread for every thumbs-up. |
 | Threads table | None | Derived from `thread_ts`; no reader in M1. |
-| Where the clock lives | Explicit `as_of` on every read; `--until` filters ingest; `meta.until` is the high-water mark | No global state; `run --as-of` in M3 reuses the same bound. |
+| Where the clock lives | Explicit `as_of` on every read; `--until` filters ingest; `meta.until` is the snapshot bound | No global state; `run --as-of` in M3 reuses the same bound. |
 | Day boundary for `--until` | End of day in the world's timezone, stored in `meta` | A US team's day ends at midnight Pacific; the store stays UTC. |
-| Reactions | One `Reaction` per reactor with `user_id` and `ts`; dropped at ingest when later than `until` | SPEC section 4 dates `exposed.how = reacted`; a count cannot say who saw what. |
+| Reactions | One `Reaction` per reactor with `user_id` and `ts` | SPEC section 4 dates `exposed.how = reacted`; a count cannot say who saw what. |
 | Default DB path | `data/<world>.sqlite`; the store refuses a different world | One shared file would mix corpora silently. |
+| Backend selection | Explicit `DIGEST_BACKEND`, default `claude_cli`; `live` requires `anthropic_api` | D15 asks for one config value; key presence as a selector could bill the API by accident during recording. |
 | Cassette payload | Parsed `LLMResponse`, not the provider message | Backend-neutral replay (D15). |
-| Cassette key fields | SPEC section 6's five, including `temperature` | D9 listed four; SPEC is the contract and D9 is amended in this commit. `max_tokens` is excluded so a limit change does not invalidate recordings. |
+| Cassette key fields | SPEC section 6's five, including `temperature` | D9 listed four; SPEC is the contract and D9 was amended. `max_tokens` is excluded so a limit change does not invalidate recordings. |
+| Cassette overwrite | `put` overwrites | A never-overwrite rule pins a bad first response forever; git shows the diff. |
 | Replay strictness | Replay raises on a miss; record reads before calling; live bypasses cassettes | Matches `.env.example`; a lenient replay would hide a missing recording until CI. |
 | Backends in M1 | `anthropic_api` and `claude_cli` | Two implementations justify the protocol; the CLI records M2 cassettes on the subscription; the API path is the product. `codex_cli` lands with the renderer (M2). |
 | Anthropic test boundary | Fake SDK client returning `anthropic.types.Message` | D13: never HTTP mocks. |
-| Retry on invalid output | None in M1 | No evidence yet that retries help; the M2 recording run is the evidence. |
+| Retry on invalid output | One retry in `extract` and `judge`, every backend | D15 promised one retry for the CLI; the wrapper is the one place that validates, so it owns the retry. |
 | YAML library | pyyaml | SPEC names `.yaml` files; `tomllib` reads only TOML. One dependency plus stubs. |
 | FTS table shape | External-content with triggers; `events` keeps a rowid | Documented pattern; no sync code in `store.py`. |
 | World day index | Working days, Monday to Friday | The domain timeline is "D1 Monday 2026-10-12 to D10 Friday 2026-10-23": ten working days; calendar days would put day 7 on a Sunday. |
 | Shared type placement | `Role`, `Phase`, `Attribute`, `Event` in `digest/models.py`; project config in `digest/project.py` | The absence detector and live config read them; the simulator is one consumer, not the owner. |
+| Richer world model | Two entity types (`subsystem`, `document`) and three fields (`subsystem`, `parent`, `aliases`); no relations table, no teams, no reporting lines, no person entity | Covers the stale-document scenarios, subsystem ownership for ranking and the extractor's glossary without a graph. Personas stay the only shape for people. |
+| Scripted supersession | Explicit `supersedes` and `contradicts` on world claims | Scripted truth should be scripted; an ordering-and-authority rules engine would be a second ledger to validate. |
+| Type gate | `uv run ty check` (D16) | Measured; same three planted errors caught as mypy in a third of the time. |
 
 ## Open items for the user
 
@@ -700,9 +755,12 @@ assumes one.
 | P13 | The domain timeline numbers working days | `notes/research/domain-npi-corpus.md`: "D1 = Mon 2026-10-12 to D10 = Fri 2026-10-23" | verified |
 | P14 | `INSERT OR REPLACE` leaves a stale external-content FTS row; `ON CONFLICT DO UPDATE` does not | sqlite 3.49.1 probe: after REPLACE the old term still matched; after upsert it did not | verified |
 | P15 | FTS5 bareword with `-` is a syntax error; quoted phrase matches; `tokenchars '-_'` keeps `PN-31010` one token | sqlite 3.49.1 probe with three queries | verified |
+| P16 | ty 0.0.84 type-checks frozen pydantic models with `Literal`, tuple defaults, properties and a `model_validator` without false positives, and catches planted errors | scratch module probe, D16 | verified |
 
 ## Mechanics for this milestone
 
+- Gates: `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`,
+  `uv run ty check`.
 - Prove a test: `python ~/.local/bin/prove-test.py --test tests/test_store.py --break
   blank:src/digest/store.py:N-M --run "uv run pytest tests/test_store.py" --format
   "uv run ruff format tests/test_store.py" --expect-error "<specific line>"`. The
@@ -712,13 +770,10 @@ assumes one.
   `.claude/rules/testing.md`. It writes only its `tests/test_<unit>.py` files and hands
   back unstaged.
 - Implementer brief (Opus subagent, own worktree): this plan, the stubs, the tests,
-  the rules under `.claude/rules/`. It may not edit `tests/`. Done when `uv run pytest
-  tests/test_<unit>.py`, `uv run ruff check .`, `uv run ruff format --check .` and
-  `uv run mypy` pass. Before touching `digest/llm/anthropic_api.py` it loads the
-  `claude-api` skill and writes `config/models.yaml`.
+  the rules under `.claude/rules/`. It may not edit `tests/`. Done when the four gates
+  pass. Before touching `digest/llm/anthropic_api.py` it loads the `claude-api` skill
+  and writes `config/models.yaml`.
 - Reviews: Codex `timeout 900 codex exec -p review --output-schema
   ~/Documents/dev-kit/codex/schemas/review.json -o <file> "..." </dev/null` and the
-  Claude lens panel on each branch after the test commit and after the code commit.
-  Neither sees the other's findings. Note: the project's `review-lens-*` agent types
-  load only when the session starts inside the project folder; otherwise dispatch a
-  general-purpose Opus agent with the lens role file inlined.
+  Claude lens panel (`review-lens-*` agent types) on each branch after the test commit
+  and after the code commit. Neither sees the other's findings.

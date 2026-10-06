@@ -169,13 +169,14 @@ chosen to differ from the public submissions catalogued in
 
 Decision. The `Provider` protocol (D1) has three implementations behind one config value:
 - `anthropic_api`: the production path, schema-enforced structured outputs, needs a key.
-- `claude_cli`: shells out to `claude -p --output-format json` with the same system
-  prompt and schema in the prompt; validates with pydantic and retries once. Uses the
-  Claude subscription. Used to record cassettes during development.
+- `claude_cli`: shells out to `claude -p --output-format json --json-schema` with the
+  same system prompt and schema. Uses the Claude subscription. Used to record
+  cassettes during development.
 - `codex_cli`: shells out to `codex exec` with the mechanical or review profile. Uses
   the ChatGPT subscription. Used for the corpus renderer and the different-family judge.
-Cassettes are keyed by request content, not backend, so replay is backend-agnostic.
-The README names which backend recorded each cassette set.
+The client wrapper validates every structured response with pydantic and retries once,
+whichever backend answered. Cassettes are keyed by request content, not backend, so
+replay is backend-agnostic. The README names which backend recorded each cassette set.
 
 Why. Development should cost nothing beyond subscriptions already paid for, and
 reviewers must need no keys at all. The CLI backends are development tooling; the
