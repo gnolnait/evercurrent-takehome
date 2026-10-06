@@ -111,7 +111,8 @@ settings form, so it earns the page.
 Decision. All tests and CI run with `DIGEST_MODE=replay`. The synthetic corpus is
 generated once by a scripted timeline (not free-form LLM generation) so entities, gates
 and scenarios are deterministic and labelled at generation time. LLM calls are recorded
-keyed by a hash of (model, system, messages, schema) and replayed from `data/cassettes`.
+keyed by a hash of (model, system, messages, schema, temperature) and replayed from
+`data/cassettes`.
 
 Why. Deterministic tests are the difference between a prototype and a project. The
 scripted timeline doubles as the golden labels, which removes a day of hand-labelling.

@@ -1,23 +1,27 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: draft v1, 2026-10-06. Process stage 1 (`docs/process.md`). Review by Codex
-(`-p review`) and the Claude lens panel before any test is written.
+Status: v2, 2026-10-06, after one review round (Codex `-p review` and two Claude
+lenses). Process stage 1 (`docs/process.md`). Converges before any test is written.
 
 M1 from `SPEC.md` section 9: skeleton, models, SQLite store, replay ingest, cassette
 wrapper, world schema and generator scaffold, gate checklist config. Tests for store and
 replay. Nothing in M1 calls a model. Everything in M1 runs offline.
 
-## Units
+## Units and branches
 
-M1 splits into three units. Units 2 and 3 do not depend on unit 1, so their tests and
-code can be dispatched in parallel. Each unit is one test commit plus one code commit
-on its own branch, reviewed in one sitting.
+M1 splits into three units. An integration branch `m1` is cut from `main` and carries
+one stubs commit (interfaces that raise `NotImplementedError`, `digest/settings.py`,
+`digest/models.py` shared types, dependency and `.gitignore` changes). Each unit branch
+forks from `m1` after that commit, lands one test commit and one code commit, is
+reviewed, and is merged locally into `m1`. One pull request takes `m1` to `main` at the
+end of M1. Units 2 and 3 share nothing with unit 1 beyond the stubs commit, so their
+tests and code can run in parallel.
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
-| 1 Store and replay | `m1-store-replay` | `digest/models.py`, `digest/store.py`, `digest/replay.py`, `digest/settings.py` | `tests/test_store.py`, `tests/test_replay.py` |
-| 2 LLM client and cassette | `m1-llm-cassette` | `digest/llm/__init__.py`, `digest/llm/cassette.py`, `digest/llm/anthropic_api.py` | `tests/test_llm.py` |
-| 3 World schema and project config | `m1-world-schema` | `digest/world/schema.py`, `digest/world/load.py`, `config/project.yaml`, `data/world/kestrel/world.yaml` | `tests/test_world.py` |
+| 1 Store and replay | `m1-store-replay` | `digest/store.py`, `digest/schema.sql`, `digest/replay.py` | `tests/test_store.py`, `tests/test_replay.py` |
+| 2 LLM client and cassette | `m1-llm-cassette` | `digest/llm/__init__.py`, `digest/llm/cassette.py`, `digest/llm/anthropic_api.py`, `digest/llm/claude_cli.py`, `config/models.yaml` | `tests/test_llm.py` |
+| 3 World schema and project config | `m1-world-schema` | `digest/project.py`, `digest/world/schema.py`, `digest/world/load.py`, `config/project.yaml`, `data/world/kestrel/world.yaml`, `data/world/kestrel/events.jsonl` | `tests/test_world.py`, `tests/test_project.py` |
 
 `digest/cli.py` gains `replay` (unit 1) and `world check` (unit 3). The `demo`, `run`
 and `eval` stubs stay as they are.
@@ -25,24 +29,37 @@ and `eval` stubs stay as they are.
 ## Shared conventions
 
 - Time. The store holds UTC. Slack `ts` is the identity of a message and is a string
-  with six fractional digits (`1760000000.000100`). It is never a float. The store
-  keeps `ts` as TEXT and a derived `ts_us` INTEGER (microseconds since the epoch) for
-  ordering and range queries.
+  with ten integer and six fractional digits (`1760000000.000100`). It is never a
+  float. The store keeps `ts` as TEXT and a derived `ts_us` INTEGER (microseconds since
+  the epoch) for ordering and range queries.
+- Two times per event. `ts` is when the message was posted. `event_ts` is when this
+  version of the message was observed: equal to `ts` for the original, later for an
+  edit or a delete. Replay ingest filters on `event_ts`; reads that ask "what was
+  posted by `as_of`" bound on `ts`.
 - Clock. There is no module-level "now". Every read that depends on time takes an
-  explicit `as_of: datetime` (UTC, timezone-aware). `digest replay --until DATE` takes a
-  calendar date, which it converts to the end of that day in the world's timezone. The
-  world's timezone and name are stored in the `meta` table at ingest.
+  explicit `as_of: datetime` (UTC, timezone-aware). `digest replay --until DATE` takes
+  a calendar date and converts it to the end of that day in the world's timezone. The
+  store records the world name, timezone, workspace URL and the latest `until` in
+  `meta`; `until` is the high-water mark that `digest run --as-of` (M3) must not
+  exceed.
 - Thread identity. Every event has `thread_ts`. A top-level message has
   `thread_ts == ts`. The thread id is `f"{channel_id}:{thread_ts}"`. There is no
-  threads table in M1; nothing reads one.
+  threads table; nothing reads one.
+- Shared types. `digest/models.py` holds `Role`, `Phase`, `Attribute`, `Event` and
+  `Reaction`. `digest/project.py` holds `ProjectConfig`, `Gate`, `ChecklistTask`,
+  `PhaseWindow` and `load_project`, because the absence detector (M2) and the live
+  configuration read them, not only the simulator. `digest/world/` imports from both.
 - Settings. `digest/settings.py` holds one pydantic-settings class `Settings` with
-  prefix `DIGEST_`: `mode` (`replay` | `record`, default `replay`), `db` (path, default
-  `data/digest.sqlite`), `cassettes` (path, default `data/cassettes`),
-  `anthropic_model` (default read from `config/models.yaml` at implementation time,
-  see D2). `*.sqlite` is gitignored; `data/cassettes/` and `data/world/` are committed.
+  prefix `DIGEST_`: `mode` (`replay` | `record` | `live`, default `replay`), `db`
+  (path or None; None means `data/<world>.sqlite` for replay), `cassettes` (path,
+  default `data/cassettes`), `claude_bin` (path, default `claude`). Model ids live in
+  `config/models.yaml` (unit 2), not in `Settings`. `.env.example` already documents
+  the three modes.
 - Logging. Stdlib `logging`, logger per module, event token plus `extra={...}`
   (`.claude/rules/logging.md`). No new logging dependency.
-- Dependencies added: `pyyaml>=6` (runtime), `types-pyyaml` (dev). Nothing else.
+- Dependencies added in the stubs commit: `pyyaml>=6` (runtime), `types-pyyaml`
+  (dev). `.gitignore` gains `*.sqlite-wal` and `*.sqlite-shm` (WAL side files; only
+  `*.sqlite-journal` is ignored today).
 - Errors. Corpus and config files are ours. A malformed line or an unknown reference
   raises with the file and line; nothing is skipped silently.
 
@@ -50,19 +67,25 @@ and `eval` stubs stay as they are.
 
 ### Interface
 
-`digest/models.py`
+`digest/models.py` (stubs commit)
 
 ```python
+Role = Literal["ME", "EE", "FW", "supply_chain", "EM", "PM"]
+Phase = Literal["concept", "EVT", "DVT", "PVT", "ramp"]
+Attribute = Literal["rev", "lead_time", "gate_date", "owner", "status", "qty", "spec_param"]
+
 class Reaction(BaseModel, frozen=True):
     name: str
-    count: int
+    user_id: str
+    ts: str                 # when this user reacted; Slack ts format
 
 class Event(BaseModel, frozen=True):
     source: Literal["replay", "slack"]
     channel_id: str
     channel_name: str
     thread_ts: str          # equals ts for a top-level message
-    ts: str                 # Slack ts, r"^\d{10}\.\d{6}$"
+    ts: str                 # r"^\d{10}\.\d{6}$"
+    event_ts: str           # same format; >= ts; equals ts for the original post
     user_id: str
     text: str
     mentions: tuple[str, ...] = ()
@@ -77,7 +100,9 @@ class Event(BaseModel, frozen=True):
     @property
     def ts_us(self) -> int
     @property
-    def at(self) -> datetime            # UTC
+    def at(self) -> datetime            # from ts, UTC
+    @property
+    def observed_at(self) -> datetime   # from event_ts, UTC
 
 def permalink_for(workspace_url: str, channel_id: str, ts: str, thread_ts: str) -> str
 ```
@@ -92,7 +117,7 @@ never model-written (D5).
 class StageRun(BaseModel, frozen=True):
     stage: str                 # "extract", "link", ...
     thread_id: str
-    last_ts: str               # ts of the newest non-deleted event the run saw
+    last_ts: str               # thread revision: newest event_ts in the thread (any row, deleted included)
     prompt_version: str
     model: str
     run_at: datetime
@@ -102,9 +127,10 @@ class ThreadDelta(BaseModel, frozen=True):
     thread_id: str
     channel_id: str
     thread_ts: str
-    last_ts: str
-    since_ts: str | None       # last_ts of the previous ok run for this key, or None
-    events: tuple[Event, ...]  # non-deleted events with since_ts < ts <= last_ts
+    last_ts: str               # newest event_ts in the thread at as_of
+    since_ts: str | None       # last_ts of the previous ok run for (stage, thread, pv, model), or None
+    root: Event                # the thread's top-level message, possibly deleted
+    changed: tuple[Event, ...] # rows with since_ts < event_ts <= last_ts, ts order; deleted rows included
 
 class Store:
     @classmethod
@@ -131,13 +157,16 @@ class IngestReport(BaseModel, frozen=True):
     written: int
     after_until: int
 
+class ReplayFormatError(ValueError): ...
+
 def read_events(path: Path, workspace_url: str) -> Iterator[Event]
 def ingest(store: Store, path: Path, until: datetime, workspace_url: str) -> IngestReport
 ```
 
-CLI: `digest replay --world NAME --until YYYY-MM-DD [--db PATH]`. Resolves
-`data/world/NAME/world.yaml` for `workspace_url` and `timezone` (unit 3 loader; until
-unit 3 lands the command reads those two keys with `yaml.safe_load` directly), ingests
+CLI: `digest replay --world NAME --until YYYY-MM-DD [--db PATH]`. Reads
+`workspace_url` and `timezone` from `data/world/NAME/world.yaml` (unit 3's loader once
+it lands; until then `yaml.safe_load` of those two keys), opens the store at `--db` or
+`data/NAME.sqlite`, refuses a store whose `meta.world` is a different world, ingests
 `data/world/NAME/events.jsonl`, writes `meta` (`world`, `timezone`, `workspace_url`,
 `until`) and prints the report.
 
@@ -154,14 +183,16 @@ CREATE TABLE IF NOT EXISTS events (
   channel_id   TEXT NOT NULL,
   ts           TEXT NOT NULL,
   ts_us        INTEGER NOT NULL,
+  event_ts     TEXT NOT NULL,
+  event_ts_us  INTEGER NOT NULL,
   thread_ts    TEXT NOT NULL,
   source       TEXT NOT NULL,
   channel_name TEXT NOT NULL,
   user_id      TEXT NOT NULL,
   text         TEXT NOT NULL,
-  mentions     TEXT NOT NULL,   -- JSON array
-  reactions    TEXT NOT NULL,   -- JSON array of {name, count}
-  files        TEXT NOT NULL,   -- JSON array
+  mentions     TEXT NOT NULL,   -- JSON array of user ids
+  reactions    TEXT NOT NULL,   -- JSON array of {name, user_id, ts}
+  files        TEXT NOT NULL,   -- JSON array of titles
   permalink    TEXT NOT NULL,
   edited       INTEGER NOT NULL DEFAULT 0,
   deleted      INTEGER NOT NULL DEFAULT 0,
@@ -174,9 +205,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
   text, content='events', content_rowid='rowid',
   tokenize = "unicode61 tokenchars '-_'"
 );
--- The three standard external-content triggers (after insert, after delete, after
--- update of text) keep events_fts in sync. `events` keeps its implicit rowid for
--- this reason; it is not WITHOUT ROWID.
+-- three external-content triggers: after insert, after delete, after update of text
 
 CREATE TABLE IF NOT EXISTS stage_runs (
   stage          TEXT NOT NULL,
@@ -190,14 +219,19 @@ CREATE TABLE IF NOT EXISTS stage_runs (
 ) WITHOUT ROWID;
 ```
 
-FTS note. A `WITHOUT ROWID` table cannot back an external-content FTS table, so
-`events` keeps its rowid. The upsert must be `INSERT ... ON CONFLICT DO UPDATE` (one
-statement) so the update trigger fires once; `INSERT OR REPLACE` would delete and
-re-insert with a new rowid and the FTS delete trigger would see the old row.
+FTS note. `events` keeps its rowid because an external-content FTS table needs one.
+The upsert is one `INSERT ... ON CONFLICT (channel_id, ts) DO UPDATE` statement so the
+update trigger fires. `INSERT OR REPLACE` must not be used: with the default
+`recursive_triggers=OFF` the implicit delete does not fire the delete trigger, and the
+old text stays searchable (verified on sqlite 3.49.1, premise P14).
+
+Query note. An FTS5 bareword cannot contain `-`; `MATCH 'PN-31010'` is a syntax error
+(verified, P15). `search_events` splits the query on whitespace and quotes every term
+as a phrase: `"PN-31010" "Rev"`. Callers never pass raw FTS syntax.
 
 Tokenizer. `tokenchars '-_'` keeps `PN-31010`, `ECO-0142`, `G-DVT1` and `TST-THM-02`
-as single tokens, so a search for `PN-31010` does not match a bare `31010`. Entity-key
-blocking in M3 is exact anyway; FTS is the second net.
+as single tokens, so a search for `PN-31010` does not match a bare `31010` (verified,
+P15). Entity-key blocking in M3 is exact anyway; FTS is the second net.
 
 Items, claims, profiles, impressions and feedback tables land with the stage that
 first writes them (M2, M3). Their shape depends on the extraction schema, which M2
@@ -206,57 +240,65 @@ fixes. D4 lists them as the target, not as M1 scope.
 ### Behaviours
 
 B1.1 Upsert is idempotent on `(channel_id, ts)`. Writing the same event twice leaves one
-row. Writing an event with the same key and different `text`, `edited`, `deleted`,
-`reactions`, `mentions` or `files` replaces those columns. `source`, `channel_name`,
-`user_id`, `thread_ts` are also replaced (last write wins; the corpus is append-only
-and later lines are corrections).
+row. Writing an event with the same key replaces every other column (last write wins;
+the corpus is append-only and later lines are corrections).
 
-B1.2 Edits and deletes arrive as later JSONL lines with the same key. An edit carries
-the new `text` and `edited: true`. A delete carries `deleted: true` and keeps the last
-text. `events_in_thread` and `search_events` return deleted events with `deleted=True`
-so callers can filter; `thread_deltas` excludes them.
+B1.2 Edits and deletes arrive as later JSONL lines with the same `(channel_id, ts)`,
+a later `event_ts`, and `edited: true` or `deleted: true`. An edit carries the new
+`text`; a delete keeps the last text. `events_in_thread` and `search_events` return
+deleted rows with `deleted=True` so callers can filter.
 
-B1.3 `ts` must match `^\d{10}\.\d{6}$`; `ts_us = seconds * 1_000_000 + micros`.
-Ordering by `ts_us` equals ordering by the Slack timeline. `Event.at` is the UTC
-datetime.
+B1.3 `ts` and `event_ts` must match `^\d{10}\.\d{6}$` and `event_ts >= ts`;
+`ts_us = seconds * 1_000_000 + micros`. Ordering by `ts_us` equals ordering by the
+Slack timeline. `Event.at` and `Event.observed_at` are UTC datetimes.
 
-B1.4 Reading is bounded by `as_of`: `events_in_thread`, `search_events` and
-`thread_deltas` never return an event with `at > as_of`.
+B1.4 Reads are bounded by `as_of` on `ts`: `events_in_thread`, `search_events` and
+`thread_deltas` never return a row with `at > as_of`. A row whose `event_ts` is later
+than `as_of` is still returned in its current version; the store keeps one version per
+message. `meta.until` is the guard: callers must not ask for an `as_of` later than it
+(M3 enforces this in `run`).
 
-B1.5 FTS: `search_events("PN-31010", as_of)` returns events whose text contains that
-token and no event whose text contains only `31010`. The FTS index follows upserts:
-after an edit, the old text no longer matches and the new text does.
+B1.5 FTS: `search_events("PN-31010", as_of)` returns rows whose text contains that
+token and no row whose text contains only `31010`. After an edit, the old text no
+longer matches and the new text does.
 
 B1.6 `thread_deltas(stage, pv, model, as_of)` returns one `ThreadDelta` per thread
-whose `last_ts` (newest non-deleted event at or before `as_of`) has no `ok` row in
-`stage_runs` for `(stage, thread_id, last_ts, pv, model)`. `since_ts` is the `last_ts`
-of the newest `ok` run for `(stage, thread_id, pv, model)` with `last_ts < last_ts`,
-else None. `events` are the non-deleted events with `since_ts < ts <= last_ts`, in
-`ts_us` order. A thread whose only change since the last run is a deletion has the
-same `last_ts` and is not returned. A thread with no events at or before `as_of` is
-not returned. Changing `prompt_version` or `model` makes every thread pending again.
+that has at least one row with `at <= as_of` and whose `last_ts` (newest `event_ts`
+over all its rows with `at <= as_of`, deleted rows included) has no `ok` row in
+`stage_runs` for `(stage, thread_id, last_ts, pv, model)`. `since_ts` is the
+`last_ts` of the newest `ok` run for `(stage, thread_id, pv, model)` with a smaller
+`last_ts`, else None. `changed` holds the rows with `since_ts < event_ts <= last_ts`
+(all rows when `since_ts` is None), in `ts_us` order, deleted rows included. `root` is
+the row with `ts == thread_ts`. An edit or a delete of an older message bumps
+`last_ts` and makes the thread pending again. A thread whose every row is deleted is
+still returned once (its `changed` rows carry `deleted=True`) so the consumer can
+retract. Changing `prompt_version` or `model` makes every thread pending again.
 
 B1.7 `record_stage_run` upserts on the five-column key. A `failed` row does not
 satisfy B1.6; the thread stays pending.
 
 B1.8 `read_events` yields one `Event` per JSONL line. The line is the `Event` JSON
-with these allowances: `thread_ts` may be absent (defaults to `ts`), `permalink` may
-be absent (built with `permalink_for`), `source` may be absent (defaults to
-`"replay"`), `mentions`, `reactions`, `files`, `edited`, `deleted` may be absent
-(defaults). Any other missing field, an unknown field, or a bad `ts` raises
-`ReplayFormatError` naming the file and the 1-based line number.
+with these allowances: `thread_ts` absent means `ts`; `event_ts` absent means `ts`;
+`permalink` absent means `permalink_for(...)`; `source` absent means `"replay"`;
+`mentions`, `reactions`, `files`, `edited`, `deleted` absent mean their defaults. Any
+other missing field, an unknown field, a bad `ts`, or an `event_ts` lower than the
+previous line's `event_ts` raises `ReplayFormatError` naming the file and the 1-based
+line. Lines are therefore sorted by `event_ts`; the renderer (M2) writes them so.
 
-B1.9 `ingest` writes only events with `at <= until` and counts the rest in
-`after_until`. Ingesting to D3 and then to D5 produces the same rows as ingesting to
-D5 once (prefix property). Ingesting the same file twice to the same `until` changes
-nothing.
+B1.9 `ingest` writes only lines with `observed_at <= until` and counts the rest in
+`after_until`. Within a written line, reactions with `ts` later than `until` are
+dropped before the upsert. Ingesting to D3 and then to D5 produces the same rows as
+ingesting to D5 once (prefix property; it holds because lines are applied in
+`event_ts` order and every line with `observed_at <= until` is re-applied on each
+ingest). Ingesting the same file twice to the same `until` changes nothing.
 
 B1.10 `Store.open(":memory:")` works for tests. `Store.open(path)` creates parent
 directories, sets `journal_mode=WAL` and `foreign_keys=ON`, and is safe to call on an
 existing file.
 
-B1.11 `digest replay --world kestrel --until 2026-10-14` on the bundled minimal corpus
-exits 0 and prints the report. A missing world raises a clear error, exit code 1.
+B1.11 `digest replay --world kestrel --until 2026-10-13` on the bundled corpus exits 0
+and prints the report. A missing world, or a store whose `meta.world` differs, prints
+the reason and exits 1.
 
 ### Tests
 
@@ -266,17 +308,19 @@ idempotence over random event lists (B1.1), `ts` round trip through `ts_us` and 
 `ok`, disappears; no other delta changes).
 
 `tests/test_replay.py`: B1.8, B1.9, B1.11 (CliRunner, tmp world dir). Property test:
-prefix property over random `until` splits.
+prefix property over random `until` splits of a generated, `event_ts`-sorted file.
 
-Each test file lists its RED break target in the dispatch brief. Required null cases
-(`.claude/rules/testing.md`): an event with empty `mentions`/`reactions`/`files`; a
-`ThreadDelta` with `since_ts=None`; `get_meta` on a missing key.
+Required null cases (`.claude/rules/testing.md`): an event with empty `mentions`,
+`reactions` and `files`; a `ThreadDelta` with `since_ts=None`; `get_meta` on a
+missing key; a thread whose root is deleted.
 
 ### Acceptance
 
 - A8 (CI green in replay mode): unit tests touch no network.
 - A4 groundwork: every stored event carries a permalink built from channel and ts.
 - A1 groundwork: `digest replay` runs offline on the bundled corpus.
+- A5 groundwork: reactions keep reactor and time, so `exposed.how = reacted` (SPEC
+  section 4) can be dated in M3.
 
 ## Unit 2: LLM client and cassette
 
@@ -300,21 +344,29 @@ class LLMRequest(BaseModel, frozen=True):
 class LLMResponse(BaseModel, frozen=True):
     text: str                                # raw text or JSON text
     json: dict[str, Any] | None              # parsed when schema was given
-    backend: str                             # "anthropic_api" | "claude_cli" | "codex_cli" | "fake"
+    backend: str                             # "anthropic_api" | "claude_cli" | "fake"
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+
+class LLMOutputError(ValueError): ...        # carries .raw: str
 
 class Backend(Protocol):
     name: str
     def complete(self, request: LLMRequest) -> LLMResponse: ...
 
 class LLM:
-    def __init__(self, backend: Backend | None, cassettes: Cassettes, mode: Literal["replay", "record"])
+    def __init__(self, backend: Backend | None, cassettes: Cassettes, mode: Literal["replay", "record", "live"])
     def complete(self, request: LLMRequest) -> LLMResponse
     def extract(self, request: LLMRequest, model_cls: type[T]) -> T
     def judge(self, request: LLMRequest, choices: type[E]) -> E       # E: Enum
 
+class ModelIds(BaseModel, frozen=True):       # config/models.yaml
+    extract: str
+    adjudicate: str
+    judge: str
+
+def load_model_ids(path: Path = Path("config/models.yaml")) -> ModelIds
 def from_settings(settings: Settings) -> LLM
 ```
 
@@ -338,6 +390,15 @@ class AnthropicBackend:
     def complete(self, request: LLMRequest) -> LLMResponse
 ```
 
+`digest/llm/claude_cli.py`
+
+```python
+class ClaudeCliBackend:
+    name = "claude_cli"
+    def __init__(self, binary: Path, timeout_s: float = 300)
+    def complete(self, request: LLMRequest) -> LLMResponse
+```
+
 ### Behaviours
 
 B2.1 `request_key` hashes the canonical JSON of exactly `(model, system, messages,
@@ -347,18 +408,20 @@ separators=(",", ":"), ensure_ascii=False)`. Two requests that differ only in
 share a key. Changing one character of `system` changes the key.
 
 B2.2 Cassette file `data/cassettes/<key>.json` holds `{"key", "request", "response",
-"recorded_at"}`. `request` is the `LLMRequest` dump (including `max_tokens`, for the
-reader). `response` is the `LLMResponse` dump. The payload is backend-neutral: it is
-what the backend returned after parsing, not the provider's wire message. This is what
-makes replay backend-agnostic (D15). `put` writes atomically (temp file then rename).
+"recorded_at"}`. `request` is the `LLMRequest` dump. `response` is the `LLMResponse`
+dump. The payload is backend-neutral: it is what the backend returned after parsing,
+not the provider's wire message, which is what makes replay backend-agnostic (D15).
+`put` writes atomically (temp file in the same directory, then `os.replace`). `put`
+never overwrites an existing key; it raises, because committed cassettes are the
+test substrate and a silent overwrite would change CI.
 
 B2.3 Mode `replay`: hit returns the stored response; miss raises `CassetteMiss` with
 the key, the model and the first 80 characters of the last user message. No backend
 is needed in replay mode (`backend=None` is allowed). Tests and CI run in this mode.
 
 B2.4 Mode `record`: hit returns the stored response without calling the backend; miss
-calls `backend.complete`, writes the cassette, returns the response. A second
-identical call in the same process reads the file, not the backend. Record mode with
+calls `backend.complete`, writes the cassette, returns the response. Mode `live`:
+always calls the backend, never reads or writes a cassette. `record` or `live` with
 `backend=None` raises at construction.
 
 B2.5 `extract` sends `request` with `schema = model_cls.model_json_schema()` when
@@ -370,50 +433,61 @@ schema `{"type": "object", "properties": {"choice": {"enum": [...]}}, "required"
 
 B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model`,
 `system`, `messages`, `max_tokens`, `temperature` and, when `schema` is given,
-`output_config={"format": {"type": "json_schema", "schema": schema}}` (verified
-present in anthropic 1.11.0). It reads the first text block, parses JSON when a
-schema was given, and fills token counts from `usage`. A response with
-`stop_reason == "max_tokens"` or `"refusal"` raises `LLMOutputError`. The test injects
-`anthropic.Anthropic(api_key="test", http_client=httpx2.Client(transport=
-httpx2.MockTransport(handler)))` and asserts the request body and the parsed
-response. No `respx`, no `vcrpy` (D13).
+`output_config={"format": {"type": "json_schema", "schema": schema}}` (present in
+anthropic 1.11.0, P2). It reads the first text block, parses JSON when a schema was
+given, and fills token counts from `usage`. `stop_reason` of `max_tokens` or
+`refusal` raises `LLMOutputError`. The test boundary is the SDK client (D13): the test
+passes a fake client object whose `messages.create` records its kwargs and returns an
+`anthropic.types.Message` built with `Message.model_validate({...})`. No HTTP
+transport mock of any kind.
 
-B2.7 `from_settings` builds `LLM` from `Settings`: replay mode gets no backend; record
-mode gets `AnthropicBackend` with a client from `ANTHROPIC_API_KEY`.
+B2.7 `ClaudeCliBackend.complete` runs
+`<binary> -p --bare --output-format json --no-session-persistence --tools ""
+--model <model> --system-prompt <system> [--json-schema <schema>] <prompt>` with the
+messages rendered as a single prompt (user and assistant turns labelled), stdin from
+`DEVNULL`, and the timeout. It parses the JSON envelope, raises `LLMOutputError` when
+`is_error` is true or the exit code is non-zero (carrying `result`), and returns the
+`result` text parsed as JSON when a schema was given. Token counts come from `usage`
+when present. Flags verified on the bundled binary 2.1.288 (P7). The test substitutes
+a small Python script for the binary and asserts the argv and the parsed result.
+`temperature` is not supported by the CLI and is ignored; the cassette key still
+carries it, so a CLI recording replays for the same request on the API backend.
 
-B2.8 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: bool`,
+B2.8 `load_model_ids` reads `config/models.yaml` (`extract`, `adjudicate`, `judge`).
+The implementer loads the `claude-api` skill and writes the current model ids for
+Haiku-class, Sonnet-class and Opus-class into that file with a dated comment (D2).
+`from_settings` builds `LLM`: replay mode gets no backend; record and live modes get
+`AnthropicBackend` when `ANTHROPIC_API_KEY` is set, else `ClaudeCliBackend` at
+`settings.claude_bin`.
+
+B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: bool`,
 `backend`, `model`, token counts. Never the prompt text.
 
 ### Tests
 
 `tests/test_llm.py`: B2.1 (plus a Hypothesis test: the key is invariant under schema
-key reordering and `max_tokens` changes), B2.2 to B2.8. A `FakeBackend` recording the
+key reordering and `max_tokens` changes), B2.2 to B2.9. A `FakeBackend` recording the
 requests it saw is the seam for B2.3 and B2.4; it is a test-local class, not a
-production module.
+production module. Null cases: a request with `schema=None` through `complete`; a
+response with no `usage` from the CLI.
 
 ### Acceptance
 
 - SPEC section 6: one client wrapper, cassettes keyed by the canonical hash, strict
-  replay raises on a miss. A8: CI in replay mode.
+  replay raises on a miss. A8: CI in replay mode. D15: two backends behind one protocol.
 
 ## Unit 3: world schema and project config
 
 ### Interface
 
-`digest/world/schema.py`
+`digest/project.py`
 
 ```python
-Role = Literal["ME", "EE", "FW", "supply_chain", "EM", "PM"]
-Phase = Literal["concept", "EVT", "DVT", "PVT", "ramp"]
-EntityType = Literal["part", "assembly", "pcba", "harness", "molded", "battery",
-                     "purchased", "component", "eco", "ecr", "deviation", "fa", "po",
-                     "gate", "build", "test", "release", "vendor"]
-Attribute = Literal["rev", "lead_time", "gate_date", "owner", "status", "qty", "spec_param"]
-
 class ChecklistTask(BaseModel, frozen=True):
+    id: str                              # unique within the project, e.g. "G-DVT1.thermal"
     task: str
     owner: Role
-    expected_cadence_days: int
+    expected_cadence_days: int           # working days between evidence
 
 class Gate(BaseModel, frozen=True):
     id: str
@@ -432,6 +506,17 @@ class ProjectConfig(BaseModel, frozen=True):
     phases: tuple[PhaseWindow, ...]      # ascending from_date
     gates: tuple[Gate, ...]
     def phase_on(self, day: date) -> Phase
+    def task(self, task_id: str) -> ChecklistTask
+
+def load_project(path: Path) -> ProjectConfig
+```
+
+`digest/world/schema.py`
+
+```python
+EntityType = Literal["part", "assembly", "pcba", "harness", "molded", "battery",
+                     "purchased", "component", "eco", "ecr", "deviation", "fa", "po",
+                     "gate", "build", "test", "release", "vendor"]
 
 class Entity(BaseModel, frozen=True):
     id: str
@@ -459,9 +544,13 @@ class WorldClaim(BaseModel, frozen=True):
     value: str
     authority: Literal["owner_stated", "plm_bot", "cm_stated", "hearsay"]
 
+class TaskTouch(BaseModel, frozen=True):
+    task: str                            # ChecklistTask.id
+    effect: Literal["evidence", "done"]  # evidence of progress, or completion
+
 class WorldEvent(BaseModel, frozen=True):
     id: str
-    day: int                             # 1-based index from world.start_date
+    day: int                             # 1-based working-day index from start_date
     channel: str
     poster: str                          # persona user_id
     kind: Literal["decision", "blocker", "risk", "schedule_change", "spec_change",
@@ -469,9 +558,10 @@ class WorldEvent(BaseModel, frozen=True):
     summary: str                         # ground truth, one sentence
     scenario: str | None = None          # "S1".."S15", "N1".."N5"
     claims: tuple[WorldClaim, ...] = ()
+    tasks: tuple[TaskTouch, ...] = ()    # checklist tasks this event is evidence for or completes
     affected_roles: tuple[Role, ...] = ()
     must_see_for: tuple[str, ...] = ()   # persona user_ids
-    known_by: dict[str, int] = {}        # persona user_id -> day they learn it
+    known_by: dict[str, int] = {}        # persona user_id -> working day they learn it
     noise: dict[str, bool] = {}          # renderer knobs: indirection, wrong_claim, typo, delayed_crosspost
 
 class World(BaseModel, frozen=True):
@@ -479,20 +569,20 @@ class World(BaseModel, frozen=True):
     program: str
     workspace_url: str
     timezone: str                        # IANA name
-    start_date: date
-    days: int
+    start_date: date                     # a Monday
+    days: int                            # working days
     project: ProjectConfig
     channels: tuple[Channel, ...]
     personas: tuple[Persona, ...]
     entities: tuple[Entity, ...]
     events: tuple[WorldEvent, ...]
+    def date_of(self, day: int) -> date  # skips Saturday and Sunday
 ```
 
 `digest/world/load.py`
 
 ```python
 def load_world(path: Path) -> World
-def load_project(path: Path) -> ProjectConfig
 ```
 
 CLI: `digest world check --world NAME` loads and validates, prints counts per day and
@@ -503,84 +593,93 @@ per channel, exit 0; validation errors print the path and exit 1.
 B3.1 Cross-references validate in a `model_validator` on `World`: every
 `event.channel` is a channel id; every `event.poster`, `must_see_for` entry and
 `known_by` key is a persona user_id; every `claim.entity` and `persona.owned_entities`
-entry is an entity id; every `persona.channels` entry is a channel id; every
-`event.day` and `known_by` value is in `1..days`; a poster is a member of the channel
-they post in; event ids are unique; entity ids are unique. Each failure names the
-event or persona id.
+entry is an entity id; every `tasks[].task` is a checklist task id in `project`;
+every `persona.channels` entry is a channel id; every `event.day` and `known_by` value
+is in `1..days`; a poster is a member of the channel they post in; event ids are
+unique; entity ids are unique. Each failure names the event or persona id.
 
-B3.2 `ProjectConfig.phases` must be ascending by `from_date` with distinct dates; the
-first `from_date` must be at or before `world.start_date` when embedded in a world.
-`phase_on(day)` returns the phase of the latest window with `from_date <= day`.
+B3.2 `ProjectConfig.phases` must be ascending by `from_date` with distinct dates;
+`phase_on(day)` returns the phase of the latest window with `from_date <= day` and
+raises for a day before the first window. Gate ids and checklist task ids are unique
+across the project; `buffer_days >= 0`; `expected_cadence_days >= 1`.
 
-B3.3 Gate ids are unique; `buffer_days >= 0`; `expected_cadence_days >= 1`; every
-gate `date` is within the world's day range when embedded in a world.
+B3.3 When embedded in a world: `start_date` is a Monday, the first phase window starts
+at or before `start_date`, and every gate `date` is one of `date_of(1..days)`.
+`date_of(1) == start_date`; `date_of(6)` is the next Monday.
 
-B3.4 `load_world` reads YAML with `yaml.safe_load` and validates. An unknown top-level
-key is an error (`extra="forbid"` on every model). `load_project` does the same for
-`config/project.yaml`.
+B3.4 `load_world` and `load_project` read YAML with `yaml.safe_load` and validate.
+Unknown keys are errors (`extra="forbid"` on every model).
 
 B3.5 The bundled fixture `data/world/kestrel/world.yaml` validates and contains: the
-program "Kestrel K2"; the six roles as personas; channels `#kestrel-program`,
-`#eng-mech`, `#eng-elec-fw`, `#supply-chain`, `#dvt1-build`, `#ext-sunrise-cm`; the
-entity table from the domain research (at least PN-11051, PN-31010, PN-21030,
-PN-51010, PN-61001, ECO-0142, DEV-0007, PO-45002211, G-DVT1, G-TR1, TST-THM-02,
-BLD-DVT1); gates G-EVT2-EXIT (day 1), G-TR1 (day 7), G-DVT1 (day 9, buffer 7) with
-checklists; phase windows EVT then DVT; scenario events S1 to S15 and N1 to N5 with
-`known_by` and `must_see_for`. Day 1 is Monday 2026-10-12, `days = 10`, timezone
+program "Kestrel K2"; the six roles as personas plus one CM persona for the external
+channel; channels `kestrel-program`, `eng-mech`, `eng-elec-fw`, `supply-chain`,
+`dvt1-build`, `ext-sunrise-cm`; the entity table from the domain research (at least
+PN-11051, PN-31010, PN-21030, PN-51010, PN-61001, ECO-0142, DEV-0007, PO-45002211,
+G-DVT1, G-TR1, TST-THM-02, BLD-DVT1); gates G-EVT2-EXIT (day 1), G-TR1 (day 7),
+G-DVT1 (day 9, buffer 7 working days) with checklists whose task ids the events
+reference; phase windows EVT then DVT; scenario events S1 to S15 and N1 to N5 with
+`known_by`, `must_see_for` and `tasks`. `start_date` 2026-10-12, `days` 10, timezone
 `America/Los_Angeles`. `digest world check --world kestrel` exits 0. The rendered
-`events.jsonl` for this world is M2 work; M1 ships a 10-line human-authored
-`events.jsonl` covering S1 and N1 so `digest replay` has input.
+`events.jsonl` for the full world is M2 work; M1 ships a human-authored
+`events.jsonl` of about ten lines covering S1 and N1 (part of the human-authored
+anchor slice, SPEC section 6) so `digest replay` has input.
 
 B3.6 `config/project.yaml` is the same `ProjectConfig` shape as `world.project`,
 written for the live workspace. It validates with `load_project`.
 
 ### Tests
 
-`tests/test_world.py`: B3.1 (parametrized over each broken reference), B3.2, B3.3,
-B3.4, B3.5 (loads the bundled file and asserts the named counts), B3.6, the `world
-check` CLI on a tmp copy with one broken reference. Null cases: a persona with no
-owned entities; an event with no claims and no `known_by`; a gate with an empty
-checklist.
+`tests/test_project.py`: B3.2, B3.4 (`load_project`), B3.6. `tests/test_world.py`:
+B3.1 (parametrized over each broken reference), B3.3, B3.4, B3.5 (loads the bundled
+file and asserts the named counts), the `world check` CLI on a tmp copy with one broken
+reference. Null cases: a persona with no owned entities; an event with no claims, no
+tasks and no `known_by`; a gate with an empty checklist.
 
 ### Acceptance
 
 - SPEC section 6 (world.yaml shape) and section 5 step 4 (gates and checklists from
-  config). A2 and A6 groundwork.
+  config). A2 groundwork (phase windows). A6 groundwork: `TaskTouch` lets M2 derive
+  golden absences (open task, last evidence day, cadence) from the script without
+  reading prose.
 
 ## Decisions recorded in this plan
 
 | Fork | Chosen | Why |
 |---|---|---|
-| One unit or three | Three | Units 2 and 3 are independent of unit 1; parallel dispatch halves the wall clock and keeps each review under an hour. |
+| One unit or three | Three, on an integration branch | Units 2 and 3 share only the stubs commit with unit 1, so test writing and implementation can run in parallel; each review stays small. |
 | Which tables in M1 | `meta`, `events`, `events_fts`, `stage_runs` | Only tables with an M1 reader. `stage_runs` has one: `thread_deltas`, which M2 extraction consumes. |
-| `ts` storage | TEXT plus derived INTEGER micros | Float loses the sixth digit. TEXT keeps the Slack identity; INTEGER orders and ranges. |
+| `ts` storage | TEXT plus derived INTEGER micros | TEXT keeps the Slack identity exactly (trailing zeros included) and makes equality safe; INTEGER orders and ranges. |
+| Corrections | Separate `event_ts` per row version | A day-5 edit must not be visible in a day-3 replay; one column fixes ingest filtering, delta detection and the deletion contract at once. |
+| Historical versions | One version per message | Reads at an `as_of` before an edit return the edited text. Accepted: `meta.until` bounds `as_of`, and the demo replays forward. Version history is in `docs/later.md`. |
 | Threads table | None | Derived from `thread_ts`; no reader in M1. |
-| Where the clock lives | Explicit `as_of` on every read; `--until` filters ingest | No global state; `run --as-of` in M3 reuses the same bound. |
+| Where the clock lives | Explicit `as_of` on every read; `--until` filters ingest; `meta.until` is the high-water mark | No global state; `run --as-of` in M3 reuses the same bound. |
 | Day boundary for `--until` | End of day in the world's timezone, stored in `meta` | A US team's day ends at midnight Pacific; the store stays UTC. |
-| Reactions timing | Carried on the message line, not simulated | Simulating reaction time adds an event kind nobody reads in v1. Recorded in `docs/later.md` if M3 ranking wants reaction recency. |
-| Cassette payload | Parsed `LLMResponse`, not the provider message | Backend-neutral replay (D15). The `anthropic.types.Message` form from the research note would tie cassettes to one backend. |
-| Cassette key fields | Exactly SPEC section 6's five | `max_tokens` excluded so a limit change does not invalidate recordings. |
-| Replay strictness | Replay always raises on a miss; record reads before calling | Two modes are enough; a lenient replay would hide a missing recording until CI. |
-| Backends in M1 | Protocol, cassette, `anthropic_api`; CLI backends later | The Claude Code CLI is not installed on this machine (premise P7), so `claude_cli` cannot be verified in M1. `codex_cli` lands with the renderer. See open fork F1. |
+| Reactions | One `Reaction` per reactor with `user_id` and `ts`; dropped at ingest when later than `until` | SPEC section 4 dates `exposed.how = reacted`; a count cannot say who saw what. |
+| Default DB path | `data/<world>.sqlite`; the store refuses a different world | One shared file would mix corpora silently. |
+| Cassette payload | Parsed `LLMResponse`, not the provider message | Backend-neutral replay (D15). |
+| Cassette key fields | SPEC section 6's five, including `temperature` | D9 listed four; SPEC is the contract and D9 is amended in this commit. `max_tokens` is excluded so a limit change does not invalidate recordings. |
+| Replay strictness | Replay raises on a miss; record reads before calling; live bypasses cassettes | Matches `.env.example`; a lenient replay would hide a missing recording until CI. |
+| Backends in M1 | `anthropic_api` and `claude_cli` | Two implementations justify the protocol; the CLI records M2 cassettes on the subscription; the API path is the product. `codex_cli` lands with the renderer (M2). |
+| Anthropic test boundary | Fake SDK client returning `anthropic.types.Message` | D13: never HTTP mocks. |
 | Retry on invalid output | None in M1 | No evidence yet that retries help; the M2 recording run is the evidence. |
-| YAML library | pyyaml | SPEC names `.yaml` files; `tomllib` reads only TOML. Adds one dependency plus stubs. |
+| YAML library | pyyaml | SPEC names `.yaml` files; `tomllib` reads only TOML. One dependency plus stubs. |
 | FTS table shape | External-content with triggers; `events` keeps a rowid | Documented pattern; no sync code in `store.py`. |
+| World day index | Working days, Monday to Friday | The domain timeline is "D1 Monday 2026-10-12 to D10 Friday 2026-10-23": ten working days; calendar days would put day 7 on a Sunday. |
+| Shared type placement | `Role`, `Phase`, `Attribute`, `Event` in `digest/models.py`; project config in `digest/project.py` | The absence detector and live config read them; the simulator is one consumer, not the owner. |
 
-## Open forks for the user
+## Open items for the user
 
-F1. Backends in M1. Recommended: cassette plus `anthropic_api` now; `claude_cli` as a
-small follow-up unit once `npm install -g @anthropic-ai/claude-code` is done and
-`claude -p --output-format json` flags are verified. Alternative: install the CLI
-first and include `claude_cli` in unit 2 (adds about 40 lines and a fake-binary test).
+U1. Log the bundled Claude CLI in. The binary at
+`%APPDATA%\Claude\claude-code\2.1.288\<hash>\claude.exe` has the flags the backend
+needs but reports "Not logged in". Either run that binary with `/login`, or install the
+standalone CLI (`npm install -g @anthropic-ai/claude-code`) and log in, then set
+`DIGEST_CLAUDE_BIN`. The first real recording (M2) needs this; M1 does not.
 
-F2. Timezone for `--until`. Recommended: the world's timezone (`America/Los_Angeles`
-for Kestrel). Alternative: UTC everywhere, simpler but the demo's "Tuesday" ends at
-17:00 Pacific.
+U2. Timezone for `--until`: the world's (`America/Los_Angeles`) is chosen; say if you
+prefer UTC.
 
-F3. Dispatch shape. Recommended: Codex writes all three test files in parallel (three
-`codex exec` sessions, one per unit, fresh context each), then three Opus subagents
-implement in parallel in separate worktrees. Alternative: sequential, one unit at a
-time, slower but one review at a time.
+U3. One pull request for all of M1 from `m1` to `main`, or one per unit: the plan
+assumes one.
 
 ## Premise ledger
 
@@ -588,17 +687,19 @@ time, slower but one review at a time.
 |---|---|---|---|
 | P1 | SQLite in uv's Python 3.12 has FTS5 | `uv run python -c "create virtual table t using fts5(x)"` ok; sqlite 3.49.1 | verified |
 | P2 | anthropic 1.11.0 exposes `output_config.format` with `type: json_schema` | `inspect.signature(Messages.create)` has `output_config`; `JSONOutputFormatParam` has `schema`, `type` | verified |
-| P3 | anthropic 1.x runs on httpx2 2.13.1; httpx mocks would miss | `import httpx2` 2.13.1; D13 | verified |
-| P4 | `data/cassettes/` and `data/world/` are not gitignored | `.gitignore` ignores `data/live/`, `*.sqlite`, `*.db` only | verified |
+| P3 | anthropic 1.11.0 imports httpx2 2.13.1, not httpx | `import httpx2` 2.13.1; `uv.lock` | verified; the "mocks miss" half is D13's claim, not re-measured |
+| P4 | `data/cassettes/` and `data/world/` are not gitignored | `.gitignore` ignores `data/live/`, `*.sqlite`, `*.sqlite-journal`, `*.db` | verified; WAL side files are not covered, added in the stubs commit |
 | P5 | `hypothesis`, `time-machine`, `pytest` are dev deps | `pyproject.toml` `[dependency-groups] dev` | verified |
 | P6 | pyyaml is not installed | `uv run python -c "import yaml"` ModuleNotFoundError | verified; plan adds it |
-| P7 | The Claude Code CLI is installed | `Get-Command claude` not found; no `claude` under npm global or AppData | refuted; drives F1 |
+| P7 | A Claude Code CLI binary exists with `-p`, `--output-format json`, `--json-schema`, `--system-prompt`, `--tools`, `--bare`, `--no-session-persistence` | `%APPDATA%\Claude\claude-code\2.1.288\...\claude.exe --help`; not on PATH | verified for flags; a probe returned "Not logged in" (U1) |
 | P8 | `prove-test` is callable from Git Bash as `prove-test` | `command not found`; works as `python ~/.local/bin/prove-test.py` | refuted; mechanics below use the python form |
 | P9 | `prove-test` records a proof with `--break blank:<file>:<a>-<b>` and `--expect-error` | proof written for `tests/test_cli.py` on 2026-10-06 | verified |
 | P10 | Codex `exec` has `-p`, `-C`, `-o`, `--output-schema` | `codex exec --help`; handoff verified `--output-schema` on 2026-10-06 | verified |
 | P11 | Slack permalink shape `archives/<C>/p<ts no dot>` plus `?thread_ts=&cid=` for replies | Slack docs, not re-fetched; replay links are synthetic | accepted-assumption |
 | P12 | Slack `ts` seconds part is 10 digits through 2286 | arithmetic | verified |
-| P13 | Reaction timing can be ignored in v1 | no v1 consumer of reaction recency in SPEC sections 5 to 8 | accepted-assumption |
+| P13 | The domain timeline numbers working days | `notes/research/domain-npi-corpus.md`: "D1 = Mon 2026-10-12 to D10 = Fri 2026-10-23" | verified |
+| P14 | `INSERT OR REPLACE` leaves a stale external-content FTS row; `ON CONFLICT DO UPDATE` does not | sqlite 3.49.1 probe: after REPLACE the old term still matched; after upsert it did not | verified |
+| P15 | FTS5 bareword with `-` is a syntax error; quoted phrase matches; `tokenchars '-_'` keeps `PN-31010` one token | sqlite 3.49.1 probe with three queries | verified |
 
 ## Mechanics for this milestone
 
@@ -606,16 +707,18 @@ time, slower but one review at a time.
   blank:src/digest/store.py:N-M --run "uv run pytest tests/test_store.py" --format
   "uv run ruff format tests/test_store.py" --expect-error "<specific line>"`. The
   pattern must be specific; generic words (`assert`, `failed`, `Error`) are refused.
-- Test author brief (Codex, execution lane, fresh session, `-C` the worktree): this
-  plan, `SPEC.md` sections 4 to 6, the interface stubs committed with `raise
-  NotImplementedError`, and `.claude/rules/testing.md`. It writes only
-  `tests/test_<unit>.py` and hands back unstaged.
+- Test author brief (Codex, execution lane, fresh session, `-C` the worktree, PATH
+  including uv): this plan, `SPEC.md` sections 4 to 6, the stubs, and
+  `.claude/rules/testing.md`. It writes only its `tests/test_<unit>.py` files and hands
+  back unstaged.
 - Implementer brief (Opus subagent, own worktree): this plan, the stubs, the tests,
   the rules under `.claude/rules/`. It may not edit `tests/`. Done when `uv run pytest
   tests/test_<unit>.py`, `uv run ruff check .`, `uv run ruff format --check .` and
   `uv run mypy` pass. Before touching `digest/llm/anthropic_api.py` it loads the
-  `claude-api` skill and records the chosen model ids in `config/models.yaml`.
-- Reviews: Codex `timeout 600 codex exec -p review --output-schema
-  ~/Documents/dev-kit/codex/schemas/review.json -o <file> "..." </dev/null` and
-  `/review-local --base main` on each branch after the test commit and after the code
-  commit. Neither sees the other's findings.
+  `claude-api` skill and writes `config/models.yaml`.
+- Reviews: Codex `timeout 900 codex exec -p review --output-schema
+  ~/Documents/dev-kit/codex/schemas/review.json -o <file> "..." </dev/null` and the
+  Claude lens panel on each branch after the test commit and after the code commit.
+  Neither sees the other's findings. Note: the project's `review-lens-*` agent types
+  load only when the session starts inside the project folder; otherwise dispatch a
+  general-purpose Opus agent with the lens role file inlined.
