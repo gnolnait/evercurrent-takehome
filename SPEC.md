@@ -183,7 +183,7 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
   last evidence; absence false-alarm rate on the simulator is reported and below 20%.
 - A7 The decision landing map marks a cell contradicted only with a citing item; the
   README shows one such cell with evidence on both sides.
-- A8 `just ci` is green: ruff, mypy strict, pytest, hook guard tests, all in replay mode.
+- A8 `just ci` is green: ruff, ty, pytest, hook guard tests, all in replay mode.
 - A9 Live mode, with a bot token, backfills a channel resumably, delivers a DM, and
   handles a 429 by honouring Retry-After. Tested by injecting a fake retry handler into
   slack_sdk and with the bolt-python mock web API server pattern; no network in tests.

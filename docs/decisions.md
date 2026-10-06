@@ -129,7 +129,7 @@ named failure modes and mirror metrics shows judgment and makes the honest story
 
 ## D11. Repo hygiene as signal
 
-Decision. One CI workflow (ruff, format, mypy strict, pytest, hook tests). Devcontainer.
+Decision. One CI workflow (ruff, format, ty, pytest, hook tests). Devcontainer.
 `just` recipes mirrored by plain `uv run` commands in the README. Conventional commits.
 Test and implementation in separate commits per the walled TDD process. No coverage
 badge, no release automation.
@@ -184,6 +184,23 @@ OAuth tokens inside an SDK.
 Would change it. If structured-output enforcement matters for extraction quality, the
 cassettes for extraction are re-recorded through the API before submission and the
 report says so.
+
+## D16. Type checker: ty, with warnings as errors
+
+Decision. `ty` (Astral) replaces mypy as the type gate: `uv run ty check` over `src`
+and `tests`, `error-on-warning = true`, version pinned in the dev group. No pydantic
+plugin is needed.
+
+Why. Measured on 2026-10-06 against a scratch module with the patterns M1 is built
+from (frozen pydantic models, `Literal` fields, tuple defaults, properties, a
+`model_validator`) plus three planted errors (wrong `Literal`, unguarded `None`, wrong
+return type): ty 0.0.84 and pyrefly 1.3.2 each caught all three with no false positive
+in under 0.5 s; mypy caught the same three in 1.1 s. ty was chosen over pyrefly for
+one vendor across uv, ruff and ty. It is pre-1.0, hence the pin.
+
+Would change it. A ty release that misses a planted error or flags pydantic models;
+pyrefly is the fallback and the swap is the dependency line, the `[tool.ty]` table and
+the three `uv run ty check` call sites.
 
 ## Validation against EverCurrent's published experience
 

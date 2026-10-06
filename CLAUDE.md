@@ -24,7 +24,7 @@ Move as fast as possible. Run the minimum checks that prevent bugs. The rules in
   whole suite only when file-level tests cannot cover it or you changed test
   infrastructure.
 - Before a push: the changed tests plus `uv run ruff check` and `uv run ruff format`.
-  prek runs mypy and pytest on push; CI runs the same set.
+  prek runs ty and pytest on push; CI runs the same set.
 - Add a CI check, gate, or hardening only for a bug that occurred, or one whose damage
   would be irreversible. Do not add one for a failure you imagine.
 - Keep each commit small with one purpose. Tests and the implementation that satisfies
@@ -62,7 +62,7 @@ a test edit lacks one. Full policy in `.claude/rules/testing.md`.
 
 When asked to verify against a gate, run the repo's exact CI command over the whole
 relevant tree, not a self-chosen subset: `uv run pytest`, `uv run ruff check .`,
-`uv run ruff format --check .`, `uv run mypy`. Never report a scoped subset as clean;
+`uv run ruff format --check .`, `uv run ty check`. Never report a scoped subset as clean;
 say what you ran and paste the verbatim tail of its output.
 
 ## Writing style
