@@ -449,12 +449,13 @@ always calls the backend, never reads or writes a cassette. `record` or `live` w
 
 B2.5 `extract` sends `request` with `schema = model_cls.model_json_schema()` when
 `request.schema` is None and validates `response.json` with
-`model_cls.model_validate`. On a validation failure it calls `complete` once more with
-the same request and validates again; a second failure raises `LLMOutputError`
-carrying the raw text. In replay mode the second call returns the same cassette, so a
-bad recording raises after two validations and no network. This is the single retry
-D15 describes, placed in the wrapper so every backend gets it; D15's wording is
-amended in this commit. `judge` builds the schema `{"type": "object", "properties":
+`model_cls.model_validate`. On a validation failure in `record` or `live` mode it
+calls `backend.complete` directly once more, bypassing the cassette read, validates
+again, and in `record` mode overwrites the cassette with the response that
+validated; a second failure raises `LLMOutputError` carrying the raw text. In
+`replay` mode there is no retry: a cassette that fails validation raises at once,
+with no network. This is the single retry D15 describes, placed in the wrapper so
+every backend gets it. `judge` builds the schema `{"type": "object", "properties":
 {"choice": {"enum": [...]}}, "required": ["choice"]}` and returns the enum member,
 with the same retry.
 
@@ -713,7 +714,7 @@ a gate with an empty checklist.
 | Replay strictness | Replay raises on a miss; record reads before calling; live bypasses cassettes | Matches `.env.example`; a lenient replay would hide a missing recording until CI. |
 | Backends in M1 | `anthropic_api` and `claude_cli` | Two implementations justify the protocol; the CLI records M2 cassettes on the subscription; the API path is the product. `codex_cli` lands with the renderer (M2). |
 | Anthropic test boundary | Fake SDK client returning `anthropic.types.Message` | D13: never HTTP mocks. |
-| Retry on invalid output | One retry in `extract` and `judge`, every backend | D15 promised one retry for the CLI; the wrapper is the one place that validates, so it owns the retry. |
+| Retry on invalid output | One retry in `extract` and `judge`, every backend, bypassing the cassette; none in replay | D15 promised one retry for the CLI; the wrapper is the one place that validates, so it owns the retry. A retry that read the cassette back would never reach the backend. |
 | YAML library | pyyaml | SPEC names `.yaml` files; `tomllib` reads only TOML. One dependency plus stubs. |
 | FTS table shape | External-content with triggers; `events` keeps a rowid | Documented pattern; no sync code in `store.py`. |
 | World day index | Working days, Monday to Friday | The domain timeline is "D1 Monday 2026-10-12 to D10 Friday 2026-10-23": ten working days; calendar days would put day 7 on a Sunday. |
