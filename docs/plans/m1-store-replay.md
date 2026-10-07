@@ -1,7 +1,8 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3, 2026-10-06, after two review rounds (Codex `-p review` and Claude lenses).
-Process stage 1 (`docs/process.md`). Converges before any test is written.
+Status: v3.2, 2026-10-07, after two review rounds (Codex `-p review` and Claude lenses)
+and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
+Converges before any test is written.
 
 M1 from `SPEC.md` section 9: skeleton, models, SQLite store, replay ingest, cassette
 wrapper, world schema and generator scaffold, gate checklist config. Tests for store and
@@ -80,7 +81,9 @@ and `eval` stubs stay as they are.
 ```python
 Role = Literal["ME", "EE", "FW", "supply_chain", "EM", "PM"]
 Phase = Literal["concept", "EVT", "DVT", "PVT", "ramp"]
-Attribute = Literal["rev", "lead_time", "gate_date", "owner", "status", "qty", "spec_param"]
+Attribute = Literal["rev", "lead_time", "gate_date", "owner", "status", "qty", "spec_param", "priority"]
+Priority = Literal["critical", "high", "normal", "low"]
+Authority = Literal["owner_stated", "plm_bot", "cm_stated", "hearsay"]
 
 class Reaction(BaseModel, frozen=True):
     name: str
@@ -518,12 +521,14 @@ class ChecklistTask(BaseModel, frozen=True):
     task: str
     owner: Role
     expected_cadence_days: int           # working days between evidence
+    priority: Priority = "normal"
 
 class Gate(BaseModel, frozen=True):
     id: str
     name: str
     date: date
     buffer_days: int
+    priority: Priority = "normal"
     checklist: tuple[ChecklistTask, ...] = ()
 
 class PhaseWindow(BaseModel, frozen=True):
@@ -561,12 +566,16 @@ class Entity(BaseModel, frozen=True):
     state: dict[Attribute, str] = {}     # initial attribute values, e.g. {"rev": "B"}
 
 class Persona(BaseModel, frozen=True):
-    user_id: str                         # Slack-style, e.g. "U0ME01"
+    user_id: str                         # Slack-style, e.g. "U0ME01" or "B0PLM01" for a bot
     name: str
-    role: Role
+    kind: Literal["human", "bot"] = "human"
+    role: Role | None = None             # required for a human, None for a bot
+    team: str | None = None              # free text, e.g. "drive"
+    manager: str | None = None           # persona user_id
     channels: tuple[str, ...]
     owned_entities: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()        # "Alice", "@alice"
+    authority: Authority = "owner_stated"  # what this persona's claims carry; "plm_bot" for a system of record
 
 class Channel(BaseModel, frozen=True):
     id: str
@@ -577,7 +586,7 @@ class WorldClaim(BaseModel, frozen=True):
     entity: str
     attribute: Attribute
     value: str
-    authority: Literal["owner_stated", "plm_bot", "cm_stated", "hearsay"]
+    authority: Authority | None = None   # None means the poster's authority
     supersedes: str | None = None        # event id whose claim on the same key this replaces
     contradicts: tuple[str, ...] = ()    # event ids whose claims on the same key this disagrees with
 
@@ -634,11 +643,13 @@ entry is an entity id; every `entity.subsystem` names an entity of type `subsyst
 every `entity.parent` names an entity; every `tasks[].task` is a checklist task id in
 `project`; every `claim.supersedes` and `claim.contradicts` entry is an earlier or
 same-day event id that carries a claim on the same `(entity, attribute)`; every
-`persona.channels` entry is a channel id; every `event.day` and `known_by` value is
-in `1..days`; a poster is a member of the channel they post in; event ids, entity
-ids and persona user_ids are unique; the union of all `aliases` (entities and
-personas) has no duplicate, so the glossary is unambiguous. Each failure names the
-event, entity or persona id.
+`persona.channels` entry is a channel id; every `persona.manager` is another persona's
+user_id; a human persona has a role and a bot persona has none; every `event.day` and
+`known_by` value is in `1..days`; a poster is a member of the channel they post in;
+`must_see_for` and `known_by` name human personas only; event ids, entity ids and
+persona user_ids are unique; the union of all `aliases` (entities and personas) has
+no duplicate, so the glossary is unambiguous. Each failure names the event, entity or
+persona id.
 
 B3.2 `ProjectConfig.phases` must be ascending by `from_date` with distinct dates;
 `phase_on(day)` returns the phase of the latest window with `from_date <= day` and
@@ -653,9 +664,12 @@ B3.4 `load_world` and `load_project` read YAML with `yaml.safe_load` and validat
 Unknown keys are errors (`extra="forbid"` on every model).
 
 B3.5 The bundled fixture `data/world/kestrel/world.yaml` validates and contains: the
-program "Kestrel K2"; the six roles as personas plus one CM persona for the external
+program "Kestrel K2"; the six roles as human personas with `team` and `manager` set
+(the EM manages the engineers, the PM manages supply chain), plus one CM persona for
+the external channel with `cm_stated` authority, plus three bot personas (`plm_bot`,
+`schedule_bot`, `doc_control_bot`) with `plm_bot` authority posting only in the feed
 channel; channels `kestrel-program`, `eng-mech`, `eng-elec-fw`, `supply-chain`,
-`dvt1-build`, `ext-sunrise-cm`; subsystems `drive`, `compute`, `safety`, `power`,
+`dvt1-build`, `ext-sunrise-cm`, `plm-feed`; subsystems `drive`, `compute`, `safety`, `power`,
 `chassis`, `enclosure`; the entity table from the domain research (at least PN-11051,
 PN-31010, PN-21030, PN-51010, PN-61001, ECO-0142, DEV-0007, PO-45002211, G-DVT1,
 G-TR1, TST-THM-02, BLD-DVT1) with `subsystem` set; three documents (the CM drawing
@@ -665,7 +679,9 @@ and a `rev` or `status` in `state`; gates G-EVT2-EXIT (day 1), G-TR1 (day 7), G-
 phase windows EVT then DVT; scenario events S1 to S15 and N1 to N5 with `known_by`,
 `must_see_for`, `tasks`, and `supersedes` or `contradicts` where the scenario table
 says a claim replaces or disputes another (S2 and S6 on PN-31010 rev; N4 on the
-harness count). `start_date` 2026-10-12, `days` 10, timezone `America/Los_Angeles`.
+harness count; S12 where the CM's slip contradicts the schedule bot's last post; S1
+where no PLM bot post ever appears). Gate G-DVT1 has `priority: critical`.
+`start_date` 2026-10-12, `days` 10, timezone `America/Los_Angeles`.
 `digest world check` exits 0. The rendered `events.jsonl` for the full world is M2
 work; M1 ships a human-authored `events.jsonl` of about ten lines covering S1 and N1
 (part of the human-authored anchor slice, SPEC section 6) so `digest replay` has
@@ -721,6 +737,10 @@ a gate with an empty checklist.
 | Shared type placement | `Role`, `Phase`, `Attribute`, `Event` in `digest/models.py`; project config in `digest/project.py` | The absence detector and live config read them; the simulator is one consumer, not the owner. |
 | Richer world model | Two entity types (`subsystem`, `document`) and three fields (`subsystem`, `parent`, `aliases`); no relations table, no teams, no reporting lines, no person entity | Covers the stale-document scenarios, subsystem ownership for ranking and the extractor's glossary without a graph. Personas stay the only shape for people. |
 | Scripted supersession | Explicit `supersedes` and `contradicts` on world claims | Scripted truth should be scripted; an ordering-and-authority rules engine would be a second ledger to validate. |
+| Systems of record | Bot personas with `plm_bot` authority posting into a feed channel | That is how PLM, schedule and document-control tools appear in Slack; no new source type or API. |
+| Relationships | `team` and `manager` on personas; interaction frequency derived in M3 | Two fields give manager, reports and team for the sender-affinity term; no org-chart connector. |
+| Priority | `priority` attribute; `priority` on gates and tasks | A PM edits it in the configuration; a tracker bot posts it as a claim; the ranker reads one input. |
+| Classifier seam | `judge` is the port; Jev and Laya adapters land in M2 and M4 (D17) | M1 needs no classifier; the enum-only request shape is fixed now so the adapters are additive. |
 | Type gate | `uv run ty check` (D16) | Measured; same three planted errors caught as mypy in a third of the time. |
 
 ## Open items for the user

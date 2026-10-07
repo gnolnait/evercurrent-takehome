@@ -1,9 +1,13 @@
 # SPEC: role- and phase-aware daily Slack digest
 
-Status: v0.2, 2026-10-06. This is the contract the tests are written against. Change it by
-editing this file first, then the tests, then the code. v0.2 adds the belief ledger,
+Status: v0.3, 2026-10-07. This is the contract the tests are written against. Change it by
+editing this file first, then the tests, then the code. v0.2 added the belief ledger,
 absence detection, decision landing map and world-first simulator on top of the v0.1
-baseline pipeline; scope D (live Slack, web preview) is kept in full.
+baseline pipeline. v0.3 adds, after the design review: bot personas for systems of
+record, a bi-temporal ledger, the `priority` attribute, sender affinity and engagement
+in ranking, re-surfacing by age, diversity at render, actions on `needs_you` lines,
+unanswered asks as absences, a classifier port (Jev, Laya) for triage and judging,
+profile bootstrap and onboarding, a two-tier delivery policy, and a live replay seeder.
 
 ## 1. Problem
 
@@ -44,23 +48,38 @@ In scope
 - Rank per user; render a digest (terminal, markdown, Slack Block Kit) with sections for
   stale beliefs and absences.
 - Decision landing map across roles.
-- Feedback loop: thumbs up/down, "more like this", mute topic; profile updates.
-- World-first simulator: scripted ground truth rendered into noisy Slack by a different
-  model family; golden labels derived from the script.
-- Evaluation harness with golden labels, claim-level faithfulness, and simulated
-  stale-belief metrics.
-- Web preview of digests, landing map and rationale with feedback buttons.
+- Feedback loop: thumbs up/down, "more like this", mute topic, and the `needs_you`
+  actions done, snooze, not mine; profile updates.
+- World-first simulator: scripted ground truth, including bot personas for the systems
+  of record, rendered into noisy Slack by a different model family; golden labels
+  derived from the script.
+- Evaluation harness with golden labels, claim-level faithfulness, simulated
+  stale-belief metrics, a ranking ablation table, a profile scrutability check and a
+  classifier comparison.
+- Web preview of digests, landing map, rationale, the editable profile page and the
+  open-items page, with feedback buttons.
+- Onboarding and configuration: a profile draft inferred from Slack and confirmed by
+  the user, a settings surface (role, team, manager, owned subsystems, watch prompts,
+  delivery time, weekdays, quiet hours, pause) in Slack App Home and in the web
+  preview, and `/digest` slash commands.
+- Live replay: the rendered corpus seeded into a real Slack workspace with pacing, so
+  live mode can be demonstrated end to end.
 - One-command demo on the bundled corpus with no API key (LLM cassettes).
 
 Out of scope for v1 (tracked in `docs/later.md`)
-- Interactive Q&A agent in Slack, onboarding flows, "asks back" questions, Linear or
-  other connectors beyond the event envelope, multi-workspace.
+- Interactive Q&A agent in Slack, "asks back" questions, Linear, PLM or org-chart
+  connectors beyond the event envelope, multi-workspace, point-in-time history of
+  edited messages, formal verification of the ledger.
 
 ## 4. Domain model
 
 Event: one normalized message from any source.
-`{source, channel_id, channel_name, thread_ts, ts, user_id, text, mentions[], reactions[],
-files[], permalink, edited, deleted}`
+`{source, channel_id, channel_name, thread_ts, ts, event_ts, user_id, text, mentions[],
+reactions[{name, user_id, ts}], files[], permalink, edited, deleted}`
+- `ts` is the message time and the identity; `event_ts` is when this version was
+  observed (equal to `ts` for the original post, later for an edit or a delete).
+- A system of record (PLM, schedule tool, document control) appears as a bot user
+  posting into a feed channel; its claims carry `plm_bot` authority.
 
 Item: one extracted unit of information.
 `{item_id, type, title, summary, entities[], owner, due, affected_roles[], phase_tags[],
@@ -71,24 +90,46 @@ status, links[{kind, item_id}]}`
 - status: open | resolved | superseded
 - links.kind: duplicate | update_of | supersedes | contradicts | related
 
-Claim: `{key, value, asserted_ts, author, channel, authority}` where key is
-`(entity_id, attribute)` and attribute is from the closed vocabulary: rev, lead_time,
-gate_date, owner, status, qty, spec_param. authority is a small enum (owner_stated,
-plm_bot, cm_stated, hearsay).
+Claim: `{key, value, asserted_ts, observed_ts, invalid_ts, author, channel, authority}`
+where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
+rev, lead_time, gate_date, owner, status, qty, spec_param, priority. authority is a
+small enum (owner_stated, plm_bot, cm_stated, hearsay).
+- The ledger is bi-temporal: `asserted_ts` is when the claim was made, `observed_ts`
+  when the pipeline saw it, `invalid_ts` when a later claim superseded it (null while
+  current).
 
 Ledger: current value per key with history; `supersedes` when a later authoritative
 claim replaces a value; `contradicts` when concurrent claims from different channels
-disagree and neither is superseded.
+disagree and neither is superseded. A `plm_bot` claim is the system of record: a
+lower-authority claim never supersedes it; a disagreement is a contradiction.
+
+Entity: `{id, type, description, owner, vendor, subsystem, parent, aliases[], state}`
+- type: part | assembly | pcba | harness | molded | battery | purchased | component |
+  subsystem | document | eco | ecr | deviation | fa | po | gate | build | test |
+  release | vendor
+- `aliases` is the extractor's glossary; `subsystem` and `parent` give the ranker
+  ownership and containment.
 
 ProjectState: `{project_id, phase, phase_entered, gates[{id, name, date, buffer_days,
-checklist[{task, owner, expected_cadence}]}]}`
+priority, checklist[{id, task, owner, expected_cadence, priority}]}]}`
 - phase: concept | EVT | DVT | PVT | ramp
+- priority: critical | high | normal | low (default normal)
 
-UserProfile: `{user_id, role, projects[], owned_entities[], watch_prompts[],
-interest{entity_or_topic: weight}, exposed{key: (value, ts, how)}, seen{item_id: ts},
-feedback[]}`
+UserProfile: `{user_id, role, team, manager, projects[], owned_entities[],
+watch_prompts[], interest{entity_or_topic: weight}, exposed{key: (value, ts, how)},
+seen{item_id: ts}, feedback[], delivery{time, weekdays[], quiet_hours, paused},
+style{description, length, section_order[], sections_off[], language},
+sources{field: configured | inferred | confirmed | pasted}}`
 - role: ME | EE | FW | supply_chain | EM | PM
 - exposed.how: authored | replied | reacted | shown_in_digest
+- `sources` records where each field came from, so an inferred draft is
+  distinguishable from a confirmed one.
+- `style.description` is the user's own words ("short, risks first, skip fyi, in
+  German"); the extraction client parses it once into the structured fields beside it,
+  and the renderer reads only those fields. Rendering stays template-based and
+  deterministic, so evidence quotes and permalinks are never rewritten by a model.
+  Slash commands: `/digest now`, `/digest pause <duration>`, `/digest style <text>`,
+  `/digest watch <prompt>`, `/digest mute <topic>`, `/digest why <item>`.
 
 Digest: `{user_id, as_of, sections{needs_you[], stale_beliefs[], not_happened[],
 decisions[], risks[], fyi[]}, items[], rationale{item_id: score_breakdown}}`
@@ -105,8 +146,10 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 1. Ingest: events into SQLite, idempotent on (channel_id, ts). Replay feeds the JSONL
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
    Mode events, event_id dedup and a nightly 26-hour reconciliation read.
-2. Extract: per thread delta, the LLM receives new messages, the thread root, existing
-   items for the thread and the project glossary, and returns items with evidence and
+2. Extract: a classifier first decides whether the thread delta contains project
+   information (triage; a dropped golden item counts as a miss in the eval). Then,
+   per thread delta, the LLM receives new messages, the thread root, existing items
+   for the thread and the project glossary, and returns items with evidence and
    claims. Code verifies each evidence quote is a whitespace-normalized substring of the
    cited message and builds the permalink from channel and ts. Entity ids must match
    the normalizers. Items failing verification are dropped and counted.
@@ -115,25 +158,48 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    related, distinct} with quoted evidence. Claims update the ledger.
 4. Project state: gates and checklists from `config/project.yaml`; phase may be
    overridden by a human and is otherwise the configured phase for the date.
-5. Absence: for each open checklist task on a gate inside its buffer, find the last
-   evidence item; if the age exceeds the task's expected cadence (weekend-aware), emit
-   an absence item citing that last evidence. Never emit an absence without a citation.
+5. Absence: two sources. (a) For each open checklist task on a gate inside its buffer,
+   find the last evidence item; if the age exceeds the task's expected cadence
+   (weekend-aware), emit an absence item citing that last evidence. (b) An ask
+   addressed to a person with no reply from them after a cadence is an absence for the
+   asker and the owner, citing the ask. Never emit an absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
    owned entities). Ranked lane: `score = importance * role_phase_prior * personal_relevance
-   * novelty * urgency`, each term stored per impression. Stale-belief items are keys where
-   the user's exposed value differs from the ledger value, weighted by the prior.
+   * sender_affinity * novelty * urgency`, each term stored per impression. `importance`
+   includes type, severity, authority, affected-role count and engagement (replies and
+   reactions on the source thread). `sender_affinity` is highest for the reader's
+   manager and reports, then the same team, then frequent collaborators (counted from
+   shared threads in a trailing window), else neutral. An open blocker or unanswered
+   ask re-surfaces when its age crosses a threshold. Stale-belief items are keys where
+   the user's exposed value differs from the ledger value, weighted by the prior. Mute
+   is a hard filter and wins over every term.
 7. Render: sections capped (needs_you 5, stale_beliefs 3, not_happened 3, decisions 5,
-   risks 5, fyi 5). Each line: fact, specific id and rev, buffer or deadline math,
-   consequence, owner, source link. Rationale on demand.
-8. Feedback: button or CLI feedback updates the profile, records exposure, and is logged
-   with run_id and item_id for evaluation.
+   risks 5, fyi 5); caps are maximums, and a section with nothing above threshold
+   renders empty. Items are diversified at render (maximal marginal relevance) so one
+   entity does not fill a section; items that differ in a discriminating field (rev,
+   qty, date) are exempt from the penalty. Each line: fact, specific id and rev, buffer
+   or deadline math, consequence, owner, source link. Rationale on demand.
+8. Feedback: button, web or CLI feedback updates the profile, records exposure, and is
+   logged with run_id and item_id for evaluation. `needs_you` lines carry done (item
+   resolved), snooze until a date, and not mine (reader removed from the audience).
+9. Delivery: a two-tier policy. Items in the must-see lane whose urgency crosses the
+   interrupt threshold (a blocker on an owned entity, an ask with a same-day due) may be
+   sent in real time when the user has enabled it; everything else waits for the digest
+   at the user's delivery time, on their weekdays, outside quiet hours.
 
 ## 6. World-first simulator and playback harness
 
 - `data/world/<name>/world.yaml`: scripted ground truth: entities, gates, checklists,
-  personas with channel membership, and dated events (ECOs, slips, quotes, decisions,
-  failures), each with `known_by` per persona over time.
+  personas with channel membership, team and manager, bot personas for the systems of
+  record (PLM, schedule, document control) posting into a feed channel, and dated
+  events (ECOs, slips, quotes, decisions, failures), each with claims, the checklist
+  tasks it is evidence for, `must_see_for` and `known_by` per persona over time.
+- `digest seed --world <name>`: posts the rendered corpus into a real Slack workspace
+  through the bot with per-persona display names, threads, edits and deletes, at a
+  configurable pace (one world day per N minutes). The world timestamp is written into
+  each message's metadata; live ingest reads it back as `ts`, so the simulated clock
+  survives seeding while permalinks point at real messages.
 - `data/world/<name>/events.jsonl`: Slack-shaped messages rendered from the world by a
   different model family than the extractor (GPT renders, Claude extracts), with noise
   knobs: indirection, wrong claims by agents, revision typos, delayed cross-posting,
@@ -162,6 +228,14 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Duplicate rate among delivered items.
 - Mirror metrics: missed golden items and hallucinated items, both counted.
 - Degradation curve: extraction and supersession recall as the renderer's noise knobs rise.
+- Ranking ablation: each score term switched off in turn, with must-see recall and nDCG
+  per persona reported; a term that does not move the numbers is removed.
+- Profile scrutability: edit a profile (role, owned subsystem, a watch prompt), re-run
+  the day, and check the digest changes in the expected direction with the rationale
+  naming the edit.
+- Classifier comparison: triage recall against golden items, faithfulness-judge
+  agreement with the hand-checked sample, and latency per call, for Jev (via
+  OpenRouter), Laya (local, Linux) and the Haiku-class model on the same inputs.
 
 Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
 
@@ -189,24 +263,38 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
   slack_sdk and with the bolt-python mock web API server pattern; no network in tests.
 - A10 Web preview renders a digest, the landing map and rationale, and posts feedback
   that changes the stored profile.
+- A11 A new user is onboarded from Slack: the profile draft inferred from their title,
+  channels and threads is shown with its evidence, their confirmation and edits are
+  stored with `sources` set, and their delivery time defaults to their Slack timezone.
+- A12 Editing a profile field changes the next digest in the expected direction and
+  the rationale names the edit (the scrutability check in section 7).
 
 ## 9. Milestones and build order
 
-- M1 (day 1): skeleton, models, SQLite store, replay ingest, cassette wrapper, world
-  schema and generator scaffold, gate checklist config. Tests for store and replay.
-- M2 (day 2): extraction prompt and schema with evidence verification; absence detector
-  ("Not happened" ships first, it does not depend on the ledger); golden labels from
-  the world script; extraction eval.
-- M3 (day 3): claims, linking and ledger; stale-belief computation; ranking with priors,
-  profiles, feedback; renderer. Day-3 kill criterion: if claim keying precision on the
-  noisy corpus is below 0.8, the ledger is cut to the baseline ranker plus absences and
-  the README says so.
-- M4 (day 4): landing map; eval harness and report; faithfulness judge; degradation
-  curve; web preview. A1 to A8, A10.
-- M5 (day 5): live Slack mode, Block Kit, failure handling. A9. Docker, devcontainer
-  check, README design doc, ANSWERS.md, demo screenshots.
+- M1 (day 1): skeleton, models, SQLite store, replay ingest, cassette wrapper with the
+  API and CLI backends, world schema (bot personas, team, manager, priority) and
+  generator scaffold, gate checklist config. Tests for store and replay.
+- M2 (day 2): triage classifier (Jev via OpenRouter) and extraction prompt and schema
+  with evidence verification; absence detector with both sources ("Not happened" ships
+  first, it does not depend on the ledger); golden labels from the world script;
+  extraction eval.
+- M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
+  ranking with priors, sender affinity, engagement, re-surfacing by age, profiles,
+  feedback and the `needs_you` actions; renderer with diversity and quiet days. Day-3
+  kill criterion: if claim keying precision on the noisy corpus is below 0.8, the
+  ledger is cut to the baseline ranker plus absences and the README says so.
+- M4 (day 4): landing map; eval harness and report with the ablation table, the
+  scrutability check and the classifier comparison (Laya runs on Linux); faithfulness
+  judge; degradation curve; web preview with the profile page (paste supported) and
+  the open-items page. A1 to A8, A10, A12.
+- M5 (day 5): live Slack mode, Block Kit, failure handling, the two-tier delivery
+  policy, profile bootstrap from Slack, onboarding (DM welcome, App Home settings with
+  pause and send-now, `/digest` commands), the live replay seeder. A9, A11. Docker,
+  devcontainer check, README design doc, ANSWERS.md, demo screenshots.
 - Days 6 to 7: adversarial validation, second-model review, retro, polish. No cuts were
-  taken to fund the thesis; if M4 slips, the web preview is the first thing deferred.
+  taken to fund the thesis. Cut order if a day slips: the Laya comparison, then seeder
+  pacing (batch seeding stays), then the App Home settings surface (the web profile
+  page stays), then the web preview.
 
 ## 10. Risks and how we handle them
 
@@ -222,3 +310,8 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
   from the public submissions listed in `notes/research/competing-submissions.md`.
 - Slack API limits: internal app keeps Tier 3; throttle detection and resumable backfill
   regardless; replay makes the demo independent of Slack.
+- Scope growth from the design review: every v0.3 addition is a small, separable piece
+  with a named milestone and a place in the cut order above; none changes the M1
+  interfaces beyond the world schema and the attribute vocabulary.
+- Ranking factor sprawl: every term is stored per impression and the ablation table
+  reports its effect; a term without measured effect on the golden corpus is removed.

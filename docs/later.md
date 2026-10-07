@@ -10,10 +10,17 @@ would promote it.
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
   the take-home is submitted.
-- Onboarding and configuration. DM welcome, settings modal (role, priorities, delivery
-  time defaulting to the Slack timezone, weekdays, quiet hours), App Home as the
-  settings page with pause and send-now, `/digest` slash commands. Trigger: a second
-  real user.
+- Org-chart and HR connectors (Google Directory, Workday, BambooHR) to fill team and
+  manager. The Slack-inferred profile draft approximates them. Trigger: a second real
+  workspace.
+- Point-in-time history of edited messages (row versioning in the store). The snapshot
+  rule (a digest for day D runs on a store replayed to day D) covers the demo and the
+  eval. Trigger: a live deployment that must answer "what did the digest say last
+  Tuesday" after edits.
+- Formal model of the ledger in Quint with the three invariants (no superseded value
+  is current; every stale-belief line has a superseding permalink; no absence without a
+  citation), model-checked and linked from the README. The stateful Hypothesis test in
+  M3 covers the same invariants empirically. Trigger: days 6 to 7 are free.
 - Linear connector. Webhooks into the event store (issue state, assignee, priority, due
   date, cycle changes; project update health; SLA breaches), read-only MCP for ad hoc
   questions. Trigger: the event envelope is stable and a Linear workspace exists.

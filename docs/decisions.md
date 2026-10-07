@@ -187,6 +187,53 @@ Would change it. If structured-output enforcement matters for extraction quality
 cassettes for extraction are re-recorded through the API before submission and the
 report says so.
 
+## D17. Classifier models behind the same client: Jev, Laya, and the LLM baseline
+
+Decision. The LLM client's `judge` operation (enum in, enum out) gets a classifier
+port with three adapters: `jev_openrouter` (TypeSafe Jev through OpenRouter's
+chat-completions endpoint, recorded to cassettes), `laya_local` (open-weight
+ModernBERT-based decision model, Apache 2.0, runs on Linux only because torch has no
+Windows ARM64 wheels) and the Haiku-class LLM as the baseline. Jev handles triage
+before extraction (M2) and watch-prompt matching (M3). The M4 evaluation compares all
+three on triage recall, faithfulness-judge agreement and latency. Extraction and the
+linker's adjudicator stay on structured outputs, because they must return fields and
+quoted evidence that a classifier cannot produce.
+
+Why. Triage and matching are yes/no questions at volume; a non-generative classifier
+answers them in tens of milliseconds, cannot hallucinate text, and as a judge has no
+self-preference bias. The comparison is a measured finding for the README either way.
+
+Would change it. OpenRouter's router returning no usable label for enum questions, or
+Jev dropping golden items in triage above the miss budget: the LLM baseline stays.
+
+## D18. Profile bootstrap and onboarding
+
+Decision. Onboarding is in scope for v1. The first-run profile is a draft inferred
+from Slack (job title and timezone from the user record; team, collaborators and owned
+subsystems from channel membership, replies and mentioned entities over 30 days),
+shown with its evidence for confirmation. A user may also paste a role description,
+which the extraction client turns into the same fields plus watch prompts. Every field
+records its source (configured, inferred, confirmed, pasted). Settings live in Slack
+App Home and in the web preview's profile page; delivery time defaults to the Slack
+timezone. No org-chart, HR or LinkedIn sources.
+
+Why. The data the bootstrap needs is already ingested; a confirmed draft beats a blank
+form; a source per field keeps inferred values from being mistaken for stated ones.
+
+Would change it. A second real workspace with an HR directory: add the connector
+listed in `docs/later.md`.
+
+## D19. The ledger is bi-temporal
+
+Decision. Each claim carries `asserted_ts` (when it was said), `observed_ts` (when the
+pipeline saw it) and `invalid_ts` (when a later claim superseded it, null while
+current). Supersession sets `invalid_ts`; nothing is deleted.
+
+Why. This is the temporal-knowledge-graph model (Zep's Graphiti) applied in SQLite:
+stale-belief lines can say when a value stopped being true, supersession recall can be
+measured on time rather than only on links, and a tracker connector later writes the
+same rows.
+
 ## Validation against EverCurrent's published experience
 
 Each decision above is checked against what EverCurrent has written publicly, so the
