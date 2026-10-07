@@ -10,6 +10,35 @@ would promote it.
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
   the take-home is submitted.
+- Agentic feature set (design sketch, so v1 data structures do not block it). Built on
+  the Claude Agent SDK as a separate component from the pipeline (D3); the pipeline
+  stays deterministic and the agent reads its outputs. Tools, all over the store and
+  the profile, read tools first:
+  - Read: `search_items`, `get_item`, `get_entity_history` (ledger rows for a key),
+    `list_open_blockers`, `list_absences`, `why_ranked`, `get_profile`,
+    `get_project_state` (phase, gates, buffers).
+  - Write, each idempotent and logged as a feedback or profile event: `set_watch`,
+    `mute_topic`, `mark_done`, `snooze`, `update_profile_field` (with `source =
+    agent_proposed` until the user confirms).
+  - Ask-user: one tool that posts a button-answerable question in the user's DM and
+    returns the answer or a timeout; rate-limited to one open question per user, used
+    for "asks back" and for low-confidence profile edits. Never free-text prompts.
+  - Triggers: the daily schedule (exists in v1), real-time must-see events (exists in
+    v1 as the two-tier delivery), and an always-on event triage loop that scores each
+    new thread delta as it arrives and decides digest, real-time or ignore; the loop
+    is the same triage classifier as v1, run per event instead of per day.
+  - Scheduling: the agent may propose a delivery-time change or a snooze; it never
+    changes a setting without the ask-user tool.
+  - Calendar integration (Google Calendar, M365): three uses. A gate review or DFM
+    review that is on no calendar inside the buffer is an absence signal of the same
+    kind as a missing ECO post. Meeting titles and attendees are evidence of task
+    progress ("thermal review held Tuesday"). Delivery timing avoids the user's
+    meetings and respects out-of-office. Calendar events enter through the event
+    envelope with their own source and `plm_bot`-level authority for dates. Meeting
+    notes or transcripts are a later source and need the same evidence discipline as
+    chat.
+  Trigger: the interactive agent exists and a real workspace has used the digest for a
+  month, so the ask-user rate and the triage thresholds can be set from data.
 - Org-chart and HR connectors (Google Directory, Workday, BambooHR) to fill team and
   manager. The Slack-inferred profile draft approximates them. Trigger: a second real
   workspace.
