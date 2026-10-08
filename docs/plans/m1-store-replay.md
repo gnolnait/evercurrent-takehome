@@ -1,6 +1,6 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3.2, 2026-10-07, after two review rounds (Codex `-p review` and Claude lenses)
+Status: v3.3, 2026-10-08, after three review rounds (Codex `-p review` and Claude lenses)
 and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
 Converges before any test is written.
 
@@ -15,8 +15,11 @@ branch lands by pull request: interfaces that raise `NotImplementedError`,
 `digest/settings.py`, `digest/models.py`, the `load_world_header` function, the
 import-linter contract, the dependency and `.gitignore` changes. Each unit branch forks
 from `main` after that merge, lands one test commit and one code commit, is reviewed,
-and is merged by the user. Units touch disjoint files beyond the stubs, so their tests
-and code run in parallel and the three pull requests merge in any order.
+and is merged by the user. Beyond the stubs, units share one file, `digest/cli.py`:
+the stubs commit adds the `replay` command and the `world check` command with bodies
+that raise `NotImplementedError`, and units 1 and 3 each fill one body. Every other
+file belongs to one unit, so tests and code run in parallel and the three pull requests
+merge in any order; a unit branch rebases on `main` if `digest/cli.py` conflicts.
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
@@ -65,11 +68,18 @@ and `eval` stubs stay as they are.
   absence detector (M2) takes a `ProjectConfig` and does not know which.
 - Logging. Stdlib `logging`, logger per module, event token plus `extra={...}`
   (`.claude/rules/logging.md`). No new logging dependency.
-- Dependencies added in the stubs commit: `pyyaml>=6` (runtime), `types-pyyaml`
-  (dev). `.gitignore` gains `*.sqlite-wal` and `*.sqlite-shm` (WAL side files; only
+- Dependencies added in the stubs commit: `pyyaml>=6` (runtime), `types-pyyaml` and
+  `import-linter` (dev). The `corpus` extra (`openai`) is removed: the renderer calls
+  the gateway (D12 as amended, D15). `.gitignore` gains `*.sqlite-wal` and `*.sqlite-shm` (WAL side files; only
   `*.sqlite-journal` is ignored today).
 - Errors. Corpus and config files are ours. A malformed line or an unknown reference
   raises with the file and line; nothing is skipped silently.
+- Import contract. `import-linter` (dev group; `uv run lint-imports` in CI and the
+  justfile) holds one layers contract, top to bottom: `digest.cli`; `digest.replay`;
+  `digest.store`, `digest.llm` and `digest.world` as independent siblings;
+  `digest.project`; `digest.models` and `digest.settings`. A module imports only from
+  its own layer's dependencies or a lower layer. The stubs commit adds the contract
+  and the three unit branches stay inside it.
 
 ## Unit 1: store and replay
 
@@ -415,7 +425,7 @@ class CassetteMiss(LookupError): ...
 ```python
 class AnthropicBackend:
     name = "anthropic_api"
-    def __init__(self, client: anthropic.Anthropic)
+    def __init__(self, client: anthropic.Anthropic, models: ModelIds)
     def complete(self, request: LLMRequest) -> LLMResponse
 ```
 
@@ -464,8 +474,9 @@ every backend gets it. `judge` builds the schema `{"type": "object", "properties
 {"choice": {"enum": [...]}}, "required": ["choice"]}` and returns the enum member,
 with the same retry.
 
-B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model`,
-`system`, `messages`, `max_tokens`, `temperature` and, when `schema` is given,
+B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model =
+models.resolve(request.model, "anthropic_api")`, `system`, `messages`, `max_tokens`,
+`temperature` and, when `schema` is given,
 `output_config={"format": {"type": "json_schema", "schema": schema}}` (present in
 anthropic 1.11.0, P2). It reads the first text block, parses JSON when a schema was
 given, and fills token counts from `usage`. `stop_reason` of `max_tokens` or
@@ -748,7 +759,7 @@ a gate with an empty checklist.
 | Relationships | `team` and `manager` on personas; interaction frequency derived in M3 | Two fields give manager, reports and team for the sender-affinity term; no org-chart connector. |
 | Priority | `priority` attribute; `priority` on gates and tasks | A PM edits it in the configuration; a tracker bot posts it as a claim; the ranker reads one input. |
 | Classifier seam | `judge` is the port; the Haiku-class model through the gateway is the core adapter; Jev and Laya are stretch (D17) | M1 needs no classifier; the enum-only request shape is fixed now so later adapters are additive. |
-| Type gate | `uv run ty check` (D16) | Measured; same three planted errors caught as mypy in a third of the time. |
+| Type gate | `uv run ty check` (D16) | Measured; same three planted errors caught as mypy in less than half the time (under 0.5 s against 1.1 s). |
 
 ## Open items for the user
 

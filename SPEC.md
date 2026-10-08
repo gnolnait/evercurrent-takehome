@@ -287,9 +287,10 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
 
 ## 9. Milestones and build order
 
-Core items ship in the order below before any stretch item is started. A stretch item
-is built only when the day it belongs to finishes with time left, and is listed with
-its day.
+Core items ship in the order below. A stretch item is listed with its day and is
+built on that day only after the day's core items are done, when time is left;
+otherwise it waits for days 6 to 7. A stretch item never displaces a core item of a
+later day.
 
 - M1 (day 1): skeleton, models, SQLite store, replay ingest, cassette wrapper with the
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
@@ -333,7 +334,9 @@ its day.
 - Slack API limits: internal app keeps Tier 3; throttle detection and resumable backfill
   regardless; replay makes the demo independent of Slack.
 - Scope growth from the design review: every v0.3 addition is a small, separable piece
-  with a named milestone and a place in the cut order above; none changes the M1
-  interfaces beyond the world schema and the attribute vocabulary.
+  with a named milestone and a place in the cut order above. The M1 interface changes
+  are the world schema and project configuration (bot personas, team, manager,
+  priority), the attribute vocabulary, and the gateway backend with its logical
+  model names (D15).
 - Ranking factor sprawl: every term is stored per impression and the ablation table
   reports its effect; a term without measured effect on the golden corpus is removed.

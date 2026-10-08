@@ -10,6 +10,9 @@ protocol of two operations: `extract(messages, schema) -> validated model` and
 `judge(prompt) -> enum`. Anthropic is the default implementation. An OpenAI implementation
 is optional and used for one thing only: the faithfulness judge in evaluation.
 
+Amended 2026-10-08 by D15: the second implementation is one OpenAI-compatible gateway
+adapter, used for every development call, not an OpenAI SDK client for the judge alone.
+
 Why. Structured outputs on the Claude API are GA with JSON schema enforcement, prompt
 caching and batch pricing stack, and the extraction workload is exactly the shape those
 features serve. The judge should come from a different model family than the generator
@@ -140,8 +143,10 @@ every extra mechanism is cost without signal for a one-week take-home.
 
 ## D12. The corpus renderer is a different model family from the extractor
 
-Decision. The world-first simulator renders Slack text with GPT through the OpenAI API
-(optional extra `corpus`), while Claude does extraction and linking. One 40-message
+Decision. The world-first simulator renders Slack text with a GPT-class model, while
+Claude does extraction and linking. Amended 2026-10-08 by D15: the renderer calls the
+model through the gateway backend with the logical name `render`; the `openai` package
+is not used and the `corpus` extra leaves `pyproject.toml` in the M1 stubs commit. One 40-message
 slice is human-authored. The eval report states which models rendered and which
 extracted.
 
@@ -226,8 +231,8 @@ extraction (M2) and watch-prompt matching (M3). Stretch, behind the same port:
 `jev` (TypeSafe's native System One API, `state` plus typed `questions`, needs a
 TypeSafe key; OpenRouter's "jev-router" is a model router that returns generated
 text, not a classifier, checked 2026-10-08) and `laya_local` (open-weight
-ModernBERT-based decision model, Apache 2.0, Linux only because torch has no Windows
-ARM64 wheels). The M4 evaluation compares whatever adapters exist on triage recall,
+ModernBERT-based decision model, Apache 2.0, run in the Linux devcontainer in v1; torch
+2.9.1 ships Windows ARM64 wheels, checked 2026-10-08, but that path is untested here). The M4 evaluation compares whatever adapters exist on triage recall,
 faithfulness-judge agreement and latency. Extraction and the linker's adjudicator stay
 on structured outputs, because they must return fields and quoted evidence that a
 classifier cannot produce.
@@ -283,8 +288,9 @@ structured-output requests and never MCP.
 
 Why. A REST API alone needs a tool definition per assistant host; per-host function
 definitions drift; letting the assistant run SQL alone depends on it knowing the
-schema. One function layer keeps the three adapters from diverging, and the measured
-constraint on assistant accuracy is tool count, not protocol. Keeping the pipeline's
+schema. One function layer keeps the three adapters from diverging. Tool selection
+degrades as the tool list grows, so the list stays short; the protocol is not the
+constraint. Keeping the pipeline's
 own calls direct preserves determinism, batching and cassette replay. This is also the
 concrete answer to the take-home's question on function calling versus MCP.
 
