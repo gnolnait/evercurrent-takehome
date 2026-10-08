@@ -10,14 +10,13 @@ replay. Nothing in M1 calls a model. Everything in M1 runs offline.
 
 ## Units and branches
 
-M1 splits into three units. An integration branch `m1` is cut from `main` once the
-`tooling/ty-type-checker` and `ci/hook-shims-executable` branches are merged, and
-carries one stubs commit: interfaces that raise `NotImplementedError`,
+M1 splits into three units, each its own pull request into `main`. First a `m1-stubs`
+branch lands by pull request: interfaces that raise `NotImplementedError`,
 `digest/settings.py`, `digest/models.py`, the `load_world_header` function, the
-dependency and `.gitignore` changes. Each unit branch forks from `m1` after that
-commit, lands one test commit and one code commit, is reviewed, and is merged locally
-into `m1`. One pull request takes `m1` to `main` at the end of M1. Units 2 and 3 share
-nothing with unit 1 beyond the stubs commit, so their tests and code run in parallel.
+import-linter contract, the dependency and `.gitignore` changes. Each unit branch forks
+from `main` after that merge, lands one test commit and one code commit, is reviewed,
+and is merged by the user. Units touch disjoint files beyond the stubs, so their tests
+and code run in parallel and the three pull requests merge in any order.
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
@@ -758,11 +757,9 @@ needs it; M1 does not. The first call in M2 is a spike: one extraction request t
 the gateway with a JSON schema against a Claude model, to confirm the schema is
 honoured before any cassette is recorded.
 
-U2. Timezone for `--until`: the world's (`America/Los_Angeles`) is chosen; say if you
-prefer UTC.
+U2. Decided 2026-10-08: the world's timezone (`America/Los_Angeles`) for `--until`.
 
-U3. One pull request for all of M1 from `m1` to `main`, or one per unit: the plan
-assumes one.
+U3. Decided 2026-10-08: one pull request per unit, plus one for the stubs.
 
 ## Premise ledger
 

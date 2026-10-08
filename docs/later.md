@@ -33,6 +33,16 @@ would promote it.
     chat.
   Trigger: the interactive agent exists and a real workspace has used the digest for a
   month, so the ask-user rate and the triage thresholds can be set from data.
+- Full entity model beyond the v1 minimum. v1 has entity types with `subsystem`,
+  `parent` and `aliases`, personas with `team` and `manager`, and claims as the only
+  edges. The full model adds: a `relations` table with typed edges (`part_of`,
+  `owned_by`, `member_of`, `reports_to`, `governs`, `depends_on`) each with a validity
+  window; `team` and `person` as entity types so ownership can be held by a team;
+  documents with a content reference (PLM or Drive id, version) rather than a title;
+  `deliverable` as a grouping of tasks, builds and tests that a gate consumes; a
+  glossary table with alias provenance. Each is additive to the v1 schema. Trigger:
+  a ranking or landing-map need that the v1 fields cannot express, or a connector that
+  supplies the edges.
 - Org-chart and HR connectors (Google Directory, Workday, BambooHR) to fill team and
   manager. The Slack-inferred profile draft approximates them. Trigger: a second real
   workspace.
