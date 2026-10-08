@@ -12,6 +12,8 @@ is optional and used for one thing only: the faithfulness judge in evaluation.
 
 Amended 2026-10-08 by D15: the second implementation is one OpenAI-compatible gateway
 adapter, used for every development call, not an OpenAI SDK client for the judge alone.
+In code the protocol is `Backend` and its one operation is `complete`; `extract` and
+`judge` are methods of the client wrapper around it.
 
 Why. Structured outputs on the Claude API are GA with JSON schema enforcement, prompt
 caching and batch pricing stack, and the extraction workload is exactly the shape those
@@ -172,7 +174,8 @@ chosen to differ from the public submissions catalogued in
 
 ## D15. LLM backends: Anthropic API in production, one gateway for development
 
-Decision. The `Provider` protocol (D1) has two implementations behind one config value:
+Decision. The provider protocol (D1; `Backend` in code) has two implementations behind
+one config value:
 - `anthropic_api`: the production path, schema-enforced structured outputs, needs an
   Anthropic key.
 - `openrouter`: one OpenAI-compatible chat-completions adapter with `response_format`
@@ -288,9 +291,8 @@ structured-output requests and never MCP.
 
 Why. A REST API alone needs a tool definition per assistant host; per-host function
 definitions drift; letting the assistant run SQL alone depends on it knowing the
-schema. One function layer keeps the three adapters from diverging. Tool selection
-degrades as the tool list grows, so the list stays short; the protocol is not the
-constraint. Keeping the pipeline's
+schema. One function layer keeps the three adapters from diverging. The cap of ten
+tools is a design choice to keep the list readable, not a measured limit. Keeping the pipeline's
 own calls direct preserves determinism, batching and cassette replay. This is also the
 concrete answer to the take-home's question on function calling versus MCP.
 

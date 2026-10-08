@@ -1,6 +1,6 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3.3, 2026-10-08, after three review rounds (Codex `-p review` and Claude lenses)
+Status: v3.5, 2026-10-08, after four review rounds (Codex `-p review` and Claude lenses)
 and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
 Converges before any test is written.
 
@@ -25,7 +25,7 @@ merge in any order; a unit branch rebases on `main` if `digest/cli.py` conflicts
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
 | 1 Store and replay | `m1-store-replay` | `digest/store.py`, `digest/schema.sql`, `digest/replay.py` | `tests/test_store.py`, `tests/test_replay.py` |
-| 2 LLM client and cassette | `m1-llm-cassette` | `digest/llm/__init__.py`, `digest/llm/cassette.py`, `digest/llm/anthropic_api.py`, `digest/llm/openrouter.py`, `config/models.yaml` | `tests/test_llm.py` |
+| 2 LLM client and cassette | `m1-llm-cassette` | `digest/llm/__init__.py`, `digest/llm/cassette.py`, `digest/llm/client.py`, `digest/llm/anthropic_api.py`, `digest/llm/openrouter.py`, `config/models.yaml` | `tests/test_llm.py` |
 | 3 World schema and project config | `m1-world-schema` | `digest/project.py`, `digest/world/schema.py`, `digest/world/load.py`, `config/project.yaml`, `data/world/kestrel/world.yaml`, `data/world/kestrel/events.jsonl` | `tests/test_world.py`, `tests/test_project.py` |
 
 `digest/cli.py` gains `replay` (unit 1) and `world check` (unit 3). The `demo`, `run`
@@ -80,9 +80,10 @@ and `eval` stubs stay as they are.
   `digest.store`, `digest.llm` and `digest.world` as independent siblings;
   `digest.project`; `digest.models` and `digest.settings`. A module imports only from
   its own layer's dependencies or a lower layer. A forbidden contract with
-  `include_external_packages` keeps `anthropic` importable only inside `digest.llm`,
-  which is the rule AGENTS.md states for LLM calls. The stubs commit adds both
-  contracts and the three unit branches stay inside them.
+  `include_external_packages` keeps `anthropic` and `httpx2` importable only inside
+  `digest.llm`: the SDK and the gateway's HTTP client are the two ways a model gets
+  called, so a call from any other module fails the gate (the rule AGENTS.md states).
+  The stubs commit adds both contracts and the three unit branches stay inside them.
 
 ## Unit 1: store and replay
 
@@ -365,15 +366,19 @@ Required null cases (`.claude/rules/testing.md`): an event with empty `mentions`
 
 ### Interface
 
-`digest/llm/__init__.py`
+`digest/llm/__init__.py` holds the types; `digest/llm/client.py` holds the wrapper,
+because `cassette.py` imports the types and the wrapper imports `cassette.py`, so one
+module would be an import cycle.
 
 ```python
+LogicalModel = Literal["extract", "adjudicate", "render", "judge", "classify"]
+
 class Message(BaseModel, frozen=True):
     role: Literal["user", "assistant"]
     content: str
 
 class LLMRequest(BaseModel, frozen=True):
-    model: str                               # logical name: extract | adjudicate | render | judge | classify
+    model: LogicalModel
     system: str
     messages: tuple[Message, ...]
     output_schema: dict[str, Any] | None = None  # JSON schema for structured output; not `schema`, which pydantic's BaseModel owns
@@ -394,21 +399,26 @@ class Backend(Protocol):
     name: str
     def complete(self, request: LLMRequest) -> LLMResponse: ...
 
-class LLM:
-    def __init__(self, backend: Backend | None, cassettes: Cassettes, mode: Literal["replay", "record", "live"])
-    def complete(self, request: LLMRequest) -> LLMResponse
-    def extract(self, request: LLMRequest, model_cls: type[T]) -> T
-    def judge(self, request: LLMRequest, choices: type[E]) -> E       # E: Enum
-
 class ModelIds(BaseModel, frozen=True):       # config/models.yaml: logical name -> {backend: concrete id}
     extract: dict[str, str]
     adjudicate: dict[str, str]
     render: dict[str, str]
     judge: dict[str, str]
     classify: dict[str, str]
-    def resolve(self, logical: str, backend: str) -> str
+    def resolve(self, logical: LogicalModel, backend: str) -> str
 
-def load_model_ids(path: Path = Path("config/models.yaml")) -> ModelIds
+def load_model_ids(path: Path = DEFAULT_MODEL_IDS_PATH) -> ModelIds   # config/models.yaml
+```
+
+`digest/llm/client.py`
+
+```python
+class LLM:
+    def __init__(self, backend: Backend | None, cassettes: Cassettes, mode: Literal["replay", "record", "live"])
+    def complete(self, request: LLMRequest) -> LLMResponse
+    def extract(self, request: LLMRequest, model_cls: type[T]) -> T
+    def judge(self, request: LLMRequest, choices: type[E]) -> E       # E: Enum
+
 def from_settings(settings: Settings) -> LLM
 ```
 
@@ -802,7 +812,7 @@ U3. Decided 2026-10-08: one pull request per unit, plus one for the stubs.
 ## Mechanics for this milestone
 
 - Gates: `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`,
-  `uv run ty check`.
+  `uv run ty check`, `uv run lint-imports`.
 - Prove a test: `python ~/.local/bin/prove-test.py --test tests/test_store.py --break
   blank:src/digest/store.py:N-M --run "uv run pytest tests/test_store.py" --format
   "uv run ruff format tests/test_store.py" --expect-error "<specific line>"`. The
@@ -812,7 +822,7 @@ U3. Decided 2026-10-08: one pull request per unit, plus one for the stubs.
   `.claude/rules/testing.md`. It writes only its `tests/test_<unit>.py` files and hands
   back unstaged.
 - Implementer brief (Opus subagent, own worktree): this plan, the stubs, the tests,
-  the rules under `.claude/rules/`. It may not edit `tests/`. Done when the four gates
+  the rules under `.claude/rules/`. It may not edit `tests/`. Done when the five gates
   pass. Before touching `digest/llm/anthropic_api.py` it loads the `claude-api` skill
   and writes `config/models.yaml`.
 - Reviews: Codex `timeout 900 codex exec -p review --output-schema
