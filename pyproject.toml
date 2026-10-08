@@ -39,7 +39,8 @@ dev = [
     "hypothesis>=6.120",
     "time-machine>=2.16",
     "ruff>=0.8",
-    "mypy>=1.13",
+    # Pinned: ty is pre-1.0 and its rule set moves between releases.
+    "ty==0.0.84",
 ]
 # No respx / pytest-httpx: anthropic 1.x runs on httpx2 and those mocks fail silently;
 # the LLM layer is tested through the SDK-boundary cassette (docs/decisions.md D9) and
@@ -65,11 +66,14 @@ src = ["src", "tests"]
 extend-exclude = [".claude", "dev-kit", "notes", "data"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
-ignore = ["E501"]
+# ANN restores the "every def is annotated" check that mypy --strict provided and ty
+# does not (ty checks types it can see; it has no rule for a missing annotation).
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ANN"]
+ignore = ["E501", "ANN401"]
 
-[tool.mypy]
-python_version = "3.12"
-strict = true
-packages = ["digest"]
-mypy_path = "src"
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.terminal]
+# Warnings fail the gate, so a diagnostic never lingers as "just a warning".
+error-on-warning = true
