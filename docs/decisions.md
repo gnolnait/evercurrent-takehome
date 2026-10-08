@@ -135,7 +135,8 @@ named failure modes and mirror metrics shows judgment and makes the honest story
 
 ## D11. Repo hygiene as signal
 
-Decision. One CI workflow (ruff, format, ty, pytest, hook tests). Devcontainer.
+Decision. One CI workflow (ruff, format, ty, import-linter, pytest, hook tests).
+Devcontainer.
 `just` recipes mirrored by plain `uv run` commands in the README. Conventional commits.
 Test and implementation in separate commits per the walled TDD process. No coverage
 badge, no release automation.

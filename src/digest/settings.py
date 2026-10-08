@@ -10,7 +10,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="DIGEST_", env_file=".env", extra="ignore")
+    # env_ignore_empty: a blank `KEY=` line in .env reads as None, not "".
+    model_config = SettingsConfigDict(
+        env_prefix="DIGEST_", env_file=".env", extra="ignore", env_ignore_empty=True
+    )
 
     mode: Literal["replay", "record", "live"] = "replay"
     backend: Literal["anthropic_api", "openrouter"] = "openrouter"

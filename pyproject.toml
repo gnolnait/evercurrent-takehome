@@ -12,6 +12,7 @@ dependencies = [
     "typer>=0.15",
     "rich>=13.9",
     "pyyaml>=6",
+    "httpx2>=2.13",
 ]
 
 [project.optional-dependencies]
@@ -97,11 +98,12 @@ layers = [
     "digest.models | digest.settings",
 ]
 
-# Every model call goes through digest.llm, so cassettes capture all of them.
+# The SDK and the gateway's HTTP client are the two ways a model gets called. Keeping
+# both inside digest.llm keeps every call behind the cassette wrapper.
 [[tool.importlinter.contracts]]
-name = "anthropic sdk only inside digest.llm"
+name = "model clients only inside digest.llm"
 type = "forbidden"
 source_modules = ["digest"]
-forbidden_modules = ["anthropic"]
-ignore_imports = ["digest.llm.* -> anthropic"]
+forbidden_modules = ["anthropic", "httpx2"]
+ignore_imports = ["digest.llm.* -> anthropic", "digest.llm.* -> httpx2"]
 allow_indirect_imports = true

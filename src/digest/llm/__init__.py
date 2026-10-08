@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol
 from digest.models import Frozen
 
 DEFAULT_MODEL_IDS_PATH = Path("config/models.yaml")
+LogicalModel = Literal["extract", "adjudicate", "render", "judge", "classify"]
 
 
 class Message(Frozen):
@@ -20,7 +21,7 @@ class Message(Frozen):
 
 
 class LLMRequest(Frozen):
-    model: str  # logical name: extract | adjudicate | render | judge | classify
+    model: LogicalModel
     system: str
     messages: tuple[Message, ...]
     output_schema: dict[str, Any] | None = None
@@ -60,7 +61,7 @@ class ModelIds(Frozen):
     judge: dict[str, str]
     classify: dict[str, str]
 
-    def resolve(self, logical: str, backend: str) -> str:
+    def resolve(self, logical: LogicalModel, backend: str) -> str:
         raise NotImplementedError
 
 
