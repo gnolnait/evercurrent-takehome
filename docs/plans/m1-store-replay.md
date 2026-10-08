@@ -16,8 +16,9 @@ branch lands by pull request: interfaces that raise `NotImplementedError`,
 import-linter contract, the dependency and `.gitignore` changes. Each unit branch forks
 from `main` after that merge, lands one test commit and one code commit, is reviewed,
 and is merged by the user. Beyond the stubs, units share one file, `digest/cli.py`:
-the stubs commit adds the `replay` command and the `world check` command with bodies
-that raise `NotImplementedError`, and units 1 and 3 each fill one body. Every other
+the stubs commit adds the `replay` command and the `world check` command with their
+full option declarations and bodies that call the file's `_not_yet` helper, and units 1
+and 3 each fill one body. Every other
 file belongs to one unit, so tests and code run in parallel and the three pull requests
 merge in any order; a unit branch rebases on `main` if `digest/cli.py` conflicts.
 
@@ -78,8 +79,10 @@ and `eval` stubs stay as they are.
   justfile) holds one layers contract, top to bottom: `digest.cli`; `digest.replay`;
   `digest.store`, `digest.llm` and `digest.world` as independent siblings;
   `digest.project`; `digest.models` and `digest.settings`. A module imports only from
-  its own layer's dependencies or a lower layer. The stubs commit adds the contract
-  and the three unit branches stay inside it.
+  its own layer's dependencies or a lower layer. A forbidden contract with
+  `include_external_packages` keeps `anthropic` importable only inside `digest.llm`,
+  which is the rule AGENTS.md states for LLM calls. The stubs commit adds both
+  contracts and the three unit branches stay inside them.
 
 ## Unit 1: store and replay
 
@@ -373,13 +376,13 @@ class LLMRequest(BaseModel, frozen=True):
     model: str                               # logical name: extract | adjudicate | render | judge | classify
     system: str
     messages: tuple[Message, ...]
-    schema: dict[str, Any] | None = None     # JSON schema for structured output
+    output_schema: dict[str, Any] | None = None  # JSON schema for structured output; not `schema`, which pydantic's BaseModel owns
     temperature: float = 0.0
     max_tokens: int = 4096                   # not part of the cassette key
 
 class LLMResponse(BaseModel, frozen=True):
     text: str                                # raw text or JSON text
-    json: dict[str, Any] | None              # parsed when schema was given
+    data: dict[str, Any] | None              # parsed when output_schema was given; not `json`, which BaseModel owns
     backend: str                             # "anthropic_api" | "openrouter" | "fake"
     model: str                               # the backend's concrete model id
     input_tokens: int | None = None
@@ -440,9 +443,12 @@ class OpenRouterBackend:
 
 ### Behaviours
 
-B2.1 `request_key` hashes the canonical JSON of exactly `(model, system, messages,
-schema, temperature)` (SPEC section 6): `json.dumps(..., sort_keys=True,
-separators=(",", ":"), ensure_ascii=False)`. Two requests that differ only in
+B2.1 `request_key` hashes the canonical JSON of `request.model_dump(exclude={"max_tokens"})`:
+the keys `model`, `system`, `messages` (a list of `{"role", "content"}` objects),
+`output_schema` (`null` when absent) and `temperature`. SPEC section 6 names the same
+five fields; `schema` there is `output_schema` in code. The JSON is `json.dumps(...,
+sort_keys=True, separators=(",", ":"), ensure_ascii=False)` and the key is its sha256
+hex digest. Two requests that differ only in
 `max_tokens` share a key. Two schemas with the same content and different key order
 share a key. Changing one character of `system` changes the key.
 
@@ -462,8 +468,8 @@ calls `backend.complete`, writes the cassette, returns the response. Mode `live`
 always calls the backend, never reads or writes a cassette. `record` or `live` with
 `backend=None` raises at construction.
 
-B2.5 `extract` sends `request` with `schema = model_cls.model_json_schema()` when
-`request.schema` is None and validates `response.json` with
+B2.5 `extract` sends `request` with `output_schema = model_cls.model_json_schema()`
+when `request.output_schema` is None and validates `response.data` with
 `model_cls.model_validate`. On a validation failure in `record` or `live` mode it
 calls `backend.complete` directly once more, bypassing the cassette read, validates
 again, and in `record` mode overwrites the cassette with the response that
@@ -476,8 +482,8 @@ with the same retry.
 
 B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model =
 models.resolve(request.model, "anthropic_api")`, `system`, `messages`, `max_tokens`,
-`temperature` and, when `schema` is given,
-`output_config={"format": {"type": "json_schema", "schema": schema}}` (present in
+`temperature` and, when `output_schema` is given,
+`output_config={"format": {"type": "json_schema", "schema": output_schema}}` (present in
 anthropic 1.11.0, P2). It reads the first text block, parses JSON when a schema was
 given, and fills token counts from `usage`. `stop_reason` of `max_tokens` or
 `refusal` raises `LLMOutputError`. The test boundary is the SDK client (D13): the test
@@ -488,9 +494,9 @@ transport mock of any kind.
 B2.7 `OpenRouterBackend.complete` posts to
 `https://openrouter.ai/api/v1/chat/completions` with the `Authorization: Bearer`
 header, `model = models.resolve(request.model, "openrouter")`, the system prompt as
-the first message, `temperature`, `max_tokens`, and, when `schema` is given,
+the first message, `temperature`, `max_tokens`, and, when `output_schema` is given,
 `response_format = {"type": "json_schema", "json_schema": {"name": "out", "strict":
-true, "schema": schema}}` plus `provider = {"require_parameters": true}` so the
+true, "schema": output_schema}}` plus `provider = {"require_parameters": true}` so the
 request is routed only to an endpoint that honours the schema. It reads
 `choices[0].message.content`, parses JSON when a schema was given, fills token counts
 from `usage`, and raises `LLMOutputError` on a non-2xx status (carrying the body) or
@@ -520,7 +526,7 @@ B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: boo
 key reordering and `max_tokens` changes), B2.2 to B2.9. A `FakeBackend` that records
 the requests it saw and returns scripted responses is the seam for B2.3, B2.4 and
 B2.5; it is a test-local class, not a production module. Null cases: a request with
-`schema=None` through `complete`; a gateway response with no `usage`.
+`output_schema=None` through `complete`; a gateway response with no `usage`.
 
 ### Acceptance
 
