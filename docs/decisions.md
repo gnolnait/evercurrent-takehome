@@ -234,6 +234,27 @@ stale-belief lines can say when a value stopped being true, supersession recall 
 measured on time rather than only on links, and a tracker connector later writes the
 same rows.
 
+## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
+
+Decision. Queries and feedback over the store and the ranker are plain functions in
+one module. The CLI, the web preview's HTTP endpoints and an MCP server (stdio) call
+those functions and contain no logic of their own. MCP is the adapter for the user's
+own assistant because Claude, ChatGPT and Cursor speak it without a per-host tool
+definition. One read-only `query` tool over SQL, with a row cap and a timeout and the
+schema published as a resource, is the escape hatch for questions the fixed tools do
+not cover. The tool list stays under ten entries. The pipeline's model calls use direct
+structured-output requests and never MCP.
+
+Why. A REST API alone needs a tool definition per assistant host; per-host function
+definitions drift; letting the assistant run SQL alone depends on it knowing the
+schema. One function layer keeps the three adapters from diverging, and the measured
+constraint on assistant accuracy is tool count, not protocol. Keeping the pipeline's
+own calls direct preserves determinism, batching and cassette replay. This is also the
+concrete answer to the take-home's question on function calling versus MCP.
+
+Would change it. A hosted deployment: the MCP server gains an HTTP transport with
+per-user tokens (docs/later.md).
+
 ## Validation against EverCurrent's published experience
 
 Each decision above is checked against what EverCurrent has written publicly, so the

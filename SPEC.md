@@ -64,14 +64,18 @@ In scope
   preview, and `/digest` slash commands.
 - Live replay: the rendered corpus seeded into a real Slack workspace with pacing, so
   live mode can be demonstrated end to end.
-- An MCP server over the store, so engineers can query the digest from the assistant
-  they already use (Claude, ChatGPT, Cursor). Read tools: `search_items`, `get_item`,
-  `get_entity_history`, `list_open_blockers`, `list_absences`, `why_ranked`,
-  `get_digest`, `get_project_state`. Write tools, each an idempotent feedback or
-  profile event: `set_watch`, `mute_topic`, `mark_done`, `snooze`. stdio transport
-  for local assistants; a short usage skill ships with it. The product ships no agent
-  loop of its own: the user's assistant supplies the loop, the ask-user step and any
-  scheduling.
+- One query and feedback function layer over the store and the ranker, exposed by
+  three thin adapters that contain no logic: the CLI, the HTTP endpoints of the web
+  preview, and an MCP server (stdio) so engineers can query the digest from the
+  assistant they already use (Claude, ChatGPT, Cursor). MCP read tools:
+  `search_items`, `get_item`, `get_entity_history`, `list_open_blockers`,
+  `list_absences`, `why_ranked`, `get_digest`, `get_project_state`, plus `query`, a
+  read-only SQL tool on a read-only connection with a row cap and a timeout, with the
+  schema shipped as an MCP resource. Write tools, each an idempotent feedback or
+  profile event: `set_watch`, `mute_topic`, `mark_done`, `snooze`. Fewer than ten
+  tools in the list at any time; a short usage skill ships with the server. The
+  pipeline's own model calls never use MCP. The product ships no agent loop: the
+  user's assistant supplies the loop, the ask-user step and any scheduling.
 - One-command demo on the bundled corpus with no API key (LLM cassettes).
 
 Out of scope for v1 (tracked in `docs/later.md`)
