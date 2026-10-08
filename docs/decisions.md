@@ -194,6 +194,30 @@ stays for the renderer and the judge. If structured-output enforcement matters f
 extraction quality, the extraction cassettes are re-recorded through the API before
 submission and the report says so.
 
+## D16. Type checker: ty, with warnings as errors
+
+Decision. `ty` (Astral) replaces mypy as the type gate: `uv run ty check` over `src`
+and `tests`, `error-on-warning = true`, version pinned in the dev group. No pydantic
+plugin is needed. One check from `mypy --strict` has no ty equivalent: ty's 148 rules
+(0.0.84, `ty explain rule`) include none that requires a definition to be annotated.
+ruff's `ANN` rules (flake8-annotations) take that over, with `ANN401` ignored so
+`Any` stays allowed where it is explicit. Bare generics are covered by ty's
+`missing-type-argument`.
+
+Why. Measured on 2026-10-06 against a scratch module with the patterns M1 is built
+from (frozen pydantic models, `Literal` fields, tuple defaults, properties, a
+`model_validator`) plus three planted errors (wrong `Literal`, unguarded `None`, wrong
+return type): ty 0.0.84 and pyrefly 1.3.2 each caught all three with no false positive
+in under 0.5 s; mypy caught the same three in 1.1 s. Strict-only checks were not part
+of that measurement; the annotation requirement is restored through ruff as stated
+above. ty was chosen over pyrefly for one vendor across uv, ruff and ty. It is
+pre-1.0, hence the pin.
+
+Would change it. A ty release that misses a planted error or flags pydantic models;
+pyrefly is the fallback. The swap touches the dependency line, the two `[tool.ty.*]`
+tables, the `uv run ty check` call sites in the pre-push hook, CI and the justfile,
+the gate-command list in AGENTS.md and CLAUDE.md, SPEC A8, and D11.
+
 ## D17. Classifier models behind the same client: Jev, Laya, and the LLM baseline
 
 Decision. The LLM client's `judge` operation (enum in, enum out) is the classifier
@@ -266,30 +290,6 @@ concrete answer to the take-home's question on function calling versus MCP.
 
 Would change it. A hosted deployment: the MCP server gains an HTTP transport with
 per-user tokens (docs/later.md).
-
-## D16. Type checker: ty, with warnings as errors
-
-Decision. `ty` (Astral) replaces mypy as the type gate: `uv run ty check` over `src`
-and `tests`, `error-on-warning = true`, version pinned in the dev group. No pydantic
-plugin is needed. One check from `mypy --strict` has no ty equivalent: ty's 148 rules
-(0.0.84, `ty explain rule`) include none that requires a definition to be annotated.
-ruff's `ANN` rules (flake8-annotations) take that over, with `ANN401` ignored so
-`Any` stays allowed where it is explicit. Bare generics are covered by ty's
-`missing-type-argument`.
-
-Why. Measured on 2026-10-06 against a scratch module with the patterns M1 is built
-from (frozen pydantic models, `Literal` fields, tuple defaults, properties, a
-`model_validator`) plus three planted errors (wrong `Literal`, unguarded `None`, wrong
-return type): ty 0.0.84 and pyrefly 1.3.2 each caught all three with no false positive
-in under 0.5 s; mypy caught the same three in 1.1 s. Strict-only checks were not part
-of that measurement; the annotation requirement is restored through ruff as stated
-above. ty was chosen over pyrefly for one vendor across uv, ruff and ty. It is
-pre-1.0, hence the pin.
-
-Would change it. A ty release that misses a planted error or flags pydantic models;
-pyrefly is the fallback. The swap touches the dependency line, the two `[tool.ty.*]`
-tables, the `uv run ty check` call sites in the pre-push hook, CI and the justfile,
-the gate-command list in AGENTS.md and CLAUDE.md, SPEC A8, and D11.
 
 ## Validation against EverCurrent's published experience
 
