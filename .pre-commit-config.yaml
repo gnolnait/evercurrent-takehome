@@ -37,9 +37,9 @@ repos:
         language: system
         pass_filenames: false
         files: ^(AGENTS|CLAUDE)\.md$
-      - id: mypy
-        name: mypy (strict)
-        entry: uv run mypy
+      - id: ty
+        name: ty (type check)
+        entry: uv run ty check
         language: system
         pass_filenames: false
         stages: [pre-push]

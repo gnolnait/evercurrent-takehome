@@ -14,7 +14,7 @@ sync:
 lint:
     uv run ruff check .
     uv run ruff format --check .
-    uv run mypy
+    uv run ty check
 
 # Auto-fix lint and formatting
 fix:
