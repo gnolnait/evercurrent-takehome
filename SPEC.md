@@ -64,6 +64,14 @@ In scope
   preview, and `/digest` slash commands.
 - Live replay: the rendered corpus seeded into a real Slack workspace with pacing, so
   live mode can be demonstrated end to end.
+- An MCP server over the store, so engineers can query the digest from the assistant
+  they already use (Claude, ChatGPT, Cursor). Read tools: `search_items`, `get_item`,
+  `get_entity_history`, `list_open_blockers`, `list_absences`, `why_ranked`,
+  `get_digest`, `get_project_state`. Write tools, each an idempotent feedback or
+  profile event: `set_watch`, `mute_topic`, `mark_done`, `snooze`. stdio transport
+  for local assistants; a short usage skill ships with it. The product ships no agent
+  loop of its own: the user's assistant supplies the loop, the ask-user step and any
+  scheduling.
 - One-command demo on the bundled corpus with no API key (LLM cassettes).
 
 Out of scope for v1 (tracked in `docs/later.md`)
@@ -286,15 +294,17 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
 - M4 (day 4): landing map; eval harness and report with the ablation table, the
   scrutability check and the classifier comparison (Laya runs on Linux); faithfulness
   judge; degradation curve; web preview with the profile page (paste supported) and
-  the open-items page. A1 to A8, A10, A12.
+  the open-items page; the MCP server over the store with its usage skill. A1 to A8,
+  A10, A12.
 - M5 (day 5): live Slack mode, Block Kit, failure handling, the two-tier delivery
   policy, profile bootstrap from Slack, onboarding (DM welcome, App Home settings with
   pause and send-now, `/digest` commands), the live replay seeder. A9, A11. Docker,
   devcontainer check, README design doc, ANSWERS.md, demo screenshots.
 - Days 6 to 7: adversarial validation, second-model review, retro, polish. No cuts were
-  taken to fund the thesis. Cut order if a day slips: the Laya comparison, then seeder
-  pacing (batch seeding stays), then the App Home settings surface (the web profile
-  page stays), then the web preview.
+  taken to fund the thesis. Cut order if a day slips: the Laya comparison, then the
+  MCP server's write tools (read tools stay), then seeder pacing (batch seeding
+  stays), then the App Home settings surface (the web profile page stays), then the
+  web preview.
 
 ## 10. Risks and how we handle them
 

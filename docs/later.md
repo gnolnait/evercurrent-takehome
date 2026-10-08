@@ -10,25 +10,19 @@ would promote it.
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
   the take-home is submitted.
-- Agentic feature set (design sketch, so v1 data structures do not block it). Built on
-  the Claude Agent SDK as a separate component from the pipeline (D3); the pipeline
-  stays deterministic and the agent reads its outputs. Tools, all over the store and
-  the profile, read tools first:
-  - Read: `search_items`, `get_item`, `get_entity_history` (ledger rows for a key),
-    `list_open_blockers`, `list_absences`, `why_ranked`, `get_profile`,
-    `get_project_state` (phase, gates, buffers).
-  - Write, each idempotent and logged as a feedback or profile event: `set_watch`,
-    `mute_topic`, `mark_done`, `snooze`, `update_profile_field` (with `source =
-    agent_proposed` until the user confirms).
-  - Ask-user: one tool that posts a button-answerable question in the user's DM and
-    returns the answer or a timeout; rate-limited to one open question per user, used
-    for "asks back" and for low-confidence profile edits. Never free-text prompts.
-  - Triggers: the daily schedule (exists in v1), real-time must-see events (exists in
-    v1 as the two-tier delivery), and an always-on event triage loop that scores each
-    new thread delta as it arrives and decides digest, real-time or ignore; the loop
-    is the same triage classifier as v1, run per event instead of per day.
-  - Scheduling: the agent may propose a delivery-time change or a snooze; it never
-    changes a setting without the ask-user tool.
+- Agentic feature set beyond the v1 MCP server (design sketch, so v1 data structures
+  do not block it). The v1 MCP server already lets a user's own assistant read the
+  store and act through feedback events; that assistant supplies the agent loop, the
+  ask-user step and scheduling. What remains for a product-owned agent, built on the
+  Claude Agent SDK as a separate component from the pipeline (D3):
+  - `update_profile_field` as an MCP write tool, with `source = agent_proposed` until
+    the user confirms.
+  - A product-owned ask-user step in Slack: one button-answerable question in the
+    user's DM, one open question per user, used for "asks back" and low-confidence
+    profile edits. Never free-text prompts.
+  - An always-on event triage loop that scores each new thread delta as it arrives
+    and decides digest, real-time or ignore; the same triage classifier as v1, run per
+    event instead of per day.
   - Calendar integration (Google Calendar, M365): three uses. A gate review or DFM
     review that is on no calendar inside the buffer is an absence signal of the same
     kind as a missing ECO post. Meeting titles and attendees are evidence of task
@@ -53,9 +47,8 @@ would promote it.
 - Linear connector. Webhooks into the event store (issue state, assignee, priority, due
   date, cycle changes; project update health; SLA breaches), read-only MCP for ad hoc
   questions. Trigger: the event envelope is stable and a Linear workspace exists.
-- Own read-only MCP server exposing search_items, get_item, list_open_blockers,
-  why_ranked, set_watch so engineers can query the digest from their own assistant.
-  Trigger: the item store schema is stable.
+- MCP server over HTTP with per-user tokens for hosted assistants. The v1 server is
+  stdio for local assistants. Trigger: a hosted deployment.
 - Learned ranking. Impressions and feedback are logged from day one; a learning-to-rank
   step or Thompson-sampled exploration slots come after thousands of labelled
   impressions exist.
