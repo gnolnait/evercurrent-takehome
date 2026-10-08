@@ -66,8 +66,10 @@ src = ["src", "tests"]
 extend-exclude = [".claude", "dev-kit", "notes", "data"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
-ignore = ["E501"]
+# ANN restores the "every def is annotated" check that mypy --strict provided and ty
+# does not (ty checks types it can see; it has no rule for a missing annotation).
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ANN"]
+ignore = ["E501", "ANN401"]
 
 [tool.ty.src]
 include = ["src", "tests"]
