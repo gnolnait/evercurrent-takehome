@@ -98,8 +98,8 @@ layers = [
     "digest.models | digest.settings",
 ]
 
-# The SDK and the gateway's HTTP client are the two ways a model gets called. Keeping
-# both inside digest.llm keeps every call behind the cassette wrapper.
+# The SDK and the gateway's HTTP client stay inside digest.llm, the package that owns
+# model calls (AGENTS.md). The contract limits imports; it cannot see what a caller does.
 [[tool.importlinter.contracts]]
 name = "model clients only inside digest.llm"
 type = "forbidden"

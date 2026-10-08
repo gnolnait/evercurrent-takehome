@@ -45,7 +45,7 @@ repos:
         pass_filenames: false
         stages: [pre-push]
       - id: lint-imports
-        name: import-linter (layers contract)
+        name: import-linter (import contracts)
         entry: uv run lint-imports
         language: system
         pass_filenames: false
