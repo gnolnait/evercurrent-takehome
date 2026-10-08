@@ -12,7 +12,7 @@ is optional and used for one thing only: the faithfulness judge in evaluation.
 
 Amended 2026-10-08 by D15: the second implementation is one OpenAI-compatible gateway
 adapter, used for every development call, not an OpenAI SDK client for the judge alone.
-In code the protocol is `Backend` and its one operation is `complete`; `extract` and
+The protocol is named `Backend` and has one operation, `complete`; `extract` and
 `judge` are methods of the client wrapper around it.
 
 Why. Structured outputs on the Claude API are GA with JSON schema enforcement, prompt
@@ -187,8 +187,9 @@ one config value:
 Requests name a logical model (`extract`, `adjudicate`, `render`, `judge`,
 `classify`) and `config/models.yaml` maps each logical name to a model id per backend.
 The cassette key uses the logical name, so a cassette recorded through the gateway
-replays for the API backend. The client wrapper validates every structured response
-with pydantic and retries once, whichever backend answered. The README names which
+replays for the API backend. The client wrapper's `extract` and `judge` validate the
+response with pydantic and retry once, whichever backend answered; `complete` returns
+the parsed JSON unvalidated. The README names which
 backend recorded each cassette set.
 
 Why. One adapter replaces the three that v0.2 planned (two CLI shells and a second
@@ -286,13 +287,13 @@ those functions and contain no logic of their own. MCP is the adapter for the us
 own assistant because Claude, ChatGPT and Cursor speak it without a per-host tool
 definition. One read-only `query` tool over SQL, with a row cap and a timeout and the
 schema published as a resource, is the escape hatch for questions the fixed tools do
-not cover. The tool list stays under ten entries. The pipeline's model calls use direct
+not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
 
 Why. A REST API alone needs a tool definition per assistant host; per-host function
 definitions drift; letting the assistant run SQL alone depends on it knowing the
 schema. One function layer keeps the three adapters from diverging. The cap of ten
-tools is a design choice to keep the list readable, not a measured limit. Keeping the pipeline's
+tools (line above) is a design choice to keep the list readable, not a measured limit. Keeping the pipeline's
 own calls direct preserves determinism, batching and cassette replay. This is also the
 concrete answer to the take-home's question on function calling versus MCP.
 

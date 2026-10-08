@@ -81,8 +81,8 @@ and `eval` stubs stay as they are.
   `digest.project`; `digest.models` and `digest.settings`. A module imports only from
   its own layer's dependencies or a lower layer. A forbidden contract with
   `include_external_packages` keeps `anthropic` and `httpx2` importable only inside
-  `digest.llm`: the SDK and the gateway's HTTP client are the two ways a model gets
-  called, so a call from any other module fails the gate (the rule AGENTS.md states).
+  `digest.llm`, so a module outside it cannot import either client (the rule AGENTS.md
+  states; a call through another HTTP library is not caught).
   The stubs commit adds both contracts and the three unit branches stay inside them.
 
 ## Unit 1: store and replay
@@ -475,7 +475,9 @@ is needed in replay mode (`backend=None` is allowed). Tests and CI run in this m
 
 B2.4 Mode `record`: hit returns the stored response without calling the backend; miss
 calls `backend.complete`, writes the cassette, returns the response. Mode `live`:
-always calls the backend, never reads or writes a cassette. `record` or `live` with
+always calls the backend, never reads or writes a cassette. `complete` returns
+`response.data` as the backend parsed it and does not validate it against
+`output_schema`; validation and the retry belong to `extract` and `judge` (B2.5). `record` or `live` with
 `backend=None` raises at construction.
 
 B2.5 `extract` sends `request` with `output_schema = model_cls.model_json_schema()`
@@ -536,7 +538,9 @@ B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: boo
 key reordering and `max_tokens` changes), B2.2 to B2.9. A `FakeBackend` that records
 the requests it saw and returns scripted responses is the seam for B2.3, B2.4 and
 B2.5; it is a test-local class, not a production module. Null cases: a request with
-`output_schema=None` through `complete`; a gateway response with no `usage`.
+`output_schema=None` through `complete`; a gateway response with no `usage`; a blank
+`OPENROUTER_API_KEY=` line in `.env` read by `Settings` as None (`from_settings` in
+`record` mode then raises for the missing key).
 
 ### Acceptance
 
