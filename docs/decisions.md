@@ -165,46 +165,57 @@ synthetic world is "Kestrel K2", a warehouse AMR; personas, channels and conflic
 chosen to differ from the public submissions catalogued in
 `notes/research/competing-submissions.md`.
 
-## D15. LLM backends: API in production, subscription CLIs for recording
+## D15. LLM backends: Anthropic API in production, one gateway for development
 
-Decision. The `Provider` protocol (D1) has three implementations behind one config value:
-- `anthropic_api`: the production path, schema-enforced structured outputs, needs a key.
-- `claude_cli`: shells out to `claude -p --output-format json --json-schema` with the
-  same system prompt and schema. Uses the Claude subscription. Used to record
-  cassettes during development.
-- `codex_cli`: shells out to `codex exec` with the mechanical or review profile. Uses
-  the ChatGPT subscription. Used for the corpus renderer and the different-family judge.
-The client wrapper validates every structured response with pydantic and retries once,
-whichever backend answered. Cassettes are keyed by request content, not backend, so
-replay is backend-agnostic. The README names which backend recorded each cassette set.
+Decision. The `Provider` protocol (D1) has two implementations behind one config value:
+- `anthropic_api`: the production path, schema-enforced structured outputs, needs an
+  Anthropic key.
+- `openrouter`: one OpenAI-compatible chat-completions adapter with `response_format`
+  of type `json_schema`, used for every development call: Claude for extraction and
+  adjudication, GPT-class for the corpus renderer and the different-family judge, and
+  the Haiku-class triage classifier. OpenRouter's public catalogue lists the Claude
+  and GPT models with `structured_outputs` support (checked 2026-10-08); the first
+  call is a five-line spike at the start of M2.
+Requests name a logical model (`extract`, `adjudicate`, `render`, `judge`,
+`classify`) and `config/models.yaml` maps each logical name to a model id per backend.
+The cassette key uses the logical name, so a cassette recorded through the gateway
+replays for the API backend. The client wrapper validates every structured response
+with pydantic and retries once, whichever backend answered. The README names which
+backend recorded each cassette set.
 
-Why. Development should cost nothing beyond subscriptions already paid for, and
-reviewers must need no keys at all. The CLI backends are development tooling; the
-API path is the product. The one rule: use the CLI binaries as-is, never reuse their
-OAuth tokens inside an SDK.
+Why. One adapter replaces the three that v0.2 planned (two CLI shells and a second
+SDK): the renderer, the judge and the classifier all go through the same request
+shape, and the user already pays for the gateway. Reviewers still need no keys at
+all. The API path is the product.
 
-Would change it. If structured-output enforcement matters for extraction quality, the
-cassettes for extraction are re-recorded through the API before submission and the
-report says so.
+Would change it. OpenRouter not honouring a JSON schema for a Claude model in the
+spike: the extraction cassettes are recorded through the Anthropic API and the gateway
+stays for the renderer and the judge. If structured-output enforcement matters for
+extraction quality, the extraction cassettes are re-recorded through the API before
+submission and the report says so.
 
 ## D17. Classifier models behind the same client: Jev, Laya, and the LLM baseline
 
-Decision. The LLM client's `judge` operation (enum in, enum out) gets a classifier
-port with three adapters: `jev_openrouter` (TypeSafe Jev through OpenRouter's
-chat-completions endpoint, recorded to cassettes), `laya_local` (open-weight
-ModernBERT-based decision model, Apache 2.0, runs on Linux only because torch has no
-Windows ARM64 wheels) and the Haiku-class LLM as the baseline. Jev handles triage
-before extraction (M2) and watch-prompt matching (M3). The M4 evaluation compares all
-three on triage recall, faithfulness-judge agreement and latency. Extraction and the
-linker's adjudicator stay on structured outputs, because they must return fields and
-quoted evidence that a classifier cannot produce.
+Decision. The LLM client's `judge` operation (enum in, enum out) is the classifier
+port. Core: the Haiku-class model through the gateway handles triage before
+extraction (M2) and watch-prompt matching (M3). Stretch, behind the same port:
+`jev` (TypeSafe's native System One API, `state` plus typed `questions`, needs a
+TypeSafe key; OpenRouter's "jev-router" is a model router that returns generated
+text, not a classifier, checked 2026-10-08) and `laya_local` (open-weight
+ModernBERT-based decision model, Apache 2.0, Linux only because torch has no Windows
+ARM64 wheels). The M4 evaluation compares whatever adapters exist on triage recall,
+faithfulness-judge agreement and latency. Extraction and the linker's adjudicator stay
+on structured outputs, because they must return fields and quoted evidence that a
+classifier cannot produce.
 
 Why. Triage and matching are yes/no questions at volume; a non-generative classifier
 answers them in tens of milliseconds, cannot hallucinate text, and as a judge has no
 self-preference bias. The comparison is a measured finding for the README either way.
+Making the LLM the core adapter keeps M2 free of a third provider.
 
-Would change it. OpenRouter's router returning no usable label for enum questions, or
-Jev dropping golden items in triage above the miss budget: the LLM baseline stays.
+Would change it. A TypeSafe key appearing before M2: Jev becomes the core triage
+adapter and the LLM the baseline. Jev dropping golden items in triage above the miss
+budget: the LLM stays.
 
 ## D18. Profile bootstrap and onboarding
 
@@ -213,9 +224,10 @@ from Slack (job title and timezone from the user record; team, collaborators and
 subsystems from channel membership, replies and mentioned entities over 30 days),
 shown with its evidence for confirmation. A user may also paste a role description,
 which the extraction client turns into the same fields plus watch prompts. Every field
-records its source (configured, inferred, confirmed, pasted). Settings live in Slack
-App Home and in the web preview's profile page; delivery time defaults to the Slack
-timezone. No org-chart, HR or LinkedIn sources.
+records its source (configured, inferred, confirmed, pasted). The web preview's
+profile page is the single settings surface; the onboarding DM links to it; delivery
+time defaults to the Slack timezone. Slack App Home settings and slash commands are
+stretch (SPEC section 9). No org-chart, HR or LinkedIn sources.
 
 Why. The data the bootstrap needs is already ingested; a confirmed draft beats a blank
 form; a source per field keeps inferred values from being mistaken for stated ones.

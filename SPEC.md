@@ -59,9 +59,10 @@ In scope
 - Web preview of digests, landing map, rationale, the editable profile page and the
   open-items page, with feedback buttons.
 - Onboarding and configuration: a profile draft inferred from Slack and confirmed by
-  the user, a settings surface (role, team, manager, owned subsystems, watch prompts,
-  delivery time, weekdays, quiet hours, pause) in Slack App Home and in the web
-  preview, and `/digest` slash commands.
+  the user, and one settings surface, the web preview's profile page (role, team,
+  manager, owned subsystems, watch prompts, delivery time, weekdays, quiet hours,
+  pause, digest style). The onboarding DM links to it. Slack App Home settings and
+  `/digest` slash commands are stretch.
 - Live replay: the rendered corpus seeded into a real Slack workspace with pacing, so
   live mode can be demonstrated end to end.
 - One query and feedback function layer over the store and the ranker, exposed by
@@ -140,8 +141,8 @@ sources{field: configured | inferred | confirmed | pasted}}`
   German"); the extraction client parses it once into the structured fields beside it,
   and the renderer reads only those fields. Rendering stays template-based and
   deterministic, so evidence quotes and permalinks are never rewritten by a model.
-  Slash commands: `/digest now`, `/digest pause <duration>`, `/digest style <text>`,
-  `/digest watch <prompt>`, `/digest mute <topic>`, `/digest why <item>`.
+  Stretch: slash commands `/digest now`, `/digest pause <duration>`, `/digest style
+  <text>`, `/digest watch <prompt>`, `/digest mute <topic>`, `/digest why <item>`.
 
 Digest: `{user_id, as_of, sections{needs_you[], stale_beliefs[], not_happened[],
 decisions[], risks[], fyi[]}, items[], rationale{item_id: score_breakdown}}`
@@ -245,9 +246,10 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Profile scrutability: edit a profile (role, owned subsystem, a watch prompt), re-run
   the day, and check the digest changes in the expected direction with the rationale
   naming the edit.
-- Classifier comparison: triage recall against golden items, faithfulness-judge
-  agreement with the hand-checked sample, and latency per call, for Jev (via
-  OpenRouter), Laya (local, Linux) and the Haiku-class model on the same inputs.
+- Classifier comparison (stretch): triage recall against golden items,
+  faithfulness-judge agreement with the hand-checked sample, and latency per call, for
+  the Haiku-class model through the gateway (core) against Jev (TypeSafe's native API,
+  needs its key) and Laya (local, Linux) on the same inputs.
 
 Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
 
@@ -275,40 +277,45 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
   slack_sdk and with the bolt-python mock web API server pattern; no network in tests.
 - A10 Web preview renders a digest, the landing map and rationale, and posts feedback
   that changes the stored profile.
-- A11 A new user is onboarded from Slack: the profile draft inferred from their title,
-  channels and threads is shown with its evidence, their confirmation and edits are
-  stored with `sources` set, and their delivery time defaults to their Slack timezone.
-- A12 Editing a profile field changes the next digest in the expected direction and
-  the rationale names the edit (the scrutability check in section 7).
+- A11 (stretch) A new user is onboarded from Slack: the profile draft inferred from
+  their title, channels and threads is shown with its evidence, their confirmation and
+  edits are stored with `sources` set, and their delivery time defaults to their Slack
+  timezone.
+- A12 (stretch) Editing a profile field changes the next digest in the expected
+  direction and the rationale names the edit (the scrutability check in section 7).
 
 ## 9. Milestones and build order
 
+Core items ship in the order below before any stretch item is started. A stretch item
+is built only when the day it belongs to finishes with time left, and is listed with
+its day.
+
 - M1 (day 1): skeleton, models, SQLite store, replay ingest, cassette wrapper with the
-  API and CLI backends, world schema (bot personas, team, manager, priority) and
-  generator scaffold, gate checklist config. Tests for store and replay.
-- M2 (day 2): triage classifier (Jev via OpenRouter) and extraction prompt and schema
-  with evidence verification; absence detector with both sources ("Not happened" ships
-  first, it does not depend on the ledger); golden labels from the world script;
-  extraction eval.
+  Anthropic API and gateway backends, world schema (bot personas, team, manager,
+  priority) and generator scaffold, gate checklist config. Tests for store and replay.
+- M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
+  prompt and schema with evidence verification; absence detector with both sources
+  ("Not happened" ships first, it does not depend on the ledger); golden labels from
+  the world script; extraction eval. Stretch: Jev triage when a TypeSafe key exists.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
-  ranking with priors, sender affinity, engagement, re-surfacing by age, profiles,
-  feedback and the `needs_you` actions; renderer with diversity and quiet days. Day-3
-  kill criterion: if claim keying precision on the noisy corpus is below 0.8, the
-  ledger is cut to the baseline ranker plus absences and the README says so.
-- M4 (day 4): landing map; eval harness and report with the ablation table, the
-  scrutability check and the classifier comparison (Laya runs on Linux); faithfulness
-  judge; degradation curve; web preview with the profile page (paste supported) and
-  the open-items page; the MCP server over the store with its usage skill. A1 to A8,
-  A10, A12.
-- M5 (day 5): live Slack mode, Block Kit, failure handling, the two-tier delivery
-  policy, profile bootstrap from Slack, onboarding (DM welcome, App Home settings with
-  pause and send-now, `/digest` commands), the live replay seeder. A9, A11. Docker,
-  devcontainer check, README design doc, ANSWERS.md, demo screenshots.
-- Days 6 to 7: adversarial validation, second-model review, retro, polish. No cuts were
-  taken to fund the thesis. Cut order if a day slips: the Laya comparison, then the
-  MCP server's write tools (read tools stay), then seeder pacing (batch seeding
-  stays), then the App Home settings surface (the web profile page stays), then the
-  web preview.
+  ranking with priors, sender affinity, engagement, profiles, feedback and the
+  `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
+  precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
+  plus absences and the README says so. Stretch: re-surfacing by age; diversity at
+  render.
+- M4 (day 4): landing map; eval harness and report with the ablation table;
+  faithfulness judge; degradation curve; web preview with the profile page (paste
+  supported, the single settings surface) and the open-items page; the MCP server's
+  read tools and usage skill. A1 to A8, A10. Stretch: the scrutability check (A12);
+  the classifier comparison (Laya on Linux); MCP write tools.
+- M5 (day 5): live Slack mode, Block Kit, failure handling, profile bootstrap from
+  Slack with the onboarding DM, batch seeding of the corpus into a workspace. A9.
+  Docker, devcontainer check, README design doc, ANSWERS.md, demo screenshots.
+  Stretch: two-tier delivery; seeder pacing; App Home settings and `/digest`
+  commands; natural-language style parsing (structured style fields are core); A11.
+- Days 6 to 7: adversarial validation, second-model review, retro, polish, then
+  stretch items in the order they are listed above. If a core day slips, the web
+  preview is the first core item deferred, as in v0.2.
 
 ## 10. Risks and how we handle them
 

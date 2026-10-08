@@ -22,7 +22,7 @@ nothing with unit 1 beyond the stubs commit, so their tests and code run in para
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
 | 1 Store and replay | `m1-store-replay` | `digest/store.py`, `digest/schema.sql`, `digest/replay.py` | `tests/test_store.py`, `tests/test_replay.py` |
-| 2 LLM client and cassette | `m1-llm-cassette` | `digest/llm/__init__.py`, `digest/llm/cassette.py`, `digest/llm/anthropic_api.py`, `digest/llm/claude_cli.py`, `config/models.yaml` | `tests/test_llm.py` |
+| 2 LLM client and cassette | `m1-llm-cassette` | `digest/llm/__init__.py`, `digest/llm/cassette.py`, `digest/llm/anthropic_api.py`, `digest/llm/openrouter.py`, `config/models.yaml` | `tests/test_llm.py` |
 | 3 World schema and project config | `m1-world-schema` | `digest/project.py`, `digest/world/schema.py`, `digest/world/load.py`, `config/project.yaml`, `data/world/kestrel/world.yaml`, `data/world/kestrel/events.jsonl` | `tests/test_world.py`, `tests/test_project.py` |
 
 `digest/cli.py` gains `replay` (unit 1) and `world check` (unit 3). The `demo`, `run`
@@ -56,11 +56,11 @@ and `eval` stubs stay as they are.
   configuration read them, not only the simulator. `digest/world/` imports from both.
 - Settings. `digest/settings.py` holds one pydantic-settings class `Settings` with
   prefix `DIGEST_`: `mode` (`replay` | `record` | `live`, default `replay`), `backend`
-  (`anthropic_api` | `claude_cli`, default `claude_cli`), `world` (default `kestrel`),
+  (`anthropic_api` | `openrouter`, default `openrouter`), `world` (default `kestrel`),
   `db` (path or None; None means `data/<world>.sqlite`), `cassettes` (path, default
-  `data/cassettes`), `claude_bin` (path, default `claude`). Model ids live in
-  `config/models.yaml` (unit 2). `.env.example` gains `DIGEST_BACKEND` and
-  `DIGEST_WORLD` lines in the stubs commit.
+  `data/cassettes`). Keys come from `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY`.
+  Model ids live in `config/models.yaml` (unit 2). `.env.example` gains
+  `DIGEST_BACKEND`, `DIGEST_WORLD` and `OPENROUTER_API_KEY` lines in the stubs commit.
 - Project configuration source. In replay the project configuration is
   `world.project` from the selected world; in live it is `config/project.yaml`. The
   absence detector (M2) takes a `ProjectConfig` and does not know which.
@@ -361,7 +361,7 @@ class Message(BaseModel, frozen=True):
     content: str
 
 class LLMRequest(BaseModel, frozen=True):
-    model: str
+    model: str                               # logical name: extract | adjudicate | render | judge | classify
     system: str
     messages: tuple[Message, ...]
     schema: dict[str, Any] | None = None     # JSON schema for structured output
@@ -371,8 +371,8 @@ class LLMRequest(BaseModel, frozen=True):
 class LLMResponse(BaseModel, frozen=True):
     text: str                                # raw text or JSON text
     json: dict[str, Any] | None              # parsed when schema was given
-    backend: str                             # "anthropic_api" | "claude_cli" | "fake"
-    model: str
+    backend: str                             # "anthropic_api" | "openrouter" | "fake"
+    model: str                               # the backend's concrete model id
     input_tokens: int | None = None
     output_tokens: int | None = None
 
@@ -388,10 +388,13 @@ class LLM:
     def extract(self, request: LLMRequest, model_cls: type[T]) -> T
     def judge(self, request: LLMRequest, choices: type[E]) -> E       # E: Enum
 
-class ModelIds(BaseModel, frozen=True):       # config/models.yaml
-    extract: str
-    adjudicate: str
-    judge: str
+class ModelIds(BaseModel, frozen=True):       # config/models.yaml: logical name -> {backend: concrete id}
+    extract: dict[str, str]
+    adjudicate: dict[str, str]
+    render: dict[str, str]
+    judge: dict[str, str]
+    classify: dict[str, str]
+    def resolve(self, logical: str, backend: str) -> str
 
 def load_model_ids(path: Path = Path("config/models.yaml")) -> ModelIds
 def from_settings(settings: Settings) -> LLM
@@ -417,12 +420,12 @@ class AnthropicBackend:
     def complete(self, request: LLMRequest) -> LLMResponse
 ```
 
-`digest/llm/claude_cli.py`
+`digest/llm/openrouter.py`
 
 ```python
-class ClaudeCliBackend:
-    name = "claude_cli"
-    def __init__(self, binary: Path, timeout_s: float = 300)
+class OpenRouterBackend:
+    name = "openrouter"
+    def __init__(self, api_key: str, models: ModelIds, client: httpx2.Client | None = None, timeout_s: float = 120)
     def complete(self, request: LLMRequest) -> LLMResponse
 ```
 
@@ -472,26 +475,31 @@ passes a fake client object whose `messages.create` records its kwargs and retur
 `anthropic.types.Message` built with `Message.model_validate({...})`. No HTTP
 transport mock of any kind.
 
-B2.7 `ClaudeCliBackend.complete` runs
-`<binary> -p --bare --output-format json --no-session-persistence --tools ""
---model <model> --system-prompt <system> [--json-schema <schema>] <prompt>` with the
-messages rendered as a single prompt (user and assistant turns labelled), stdin from
-`DEVNULL`, and the timeout. It parses the JSON envelope, raises `LLMOutputError` when
-`is_error` is true or the exit code is non-zero (carrying `result`), and returns the
-`result` text parsed as JSON when a schema was given. Token counts come from `usage`
-when present. Flags verified on the bundled binary 2.1.288 (P7). The test substitutes
-a small Python script for the binary and asserts the argv and the parsed result.
-`temperature` is not supported by the CLI and is ignored; the cassette key still
-carries it, so a CLI recording replays for the same request on the API backend.
+B2.7 `OpenRouterBackend.complete` posts to
+`https://openrouter.ai/api/v1/chat/completions` with the `Authorization: Bearer`
+header, `model = models.resolve(request.model, "openrouter")`, the system prompt as
+the first message, `temperature`, `max_tokens`, and, when `schema` is given,
+`response_format = {"type": "json_schema", "json_schema": {"name": "out", "strict":
+true, "schema": schema}}` plus `provider = {"require_parameters": true}` so the
+request is routed only to an endpoint that honours the schema. It reads
+`choices[0].message.content`, parses JSON when a schema was given, fills token counts
+from `usage`, and raises `LLMOutputError` on a non-2xx status (carrying the body) or
+a `finish_reason` of `length` or `content_filter`. The test injects
+`httpx2.Client(transport=httpx2.MockTransport(handler))` and asserts the request
+body and the parsed response; this is our own HTTP client, not the Anthropic SDK, so
+D13 does not apply. The `openai` package is not used.
 
-B2.8 `load_model_ids` reads `config/models.yaml` (`extract`, `adjudicate`, `judge`).
-The implementer loads the `claude-api` skill and writes the current model ids for
-Haiku-class, Sonnet-class and Opus-class into that file with a dated comment (D2).
-`from_settings` builds `LLM`: replay mode gets no backend; `record` gets the backend
-named by `settings.backend` (`ClaudeCliBackend` at `settings.claude_bin`, or
-`AnthropicBackend` with a client from `ANTHROPIC_API_KEY`); `live` requires
-`backend == "anthropic_api"` and raises otherwise, because the CLI backends are
-development tooling (D15).
+B2.8 `load_model_ids` reads `config/models.yaml`, which maps each logical name
+(`extract`, `adjudicate`, `render`, `judge`, `classify`) to a concrete id per backend.
+The implementer loads the `claude-api` skill for the Anthropic ids and reads the
+OpenRouter catalogue (`GET /api/v1/models`, no key) for the gateway ids, and writes
+both with a dated comment (D2). The cassette key carries the logical name, never the
+concrete id, so a gateway recording replays on the API backend. `from_settings`
+builds `LLM`: replay mode gets no backend; `record` gets the backend named by
+`settings.backend` (`OpenRouterBackend` from `OPENROUTER_API_KEY`, or
+`AnthropicBackend` from `ANTHROPIC_API_KEY`); `live` requires `backend ==
+"anthropic_api"` and raises otherwise, because the gateway is development tooling
+(D15).
 
 B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: bool`,
 `backend`, `model`, token counts. Never the prompt text.
@@ -502,7 +510,7 @@ B2.9 Logging: one `llm_call` record per `complete` with `key`, `mode`, `hit: boo
 key reordering and `max_tokens` changes), B2.2 to B2.9. A `FakeBackend` that records
 the requests it saw and returns scripted responses is the seam for B2.3, B2.4 and
 B2.5; it is a test-local class, not a production module. Null cases: a request with
-`schema=None` through `complete`; a response with no `usage` from the CLI.
+`schema=None` through `complete`; a gateway response with no `usage`.
 
 ### Acceptance
 
@@ -723,12 +731,12 @@ a gate with an empty checklist.
 | Day boundary for `--until` | End of day in the world's timezone, stored in `meta` | A US team's day ends at midnight Pacific; the store stays UTC. |
 | Reactions | One `Reaction` per reactor with `user_id` and `ts` | SPEC section 4 dates `exposed.how = reacted`; a count cannot say who saw what. |
 | Default DB path | `data/<world>.sqlite`; the store refuses a different world | One shared file would mix corpora silently. |
-| Backend selection | Explicit `DIGEST_BACKEND`, default `claude_cli`; `live` requires `anthropic_api` | D15 asks for one config value; key presence as a selector could bill the API by accident during recording. |
+| Backend selection | Explicit `DIGEST_BACKEND`, default `openrouter`; `live` requires `anthropic_api` | D15 asks for one config value; key presence as a selector could bill the wrong provider by accident during recording. |
 | Cassette payload | Parsed `LLMResponse`, not the provider message | Backend-neutral replay (D15). |
 | Cassette key fields | SPEC section 6's five, including `temperature` | D9 listed four; SPEC is the contract and D9 was amended. `max_tokens` is excluded so a limit change does not invalidate recordings. |
 | Cassette overwrite | `put` overwrites | A never-overwrite rule pins a bad first response forever; git shows the diff. |
 | Replay strictness | Replay raises on a miss; record reads before calling; live bypasses cassettes | Matches `.env.example`; a lenient replay would hide a missing recording until CI. |
-| Backends in M1 | `anthropic_api` and `claude_cli` | Two implementations justify the protocol; the CLI records M2 cassettes on the subscription; the API path is the product. `codex_cli` lands with the renderer (M2). |
+| Backends in M1 | `anthropic_api` and `openrouter` | Two implementations justify the protocol; one gateway covers Claude, GPT-class and the classifier for development (D15); the API path is the product. The cassette key uses logical model names so recordings replay across backends. |
 | Anthropic test boundary | Fake SDK client returning `anthropic.types.Message` | D13: never HTTP mocks. |
 | Retry on invalid output | One retry in `extract` and `judge`, every backend, bypassing the cassette; none in replay | D15 promised one retry for the CLI; the wrapper is the one place that validates, so it owns the retry. A retry that read the cassette back would never reach the backend. |
 | YAML library | pyyaml | SPEC names `.yaml` files; `tomllib` reads only TOML. One dependency plus stubs. |
@@ -740,16 +748,15 @@ a gate with an empty checklist.
 | Systems of record | Bot personas with `plm_bot` authority posting into a feed channel | That is how PLM, schedule and document-control tools appear in Slack; no new source type or API. |
 | Relationships | `team` and `manager` on personas; interaction frequency derived in M3 | Two fields give manager, reports and team for the sender-affinity term; no org-chart connector. |
 | Priority | `priority` attribute; `priority` on gates and tasks | A PM edits it in the configuration; a tracker bot posts it as a claim; the ranker reads one input. |
-| Classifier seam | `judge` is the port; Jev and Laya adapters land in M2 and M4 (D17) | M1 needs no classifier; the enum-only request shape is fixed now so the adapters are additive. |
+| Classifier seam | `judge` is the port; the Haiku-class model through the gateway is the core adapter; Jev and Laya are stretch (D17) | M1 needs no classifier; the enum-only request shape is fixed now so later adapters are additive. |
 | Type gate | `uv run ty check` (D16) | Measured; same three planted errors caught as mypy in a third of the time. |
 
 ## Open items for the user
 
-U1. Log the bundled Claude CLI in. The binary at
-`%APPDATA%\Claude\claude-code\2.1.288\<hash>\claude.exe` has the flags the backend
-needs but reports "Not logged in". Either run that binary with `/login`, or install the
-standalone CLI (`npm install -g @anthropic-ai/claude-code`) and log in, then set
-`DIGEST_CLAUDE_BIN`. The first real recording (M2) needs this; M1 does not.
+U1. Put `OPENROUTER_API_KEY` in `.env` (never in chat). The first real recording (M2)
+needs it; M1 does not. The first call in M2 is a spike: one extraction request through
+the gateway with a JSON schema against a Claude model, to confirm the schema is
+honoured before any cassette is recorded.
 
 U2. Timezone for `--until`: the world's (`America/Los_Angeles`) is chosen; say if you
 prefer UTC.
@@ -767,7 +774,7 @@ assumes one.
 | P4 | `data/cassettes/` and `data/world/` are not gitignored | `.gitignore` ignores `data/live/`, `*.sqlite`, `*.sqlite-journal`, `*.db` | verified; WAL side files are not covered, added in the stubs commit |
 | P5 | `hypothesis`, `time-machine`, `pytest` are dev deps | `pyproject.toml` `[dependency-groups] dev` | verified |
 | P6 | pyyaml is not installed | `uv run python -c "import yaml"` ModuleNotFoundError | verified; plan adds it |
-| P7 | A Claude Code CLI binary exists with `-p`, `--output-format json`, `--json-schema`, `--system-prompt`, `--tools`, `--bare`, `--no-session-persistence` | `%APPDATA%\Claude\claude-code\2.1.288\...\claude.exe --help`; not on PATH | verified for flags; a probe returned "Not logged in" (U1) |
+| P7 | OpenRouter serves Claude Haiku, Sonnet, Opus and Fable and the GPT-5 family with `response_format` and `structured_outputs` in `supported_parameters` | `GET https://openrouter.ai/api/v1/models` on 2026-10-08, no key | verified for the catalogue; the first schema-bearing call is the M2 spike (U1) |
 | P8 | `prove-test` is callable from Git Bash as `prove-test` | `command not found`; works as `python ~/.local/bin/prove-test.py` | refuted; mechanics below use the python form |
 | P9 | `prove-test` records a proof with `--break blank:<file>:<a>-<b>` and `--expect-error` | proof written for `tests/test_cli.py` on 2026-10-06 | verified |
 | P10 | Codex `exec` has `-p`, `-C`, `-o`, `--output-schema` | `codex exec --help`; handoff verified `--output-schema` on 2026-10-06 | verified |

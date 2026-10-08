@@ -47,6 +47,9 @@ would promote it.
 - Linear connector. Webhooks into the event store (issue state, assignee, priority, due
   date, cycle changes; project update health; SLA breaches), read-only MCP for ad hoc
   questions. Trigger: the event envelope is stable and a Linear workspace exists.
+- Subscription CLI backends (`claude -p`, `codex exec`) for recording cassettes at
+  zero marginal cost. Replaced in v0.3 by the single gateway backend (D15). Trigger:
+  gateway spend becomes material, or the gateway stops honouring JSON schemas.
 - MCP server over HTTP with per-user tokens for hosted assistants. The v1 server is
   stdio for local assistants. Trigger: a hosted deployment.
 - Learned ranking. Impressions and feedback are logged from day one; a learning-to-rank
