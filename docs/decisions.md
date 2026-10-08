@@ -290,6 +290,9 @@ definition. One read-only `query` tool over SQL, with a row cap and a timeout an
 schema published as a resource, is the escape hatch for questions the fixed tools do
 not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
+Enforced by import-linter (`uv run lint-imports` in CI): a layers contract (cli; replay;
+store, llm and world as siblings; project; models and settings) and a forbidden
+contract keeping `anthropic` and `httpx2` inside `digest.llm`.
 
 Why. A REST API alone needs a tool definition per assistant host; per-host function
 definitions drift; letting the assistant run SQL alone depends on it knowing the
