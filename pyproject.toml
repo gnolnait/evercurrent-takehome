@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "typer>=0.15",
     "rich>=13.9",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
@@ -22,11 +23,6 @@ web = [
     "fastapi>=0.115",
     "uvicorn>=0.32",
     "jinja2>=3.1",
-]
-# Corpus renderer only: a different model family writes the synthetic Slack text than
-# the one that extracts it (docs/decisions.md D12).
-corpus = [
-    "openai>=1.60",
 ]
 
 [project.scripts]
@@ -41,6 +37,8 @@ dev = [
     "ruff>=0.8",
     # Pinned: ty is pre-1.0 and its rule set moves between releases.
     "ty==0.0.84",
+    "types-pyyaml>=6.0.12.20260906",
+    "import-linter>=2.15",
 ]
 # No respx / pytest-httpx: anthropic 1.x runs on httpx2 and those mocks fail silently;
 # the LLM layer is tested through the SDK-boundary cassette (docs/decisions.md D9) and
@@ -71,9 +69,39 @@ extend-exclude = [".claude", "dev-kit", "notes", "data"]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ANN"]
 ignore = ["E501", "ANN401"]
 
+[tool.ruff.lint.flake8-bugbear]
+# typer declares options as call defaults; B008 would flag every non-str option.
+extend-immutable-calls = ["typer.Option"]
+
 [tool.ty.src]
 include = ["src", "tests"]
 
 [tool.ty.terminal]
 # Warnings fail the gate, so a diagnostic never lingers as "just a warning".
 error-on-warning = true
+
+[tool.importlinter]
+root_package = "digest"
+include_external_packages = true
+
+# Adapters above functions above shared types (docs/decisions.md D20). A `|` layer holds
+# independent siblings.
+[[tool.importlinter.contracts]]
+name = "layers"
+type = "layers"
+layers = [
+    "digest.cli",
+    "digest.replay",
+    "digest.store | digest.llm | digest.world",
+    "digest.project",
+    "digest.models | digest.settings",
+]
+
+# Every model call goes through digest.llm, so cassettes capture all of them.
+[[tool.importlinter.contracts]]
+name = "anthropic sdk only inside digest.llm"
+type = "forbidden"
+source_modules = ["digest"]
+forbidden_modules = ["anthropic"]
+ignore_imports = ["digest.llm.* -> anthropic"]
+allow_indirect_imports = true

@@ -28,6 +28,8 @@ build/
 data/live/
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 *.db
 
 # OS / editor

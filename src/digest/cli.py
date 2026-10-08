@@ -1,6 +1,8 @@
-"""Command line entry point. Subcommands fill in as milestones land (see SPEC.md section 8)."""
+"""Command line entry point. Subcommands fill in as milestones land (see SPEC.md section 9)."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import typer
 
@@ -39,6 +41,34 @@ def eval_cmd() -> None:
     raise typer.Exit(code=_not_yet("eval"))
 
 
+@app.command()
+def replay(
+    until: str = typer.Option(
+        ..., "--until", help="Last day to ingest, YYYY-MM-DD, in the world's timezone."
+    ),
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+    db: Path | None = typer.Option(None, "--db", help="Store path; default data/<world>.sqlite."),
+) -> None:
+    """Ingest the world's corpus into the store up to and including a day."""
+    raise typer.Exit(code=_not_yet("replay"))
+
+
+world_app = typer.Typer(help="Inspect a scripted world.", no_args_is_help=True)
+app.add_typer(world_app, name="world")
+
+
+@world_app.command("check")
+def world_check(
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+) -> None:
+    """Load and validate a world file; print counts per day and per channel."""
+    raise typer.Exit(code=_not_yet("world check"))
+
+
 def _not_yet(name: str) -> int:
-    typer.echo(f"`digest {name}` is not implemented yet; see SPEC.md section 8.", err=True)
+    typer.echo(f"`digest {name}` is not implemented yet; see SPEC.md section 9.", err=True)
     return 2

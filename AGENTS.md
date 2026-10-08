@@ -62,7 +62,7 @@ a test edit lacks one. Full policy in `.claude/rules/testing.md`.
 
 When asked to verify against a gate, run the repo's exact CI command over the whole
 relevant tree, not a self-chosen subset: `uv run pytest`, `uv run ruff check .`,
-`uv run ruff format --check .`, `uv run ty check`. Never report a scoped subset as clean;
+`uv run ruff format --check .`, `uv run ty check`, `uv run lint-imports`. Never report a scoped subset as clean;
 say what you ran and paste the verbatim tail of its output.
 
 ## Writing style
