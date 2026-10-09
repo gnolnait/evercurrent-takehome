@@ -11,7 +11,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from digest.models import Event, Frozen, micros_since_epoch
+from digest.models import Event, Frozen, micros_since_epoch, ts_micros
 
 log = logging.getLogger(__name__)
 
@@ -69,28 +69,27 @@ class Store:
 
     @classmethod
     def open(cls, path: Path | Literal[":memory:"]) -> Self:
+        """Open or create a store. Refuse a file of another schema version before any write."""
         if path != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path)
         connection.row_factory = sqlite3.Row
+        try:
+            _check_version(connection, path)
+        except Exception:
+            connection.close()
+            raise
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.executescript(Path(__file__).with_name("schema.sql").read_text("utf-8"))
-        store = cls(connection)
         with connection:
             connection.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
                 " ON CONFLICT (key) DO NOTHING",
                 (SCHEMA_VERSION,),
             )
-        version = store.get_meta("schema_version")
-        if version != SCHEMA_VERSION:
-            connection.close()
-            raise ValueError(
-                f"store {path} has schema version {version}, expected {SCHEMA_VERSION}"
-            )
         log.debug("store_opened", extra={"path": str(path)})
-        return store
+        return cls(connection)
 
     def close(self) -> None:
         self._db.close()
@@ -135,7 +134,7 @@ class Store:
         rows = self._db.execute(
             f"{_SELECT} JOIN events_fts ON events_fts.rowid = events.rowid"
             " WHERE events_fts MATCH ? AND events.ts_us <= ?"
-            " ORDER BY events.ts_us, events.channel_id LIMIT ?",
+            " ORDER BY events.ts_us DESC, events.channel_id LIMIT ?",
             (match, micros_since_epoch(as_of), limit),
         )
         return [_event(row) for row in rows]
@@ -196,11 +195,24 @@ class Store:
         return deltas
 
 
+def _check_version(connection: sqlite3.Connection, path: Path | str) -> None:
+    """Accept an empty database or a store of this schema version; raise for anything else."""
+    tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master")}
+    if not tables:
+        return
+    row = None
+    if "meta" in tables:
+        row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    version = None if row is None else row["value"]
+    if version != SCHEMA_VERSION:
+        raise ValueError(f"store {path} has schema version {version}, expected {SCHEMA_VERSION}")
+
+
 def _event_row(event: Event) -> dict[str, Any]:
     row = event.model_dump(mode="json")
     for column in _JSON_COLUMNS:
         row[column] = json.dumps(row[column])
-    return row | {"ts_us": event.ts_us, "event_ts_us": micros_since_epoch(event.observed_at)}
+    return row | {"ts_us": event.ts_us, "event_ts_us": ts_micros(event.event_ts)}
 
 
 def _event(row: sqlite3.Row) -> Event:
