@@ -76,12 +76,7 @@ def _world() -> dict[str, Any]:
             },
         ],
         "entities": [
-            {
-                "id": "drive",
-                "type": "subsystem",
-                "description": "Drive subsystem",
-                "aliases": ["drive assembly"],
-            },
+            {"id": "drive", "type": "subsystem", "description": "Drive subsystem"},
             {
                 "id": "PN-31010",
                 "type": "part",
@@ -171,7 +166,10 @@ def _world() -> dict[str, Any]:
             id="alias-across-kinds",
         ),
         pytest.param(
-            ("entities", 0, "aliases"), ["auxiliary unit"], "drive", id="alias-across-entities"
+            ("entities", 2, "aliases"),
+            ["drive part"],
+            "AUX-900|PN-31010",
+            id="alias-across-entities",
         ),
         pytest.param(
             ("personas", 1, "aliases"), ["mechanical owner"], "UEM|UME", id="alias-across-personas"
