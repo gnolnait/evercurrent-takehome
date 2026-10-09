@@ -10,6 +10,11 @@ protocol of two operations: `extract(messages, schema) -> validated model` and
 `judge(prompt) -> enum`. Anthropic is the default implementation. An OpenAI implementation
 is optional and used for one thing only: the faithfulness judge in evaluation.
 
+Amended 2026-10-08 by D15: the second implementation is one OpenAI-compatible gateway
+adapter, used for every development call, not an OpenAI SDK client for the judge alone.
+The protocol is named `Backend` and has one operation, `complete`; `extract` and
+`judge` are methods of the client wrapper around it.
+
 Why. Structured outputs on the Claude API are GA with JSON schema enforcement, prompt
 caching and batch pricing stack, and the extraction workload is exactly the shape those
 features serve. The judge should come from a different model family than the generator
@@ -111,7 +116,8 @@ settings form, so it earns the page.
 Decision. All tests and CI run with `DIGEST_MODE=replay`. The synthetic corpus is
 generated once by a scripted timeline (not free-form LLM generation) so entities, gates
 and scenarios are deterministic and labelled at generation time. LLM calls are recorded
-keyed by a hash of (model, system, messages, schema) and replayed from `data/cassettes`.
+keyed by a hash of (model, system, messages, schema, temperature) and replayed from
+`data/cassettes`.
 
 Why. Deterministic tests are the difference between a prototype and a project. The
 scripted timeline doubles as the golden labels, which removes a day of hand-labelling.
@@ -139,8 +145,10 @@ every extra mechanism is cost without signal for a one-week take-home.
 
 ## D12. The corpus renderer is a different model family from the extractor
 
-Decision. The world-first simulator renders Slack text with GPT through the OpenAI API
-(optional extra `corpus`), while Claude does extraction and linking. One 40-message
+Decision. The world-first simulator renders Slack text with a GPT-class model, while
+Claude does extraction and linking. Amended 2026-10-08 by D15: the renderer calls the
+model through the gateway backend with the logical name `render`; the `openai` package
+is not used and the `corpus` extra leaves `pyproject.toml` in the M1 stubs commit. One 40-message
 slice is human-authored. The eval report states which models rendered and which
 extracted.
 
@@ -164,26 +172,36 @@ synthetic world is "Kestrel K2", a warehouse AMR; personas, channels and conflic
 chosen to differ from the public submissions catalogued in
 `notes/research/competing-submissions.md`.
 
-## D15. LLM backends: API in production, subscription CLIs for recording
+## D15. LLM backends: Anthropic API in production, one gateway for development
 
-Decision. The `Provider` protocol (D1) has three implementations behind one config value:
-- `anthropic_api`: the production path, schema-enforced structured outputs, needs a key.
-- `claude_cli`: shells out to `claude -p --output-format json` with the same system
-  prompt and schema in the prompt; validates with pydantic and retries once. Uses the
-  Claude subscription. Used to record cassettes during development.
-- `codex_cli`: shells out to `codex exec` with the mechanical or review profile. Uses
-  the ChatGPT subscription. Used for the corpus renderer and the different-family judge.
-Cassettes are keyed by request content, not backend, so replay is backend-agnostic.
-The README names which backend recorded each cassette set.
+Decision. The provider protocol (D1; `Backend` in code) has two implementations behind
+one config value:
+- `anthropic_api`: the production path, schema-enforced structured outputs, needs an
+  Anthropic key.
+- `openrouter`: one OpenAI-compatible chat-completions adapter with `response_format`
+  of type `json_schema`, used for every development call: Claude for extraction and
+  adjudication, GPT-class for the corpus renderer and the different-family judge, and
+  the Haiku-class triage classifier. OpenRouter's public catalogue lists the Claude
+  and GPT models with `structured_outputs` support (checked 2026-10-08); the first
+  call is a five-line spike at the start of M2.
+Requests name a logical model (`extract`, `adjudicate`, `render`, `judge`,
+`classify`) and `config/models.yaml` maps each logical name to a model id per backend.
+The cassette key uses the logical name, so a cassette recorded through the gateway
+replays for the API backend. The client wrapper's `extract` and `judge` validate the
+response with pydantic and retry once, whichever backend answered; `complete` returns
+the parsed JSON unvalidated. The README names which
+backend recorded each cassette set.
 
-Why. Development should cost nothing beyond subscriptions already paid for, and
-reviewers must need no keys at all. The CLI backends are development tooling; the
-API path is the product. The one rule: use the CLI binaries as-is, never reuse their
-OAuth tokens inside an SDK.
+Why. One adapter replaces the three that v0.2 planned (two CLI shells and a second
+SDK): the renderer, the judge and the classifier all go through the same request
+shape, and the user already pays for the gateway. Reviewers still need no keys at
+all. The API path is the product.
 
-Would change it. If structured-output enforcement matters for extraction quality, the
-cassettes for extraction are re-recorded through the API before submission and the
-report says so.
+Would change it. OpenRouter not honouring a JSON schema for a Claude model in the
+spike: the extraction cassettes are recorded through the Anthropic API and the gateway
+stays for the renderer and the judge. If structured-output enforcement matters for
+extraction quality, the extraction cassettes are re-recorded through the API before
+submission and the report says so.
 
 ## D16. Type checker: ty, with warnings as errors
 
@@ -208,6 +226,79 @@ Would change it. A ty release that misses a planted error or flags pydantic mode
 pyrefly is the fallback. The swap touches the dependency line, the two `[tool.ty.*]`
 tables, the `uv run ty check` call sites in the pre-push hook, CI and the justfile,
 the gate-command list in AGENTS.md and CLAUDE.md, SPEC A8, and D11.
+
+## D17. Classifier models behind the same client: Jev, Laya, and the LLM baseline
+
+Decision. The LLM client's `judge` operation (enum in, enum out) is the classifier
+port. Core: the Haiku-class model through the gateway handles triage before
+extraction (M2) and watch-prompt matching (M3). Stretch, behind the same port:
+`jev` (TypeSafe's native System One API, `state` plus typed `questions`, needs a
+TypeSafe key; OpenRouter's "jev-router" is a model router that returns generated
+text, not a classifier, checked 2026-10-08) and `laya_local` (open-weight
+ModernBERT-based decision model, Apache 2.0, run in the Linux devcontainer in v1; torch
+2.9.1 ships Windows ARM64 wheels, checked 2026-10-08, but that path is untested here). The M4 evaluation compares whatever adapters exist on triage recall,
+faithfulness-judge agreement and latency. Extraction and the linker's adjudicator stay
+on structured outputs, because they must return fields and quoted evidence that a
+classifier cannot produce.
+
+Why. Triage and matching are yes/no questions at volume; a non-generative classifier
+answers them in tens of milliseconds, cannot hallucinate text, and as a judge has no
+self-preference bias. The comparison is a measured finding for the README either way.
+Making the LLM the core adapter keeps M2 free of a third provider.
+
+Would change it. A TypeSafe key appearing before M2: Jev becomes the core triage
+adapter and the LLM the baseline. Jev dropping golden items in triage above the miss
+budget: the LLM stays.
+
+## D18. Profile bootstrap and onboarding
+
+Decision. Onboarding is in scope for v1. The first-run profile is a draft inferred
+from Slack (job title and timezone from the user record; team, collaborators and owned
+subsystems from channel membership, replies and mentioned entities over 30 days),
+shown with its evidence for confirmation. A user may also paste a role description,
+which the extraction client turns into the same fields plus watch prompts. Every field
+records its source (configured, inferred, confirmed, pasted). The web preview's
+profile page is the single settings surface; the onboarding DM links to it; delivery
+time defaults to the Slack timezone. Slack App Home settings and slash commands are
+stretch (SPEC section 9). No org-chart, HR or LinkedIn sources.
+
+Why. The data the bootstrap needs is already ingested; a confirmed draft beats a blank
+form; a source per field keeps inferred values from being mistaken for stated ones.
+
+Would change it. A second real workspace with an HR directory: add the connector
+listed in `docs/later.md`.
+
+## D19. The ledger is bi-temporal
+
+Decision. Each claim carries `asserted_ts` (when it was said), `observed_ts` (when the
+pipeline saw it) and `invalid_ts` (when a later claim superseded it, null while
+current). Supersession sets `invalid_ts`; nothing is deleted.
+
+Why. This is the temporal-knowledge-graph model (Zep's Graphiti) applied in SQLite:
+stale-belief lines can say when a value stopped being true, supersession recall can be
+measured on time rather than only on links, and a tracker connector later writes the
+same rows.
+
+## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
+
+Decision. Queries and feedback over the store and the ranker are plain functions in
+one module. The CLI, the web preview's HTTP endpoints and an MCP server (stdio) call
+those functions and contain no logic of their own. MCP is the adapter for the user's
+own assistant because Claude, ChatGPT and Cursor speak it without a per-host tool
+definition. One read-only `query` tool over SQL, with a row cap and a timeout and the
+schema published as a resource, is the escape hatch for questions the fixed tools do
+not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
+structured-output requests and never MCP.
+
+Why. A REST API alone needs a tool definition per assistant host; per-host function
+definitions drift; letting the assistant run SQL alone depends on it knowing the
+schema. One function layer keeps the three adapters from diverging. The cap of ten
+tools (line above) is a design choice to keep the list readable, not a measured limit. Keeping the pipeline's
+own calls direct preserves determinism, batching and cassette replay. This is also the
+concrete answer to the take-home's question on function calling versus MCP.
+
+Would change it. A hosted deployment: the MCP server gains an HTTP transport with
+per-user tokens (docs/later.md).
 
 ## Validation against EverCurrent's published experience
 

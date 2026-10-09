@@ -10,16 +10,58 @@ would promote it.
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
   the take-home is submitted.
-- Onboarding and configuration. DM welcome, settings modal (role, priorities, delivery
-  time defaulting to the Slack timezone, weekdays, quiet hours), App Home as the
-  settings page with pause and send-now, `/digest` slash commands. Trigger: a second
-  real user.
+- Agentic feature set beyond the v1 MCP server (design sketch, so v1 data structures
+  do not block it). The v1 MCP server already lets a user's own assistant read the
+  store and act through feedback events; that assistant supplies the agent loop, the
+  ask-user step and scheduling. What remains for a product-owned agent, built on the
+  Claude Agent SDK as a separate component from the pipeline (D3):
+  - `update_profile_field` as an MCP write tool, with `source = agent_proposed` until
+    the user confirms.
+  - A product-owned ask-user step in Slack: one button-answerable question in the
+    user's DM, one open question per user, used for "asks back" and low-confidence
+    profile edits. Never free-text prompts.
+  - An always-on event triage loop that scores each new thread delta as it arrives
+    and decides digest, real-time or ignore; the same triage classifier as v1, run per
+    event instead of per day.
+  - Calendar integration (Google Calendar, M365): three uses. A gate review or DFM
+    review that is on no calendar inside the buffer is an absence signal of the same
+    kind as a missing ECO post. Meeting titles and attendees are evidence of task
+    progress ("thermal review held Tuesday"). Delivery timing avoids the user's
+    meetings and respects out-of-office. Calendar events enter through the event
+    envelope with their own source and `plm_bot`-level authority for dates. Meeting
+    notes or transcripts are a later source and need the same evidence discipline as
+    chat.
+  Trigger: the interactive agent exists and a real workspace has used the digest for a
+  month, so the ask-user rate and the triage thresholds can be set from data.
+- Full entity model beyond the v1 minimum. v1 has entity types with `subsystem`,
+  `parent` and `aliases`, personas with `team` and `manager`, and claims as the only
+  edges. The full model adds: a `relations` table with typed edges (`part_of`,
+  `owned_by`, `member_of`, `reports_to`, `governs`, `depends_on`) each with a validity
+  window; `team` and `person` as entity types so ownership can be held by a team;
+  documents with a content reference (PLM or Drive id, version) rather than a title;
+  `deliverable` as a grouping of tasks, builds and tests that a gate consumes; a
+  glossary table with alias provenance. Each is additive to the v1 schema. Trigger:
+  a ranking or landing-map need that the v1 fields cannot express, or a connector that
+  supplies the edges.
+- Org-chart and HR connectors (Google Directory, Workday, BambooHR) to fill team and
+  manager. The Slack-inferred profile draft approximates them. Trigger: a second real
+  workspace.
+- Point-in-time history of edited messages (row versioning in the store). The snapshot
+  rule (a digest for day D runs on a store replayed to day D) covers the demo and the
+  eval. Trigger: a live deployment that must answer "what did the digest say last
+  Tuesday" after edits.
+- Formal model of the ledger in Quint with the three invariants (no superseded value
+  is current; every stale-belief line has a superseding permalink; no absence without a
+  citation), model-checked and linked from the README. The stateful Hypothesis test in
+  M3 covers the same invariants empirically. Trigger: days 6 to 7 are free.
 - Linear connector. Webhooks into the event store (issue state, assignee, priority, due
   date, cycle changes; project update health; SLA breaches), read-only MCP for ad hoc
   questions. Trigger: the event envelope is stable and a Linear workspace exists.
-- Own read-only MCP server exposing search_items, get_item, list_open_blockers,
-  why_ranked, set_watch so engineers can query the digest from their own assistant.
-  Trigger: the item store schema is stable.
+- Subscription CLI backends (`claude -p`, `codex exec`) for recording cassettes at
+  zero marginal cost. Replaced in v0.3 by the single gateway backend (D15). Trigger:
+  gateway spend becomes material, or the gateway stops honouring JSON schemas.
+- MCP server over HTTP with per-user tokens for hosted assistants. The v1 server is
+  stdio for local assistants. Trigger: a hosted deployment.
 - Learned ranking. Impressions and feedback are logged from day one; a learning-to-rank
   step or Thompson-sampled exploration slots come after thousands of labelled
   impressions exist.
