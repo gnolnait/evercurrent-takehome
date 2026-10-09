@@ -150,12 +150,8 @@ def test_search_quotes_terms_and_honors_limit(store: Store) -> None:
     rows = [event(f"1760000000.{i:06d}") for i in range(1, 5)]
     rows.append(event("1760000000.000005", text="Rev B for PN-31010"))
     store.upsert_events([*rows, event("1760000000.000006", text="PN-31010 only")])
-    assert {row.ts for row in store.search_events("PN-31010 Rev", AS_OF)} == {
-        row.ts for row in rows
-    }
-    limited = store.search_events("PN-31010 Rev", AS_OF, limit=2)
-    assert len(limited) == len({row.ts for row in limited}) == 2
-    assert all(row in rows for row in limited)
+    assert store.search_events("PN-31010 Rev", AS_OF) == list(reversed(rows))
+    assert store.search_events("PN-31010 Rev", AS_OF, limit=2) == list(reversed(rows[-2:]))
 
 
 @pytest.mark.parametrize("root_state", ["present", "missing", "deleted"])
@@ -267,7 +263,6 @@ def test_file_store_creates_parents_and_preserves_data(tmp_path: Path) -> None:
     assert path.is_file()
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
-        # foreign_keys is per connection, and Store does not expose its connection.
     with Store.open(path) as reopened:
         assert reopened.get_meta("world") == "kestrel"
         assert reopened.events_in_thread(event().thread_id, AS_OF) == [event()]
@@ -281,6 +276,21 @@ def test_file_store_refuses_other_schema_version(tmp_path: Path) -> None:
         db.set_meta("schema_version", "999")
     with pytest.raises((ValueError, RuntimeError), match=r"(?i)schema|version"), Store.open(path):
         pass
+
+
+def test_file_store_refuses_unrelated_database_without_modifying_it(tmp_path: Path) -> None:
+    path = tmp_path / "unrelated.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE t (value TEXT)")
+    with pytest.raises(ValueError, match=r"schema version None, expected 1"), Store.open(path):
+        pass
+    with sqlite3.connect(path) as connection:
+        tables = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        ).fetchall()
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
+    assert tables == [("t",)]
+    assert journal_mode == ("delete",)
 
 
 @settings(max_examples=30, derandomize=True)

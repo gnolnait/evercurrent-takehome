@@ -117,6 +117,7 @@ def test_read_events_preserves_explicit_fields_and_equal_observation_times(tmp_p
         "bad_event_ts",
         "before_post",
         "out_of_order",
+        "invalid_utf8",
     ],
 )
 def test_read_events_errors_name_file_and_line(tmp_path: Path, fault: str) -> None:
@@ -135,9 +136,12 @@ def test_read_events_errors_name_file_and_line(tmp_path: Path, fault: str) -> No
         invalid["event_ts"] = "1760000002.000001"
     elif fault == "out_of_order":
         invalid["event_ts"] = "1760000001.000001"
-    bad_line = "{broken" if fault == "json" else json.dumps(invalid)
     path = tmp_path / "events.jsonl"
-    path.write_text(json.dumps(valid) + "\n" + bad_line + "\n", encoding="utf-8")
+    if fault == "invalid_utf8":
+        path.write_bytes(json.dumps(valid).encode() + b"\n\xff\n")
+    else:
+        bad_line = "{broken" if fault == "json" else json.dumps(invalid)
+        path.write_text(json.dumps(valid) + "\n" + bad_line + "\n", encoding="utf-8")
     with pytest.raises(ReplayFormatError) as error:
         list(read_events(path, WORKSPACE))
     message = str(error.value)
@@ -175,6 +179,15 @@ def test_repeated_ingest_preserves_rows_and_reports(tmp_path: Path) -> None:
         second = ingest(db, path, AS_OF, WORKSPACE)
         assert first == second == IngestReport(read=2, written=2, after_until=0)
         assert db.events_in_thread(rows[0].thread_id, AS_OF) == rows
+
+
+def test_ingest_future_bound_writes_every_line(tmp_path: Path) -> None:
+    rows = [event(), event("1760000000.000002")]
+    path = write_events(tmp_path / "events.jsonl", rows)
+    until = datetime(2300, 1, 1, tzinfo=UTC)
+    with Store.open(":memory:") as db:
+        assert ingest(db, path, until, WORKSPACE) == IngestReport(read=2, written=2, after_until=0)
+        assert db.events_in_thread(rows[0].thread_id, until) == rows
 
 
 def test_empty_corpus_has_zero_counts(tmp_path: Path) -> None:
@@ -316,6 +329,15 @@ def test_cli_replay_refuses_invalid_target(cli_world: Path, tmp_path: Path, reas
         assert db.get_meta("world") == original_world
         assert db.get_meta("until") == previous
         assert db.events_in_thread(f"C1:{ROOT}", AS_OF) == [event(text="preserved")]
+
+
+def test_cli_missing_world_does_not_create_store(cli_world: Path, tmp_path: Path) -> None:
+    db_path = tmp_path / "typo.sqlite"
+    result = runner.invoke(
+        app, ["replay", "--until", "2026-10-13", "--world", "typo", "--db", str(db_path)]
+    )
+    assert result.exit_code == 1, result.output
+    assert not db_path.exists()
 
 
 @pytest.mark.parametrize(
