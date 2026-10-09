@@ -1,6 +1,6 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3.5, 2026-10-08, after four review rounds (Codex `-p review` and Claude lenses)
+Status: v3.7, 2026-10-09, after four review rounds and unit 1's implementation review (Codex `-p review` and Claude lenses)
 and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
 Converges before any test is written.
 
@@ -128,6 +128,8 @@ class Event(BaseModel, frozen=True):
     @property
     def observed_at(self) -> datetime   # from event_ts, UTC
 
+def ts_micros(ts: str) -> int                      # Slack ts to microseconds since the epoch
+def micros_since_epoch(moment: datetime) -> int    # the same for an aware datetime
 def permalink_for(workspace_url: str, channel_id: str, ts: str, thread_ts: str) -> str
 ```
 
@@ -192,11 +194,21 @@ class IngestReport(BaseModel, frozen=True):
     written: int
     after_until: int
 
-class ReplayFormatError(ValueError): ...
+class ReplayFormatError(ValueError): ...   # a line that does not parse or is out of order
+class ReplayRefused(ValueError): ...       # a store or world the replay rules reject
 
 def read_events(path: Path, workspace_url: str) -> Iterator[Event]
 def ingest(store: Store, path: Path, until: datetime, workspace_url: str) -> IngestReport
+def replay_world(store: Store, world_dir: Path, until: date) -> IngestReport
 ```
+
+`replay_world` holds the replay rules so M3 `run` and the M4 eval reuse them: it reads
+the world header, converts the day to the end of that day in the world's timezone,
+raises `ReplayRefused` for a missing or unreadable `world.yaml` or `events.jsonl`, an
+unknown timezone, a store whose `meta.world` is another world or whose `meta.until` is
+later than the day, then ingests and writes `meta`. The CLI resolves the world name and
+the store path, calls it, and maps `ReplayRefused`, `ReplayFormatError` and the
+`Store.open` errors to a reason on stderr and exit 1.
 
 CLI: `digest replay --until YYYY-MM-DD [--world NAME] [--db PATH]`. `--world` defaults
 to `Settings.world`. Reads `load_world_header(data/world/NAME/world.yaml)`, opens the
@@ -287,7 +299,8 @@ B1.3 `ts` and `event_ts` must match `^\d{10}\.\d{6}$` and `event_ts >= ts`;
 Slack timeline. `Event.at` and `Event.observed_at` are UTC datetimes.
 
 B1.4 Reads are bounded by `as_of` on `ts`: `events_in_thread`, `search_events` and
-`thread_deltas` never return a row with `at > as_of`. The store holds one version per
+`thread_deltas` never return a row with `at > as_of`. `events_in_thread` returns oldest
+first; `search_events` returns newest first, so `limit` keeps the newest matches. The store holds one version per
 message (see "The store is a snapshot").
 
 B1.5 FTS: `search_events("PN-31010", as_of)` returns rows whose text contains that
@@ -330,7 +343,8 @@ ingest). Ingesting the same file twice to the same `until` changes nothing.
 
 B1.10 `Store.open(":memory:")` works for tests. `Store.open(path)` creates parent
 directories, sets `journal_mode=WAL` and `foreign_keys=ON`, and is safe to call on an
-existing file.
+existing file. It reads `schema_version` before any DDL: an empty database gets the
+schema; any other database without version 1 is refused untouched.
 
 B1.11 `digest replay --until 2026-10-13` with the default world on the bundled corpus
 exits 0 and prints the report. A missing world, a store whose `meta.world` differs,
