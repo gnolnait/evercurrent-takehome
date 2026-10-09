@@ -1,8 +1,7 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3.7, 2026-10-09 (Codex `-p review` and Claude lenses)
-and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
-Converges before any test is written.
+Status: v3.7, 2026-10-09. Process stage 1 (`docs/process.md`) for M1, amended as the
+units were built; stages 2 to 4 ran in the unit pull requests.
 
 M1 from `SPEC.md` section 9: skeleton, models, SQLite store, replay ingest, cassette
 wrapper, world schema and generator scaffold, gate checklist config. Tests for store and
