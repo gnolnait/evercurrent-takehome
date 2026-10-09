@@ -695,7 +695,8 @@ def load_world(path: Path) -> World      # beside load_world_header from the stu
 ```
 
 CLI: `digest world check [--world NAME]` loads and validates, prints counts per day and
-per channel, exit 0; validation errors print the path and exit 1.
+per channel, exit 0; a validation error, a YAML error or a missing or unreadable file
+prints the path and the reason and exits 1.
 
 ### Behaviours
 
@@ -707,10 +708,10 @@ every `entity.parent` names an entity; every `tasks[].task` is a checklist task 
 `project`; every `claim.supersedes` and `claim.contradicts` entry is an earlier or
 same-day event id that carries a claim on the same `(entity, attribute)`; every
 `persona.channels` entry is a channel id; every `persona.manager` is another persona's
-user_id; a human persona has a role and a bot persona has none; every `event.day` and
+user_id; a claim never links to its own event; a human persona has a role and a bot persona has none; every `event.day` and
 `known_by` value is in `1..days`; a poster is a member of the channel they post in;
-`must_see_for` and `known_by` name human personas only; event ids, entity ids and
-persona user_ids are unique; the union of all `aliases` (entities and personas) has
+`must_see_for` and `known_by` name human personas only; channel ids, event ids, entity
+ids and persona user_ids are unique; `timezone` is a known IANA zone; the union of all `aliases` (entities and personas) has
 no duplicate, so the glossary is unambiguous. Each failure names the event, entity or
 persona id.
 
@@ -727,8 +728,8 @@ B3.4 `load_world` and `load_project` read YAML with `yaml.safe_load` and validat
 Unknown keys are errors (`extra="forbid"` on every model).
 
 B3.5 The bundled fixture `data/world/kestrel/world.yaml` validates and contains: the
-program "Kestrel K2"; the six roles as human personas with `team` and `manager` set
-(the EM manages the engineers, the PM manages supply chain), plus one CM persona for
+program "Kestrel K2"; the six roles as human personas with `team` set and `manager`
+set for the engineers (the EM) and supply chain (the PM); EM and PM have no manager, plus one CM persona for
 the external channel with `cm_stated` authority, plus three bot personas (`plm_bot`,
 `schedule_bot`, `doc_control_bot`) with `plm_bot` authority posting only in the feed
 channel; channels `kestrel-program`, `eng-mech`, `eng-elec-fw`, `supply-chain`,
