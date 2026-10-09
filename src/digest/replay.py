@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
@@ -39,7 +39,8 @@ class ReplayRefused(ValueError):
 def replay_world(store: Store, world_dir: Path, until: date) -> IngestReport:
     """Ingest a world's corpus up to the end of `until` in the world's timezone.
 
-    Replay only moves forward, and a store holds one world. Meta is written after the ingest.
+    Replay only moves forward, and a store holds one world. The rows and the meta keys
+    commit together.
     """
     name = world_dir.name
     world_file, corpus = world_dir / "world.yaml", world_dir / "events.jsonl"
@@ -58,20 +59,29 @@ def replay_world(store: Store, world_dir: Path, until: date) -> IngestReport:
     if stored_world not in (None, name):
         raise ReplayRefused(f"the store holds world {stored_world!r}, not {name!r}")
     stored_until = store.get_meta("until")
-    if stored_until is not None and datetime.fromisoformat(stored_until) > end:
-        raise ReplayRefused(
-            f"--until {until} ends at {end.isoformat()}, earlier than the store's until"
-            f" {stored_until}; replay only moves forward, so delete the store to start over"
-        )
+    if stored_until is not None:
+        try:
+            moves_back = datetime.fromisoformat(stored_until) > end
+        except (TypeError, ValueError) as error:  # TypeError: a timestamp without an offset
+            raise ReplayRefused(
+                f"meta key 'until' in store {store.path} is not an ISO timestamp with an offset:"
+                f" {stored_until!r}"
+            ) from error
+        if moves_back:
+            raise ReplayRefused(
+                f"--until {until} ends at {end.isoformat()}, earlier than the store's until"
+                f" {stored_until}; replay only moves forward, so delete {store.path} to start over"
+            )
+    meta = {
+        "world": name,
+        "timezone": header.timezone,
+        "workspace_url": header.workspace_url,
+        "until": end.isoformat(),
+    }
     try:
-        report = ingest(store, corpus, end, header.workspace_url)
+        return ingest(store, corpus, end, header.workspace_url, meta=meta)
     except OSError as error:
         raise ReplayRefused(f"cannot read {corpus}: {error}") from error
-    store.set_meta("world", name)
-    store.set_meta("timezone", header.timezone)
-    store.set_meta("workspace_url", header.workspace_url)
-    store.set_meta("until", end.isoformat())
-    return report
 
 
 def read_events(path: Path, workspace_url: str) -> Iterator[Event]:
@@ -107,10 +117,18 @@ def _defaults(raw: dict[str, Any], workspace_url: str) -> dict[str, Any]:
     return defaults
 
 
-def ingest(store: Store, path: Path, until: datetime, workspace_url: str) -> IngestReport:
+def ingest(
+    store: Store,
+    path: Path,
+    until: datetime,
+    workspace_url: str,
+    *,
+    meta: Mapping[str, str] | None = None,
+) -> IngestReport:
     """Write every line observed by `until`; drop reactions made after it.
 
-    The whole file is read before the first write, so a bad line writes nothing.
+    The whole file is read before the first write, so a bad line writes nothing. The `meta`
+    pairs commit in the same transaction as the rows.
     """
     limit = micros_since_epoch(until)
     read, kept = 0, []
@@ -119,7 +137,7 @@ def ingest(store: Store, path: Path, until: datetime, workspace_url: str) -> Ing
         if ts_micros(event.event_ts) <= limit:
             reactions = tuple(r for r in event.reactions if ts_micros(r.ts) <= limit)
             kept.append(event.model_copy(update={"reactions": reactions}))
-    written = store.upsert_events(kept)
+    written = store.upsert_events(kept, meta=meta)
     log.info(
         "replay_ingested",
         extra={"path": str(path), "read": read, "written": written, "until": until.isoformat()},

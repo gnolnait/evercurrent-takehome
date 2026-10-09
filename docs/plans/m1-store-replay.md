@@ -200,7 +200,8 @@ class ReplayFormatError(ValueError): ...   # a line that does not parse or is ou
 class ReplayRefused(ValueError): ...       # a store or world the replay rules reject
 
 def read_events(path: Path, workspace_url: str) -> Iterator[Event]
-def ingest(store: Store, path: Path, until: datetime, workspace_url: str) -> IngestReport
+def ingest(store: Store, path: Path, until: datetime, workspace_url: str, *, meta: Mapping[str, str] | None = None) -> IngestReport
+    # meta pairs commit with the rows
 def replay_world(store: Store, world_dir: Path, until: date) -> IngestReport
 ```
 

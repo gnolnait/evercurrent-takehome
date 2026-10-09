@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from itertools import groupby
 from pathlib import Path
@@ -41,6 +41,10 @@ _UPSERT = (
     " ON CONFLICT (channel_id, ts) DO UPDATE SET "
     + ", ".join(f"{c} = excluded.{c}" for c in _WRITTEN if c not in {"channel_id", "ts"})
 )
+_SET_META = (
+    "INSERT INTO meta (key, value) VALUES (?, ?)"
+    " ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+)
 
 
 class StageRun(Frozen):
@@ -64,8 +68,9 @@ class ThreadDelta(Frozen):
 
 
 class Store:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, path: Path | Literal[":memory:"]) -> None:
         self._db = connection
+        self.path = path
 
     @classmethod
     def open(cls, path: Path | Literal[":memory:"]) -> Self:
@@ -89,7 +94,7 @@ class Store:
                 (SCHEMA_VERSION,),
             )
         log.debug("store_opened", extra={"path": str(path)})
-        return cls(connection)
+        return cls(connection, path)
 
     def close(self) -> None:
         self._db.close()
@@ -102,20 +107,20 @@ class Store:
 
     def set_meta(self, key: str, value: str) -> None:
         with self._db:
-            self._db.execute(
-                "INSERT INTO meta (key, value) VALUES (?, ?)"
-                " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                (key, value),
-            )
+            self._db.execute(_SET_META, (key, value))
 
     def get_meta(self, key: str) -> str | None:
         row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return None if row is None else row["value"]
 
-    def upsert_events(self, events: Iterable[Event]) -> int:
+    def upsert_events(
+        self, events: Iterable[Event], *, meta: Mapping[str, str] | None = None
+    ) -> int:
+        """Write the events and the `meta` pairs in one transaction; return the events written."""
         rows = [_event_row(event) for event in events]
         with self._db:
             self._db.executemany(_UPSERT, rows)
+            self._db.executemany(_SET_META, (meta or {}).items())
         return len(rows)
 
     def events_in_thread(self, thread_id: str, as_of: datetime) -> list[Event]:

@@ -66,15 +66,24 @@ def replay(
         day = date.fromisoformat(until)
     except ValueError:
         _refuse(f"--until must be YYYY-MM-DD, got {until!r}")
+    world_dir = Path("data") / "world" / name
+    # replay_world checks this too; checking first keeps a typo from creating a store file.
+    if not (world_dir / "world.yaml").is_file():
+        _refuse(f"no such world: {world_dir / 'world.yaml'}")
     path = db or settings.db or Path("data") / f"{name}.sqlite"
     try:
-        with Store.open(path) as store:
-            report = replay_world(store, Path("data") / "world" / name, day)
-    # ReplayRefused, ReplayFormatError and a schema version mismatch are ValueErrors.
-    except ValueError as error:
+        store = Store.open(path)
+    except ValueError as error:  # another schema version; the message names the store
         _refuse(str(error))
-    except sqlite3.DatabaseError as error:
+    except (OSError, sqlite3.DatabaseError) as error:
         _refuse(f"cannot open store {path}: {error}")
+    with store:
+        try:
+            report = replay_world(store, world_dir, day)
+        except ValueError as error:  # ReplayRefused and ReplayFormatError
+            _refuse(str(error))
+        except sqlite3.DatabaseError as error:
+            _refuse(f"store error: {error}")
     typer.echo(report.model_dump_json())
 
 
