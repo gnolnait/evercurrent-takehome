@@ -13,6 +13,8 @@ dependencies = [
     "rich>=13.9",
     "pyyaml>=6",
     "httpx2>=2.13",
+    # Windows Python ships no time zone database; zoneinfo reads this package there.
+    "tzdata; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

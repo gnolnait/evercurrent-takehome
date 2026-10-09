@@ -76,6 +76,11 @@ def _micros(ts: str) -> int:
     return int(seconds) * 1_000_000 + int(fraction)
 
 
+def micros_since_epoch(moment: datetime) -> int:
+    """Microseconds from the Unix epoch to an aware datetime, the integer form of a Slack `ts`."""
+    return (moment - _EPOCH) // timedelta(microseconds=1)
+
+
 def permalink_for(workspace_url: str, channel_id: str, ts: str, thread_ts: str) -> str:
     """Build the Slack permalink from its parts; a reply carries the thread query string."""
     link = f"{workspace_url}/archives/{channel_id}/p{ts.replace('.', '')}"
