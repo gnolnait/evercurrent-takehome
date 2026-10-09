@@ -1,5 +1,6 @@
 # Scripted ground truth for the Kestrel K2 warehouse AMR, ten working days from EVT-2 exit
-# to the DVT-1 build. Scenario ids S1 to S15 and N1 to N5 follow the domain scenario table.
+# to the DVT-1 build. The scenario ids S1 to S15 and N1 to N5 are the ones that SPEC.md
+# section 6 and docs/plans/m1-store-replay.md B3.5 name.
 name: kestrel
 program: Kestrel K2
 workspace_url: https://kestrel-k2.slack.com
@@ -679,8 +680,6 @@ events:
     summary: G-DVT1 is on day 9 and the team is 4 days into the 7-day buffer, with the thermal review and the top-cover DFM review still open.
     claims:
       - {entity: TST-THM-02, attribute: status, value: open}
-    tasks:
-      - {task: G-DVT1.thermal, effect: evidence}
     affected_roles: [EM, PM, ME]
     must_see_for: [U0EM01, U0PM01, U0ME01]
     known_by: {U0EM01: 6, U0PM01: 6, U0ME01: 6}

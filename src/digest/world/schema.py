@@ -222,7 +222,7 @@ class World(Frozen):
                         )
                     ):
                         raise ValueError(
-                            f"event {eid}: {target_id} is not an earlier or same-day event "
+                            f"event {eid}: {target_id} is not another earlier or same-day event "
                             f"with a claim on {claim.entity} {claim.attribute}"
                         )
 

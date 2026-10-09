@@ -109,7 +109,7 @@ def world_check(
     except OSError as exc:
         typer.echo(f"{source}: {exc.strerror or exc}", err=True)
         raise typer.Exit(code=1) from exc
-    except (yaml.YAMLError, ValidationError) as exc:
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as exc:
         typer.echo(f"{source}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
