@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import datetime as dt
-from collections import Counter
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from digest.models import Attribute, Authority, Frozen, Role
-from digest.project import ProjectConfig
+from digest.project import ProjectConfig, require_unique
 
 EntityType = Literal[
     "part",
@@ -119,16 +119,21 @@ class World(Frozen):
     entities: tuple[Entity, ...]
     events: tuple[WorldEvent, ...]
 
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown timezone {value}") from exc
+        return value
+
     @model_validator(mode="after")
     def _check_references(self) -> Self:
-        for kind, ids in [
-            ("event", [event.id for event in self.events]),
-            ("entity", [entity.id for entity in self.entities]),
-            ("persona", [persona.user_id for persona in self.personas]),
-        ]:
-            for item_id, count in Counter(ids).items():
-                if count > 1:
-                    raise ValueError(f"duplicate {kind} id {item_id}")
+        require_unique("channel", [channel.id for channel in self.channels])
+        require_unique("event", [event.id for event in self.events])
+        require_unique("entity", [entity.id for entity in self.entities])
+        require_unique("persona", [persona.user_id for persona in self.personas])
         self._check_aliases()
         self._check_entities()
         self._check_personas()
@@ -204,7 +209,7 @@ class World(Frozen):
             for claim in event.claims:
                 if claim.entity not in entities:
                     raise ValueError(f"event {eid}: unknown claim entity {claim.entity}")
-                links = [claim.supersedes] if claim.supersedes else []
+                links = [claim.supersedes] if claim.supersedes is not None else []
                 for target_id in [*links, *claim.contradicts]:
                     target = events.get(target_id)
                     if (

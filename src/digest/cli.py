@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import typer
+import yaml
 from pydantic import ValidationError
 
 from digest import __version__
@@ -101,17 +102,18 @@ def world_check(
     ),
 ) -> None:
     """Load and validate a world file; print counts per day and per channel."""
-    path = Path("data/world") / (world or Settings().world) / "world.yaml"
+    source: Path | str = "settings"  # names the error when Settings() fails before a path exists
     try:
-        loaded = load_world(path)
-    except FileNotFoundError as exc:
-        typer.echo(f"{path}: {exc.strerror}", err=True)
+        source = Path("data/world") / (world or Settings().world) / "world.yaml"
+        loaded = load_world(source)
+    except OSError as exc:
+        typer.echo(f"{source}: {exc.strerror or exc}", err=True)
         raise typer.Exit(code=1) from exc
-    except ValidationError as exc:
-        typer.echo(f"{path}: {exc}", err=True)
+    except (yaml.YAMLError, ValidationError) as exc:
+        typer.echo(f"{source}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
-        f"{path}: {len(loaded.events)} events, {len(loaded.personas)} personas, "
+        f"{source}: {len(loaded.events)} events, {len(loaded.personas)} personas, "
         f"{len(loaded.entities)} entities"
     )
     per_day = Counter(event.day for event in loaded.events)

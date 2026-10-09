@@ -508,6 +508,20 @@ events:
     must_see_for: [U0FW01, U0EM01]
     known_by: {U0SC01: 2, U0EM01: 3}
 
+  - id: S3-THERMAL-RUN1
+    day: 2
+    channel: C0ENGEF
+    poster: U0EE01
+    kind: fyi
+    scenario: S3
+    summary: The first TST-THM-02 thermal soak run is marginal on the motor driver, and the EE plans a rerun with the new vent layout.
+    claims:
+      - {entity: TST-THM-02, attribute: status, value: run 1 marginal}
+    tasks:
+      - {task: G-DVT1.thermal, effect: evidence}
+    affected_roles: [EE, ME]
+    known_by: {U0EE01: 2, U0ME01: 2}
+
   # Day 3, Wednesday 2026-10-14
   - id: S2-PO
     day: 3
@@ -662,9 +676,11 @@ events:
     poster: U0EM01
     kind: risk
     scenario: S3
-    summary: G-DVT1 is on day 9 and the team is 3 days into the 7-day buffer, with the thermal review and the top-cover DFM review still open.
+    summary: G-DVT1 is on day 9 and the team is 4 days into the 7-day buffer, with the thermal review and the top-cover DFM review still open.
     claims:
       - {entity: TST-THM-02, attribute: status, value: open}
+    tasks:
+      - {task: G-DVT1.thermal, effect: evidence}
     affected_roles: [EM, PM, ME]
     must_see_for: [U0EM01, U0PM01, U0ME01]
     known_by: {U0EM01: 6, U0PM01: 6, U0ME01: 6}

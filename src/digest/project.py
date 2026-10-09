@@ -49,8 +49,8 @@ class ProjectConfig(Frozen):
                     f"phase {later.phase} starts {later.from_date}, "
                     f"not after {earlier.phase} ({earlier.from_date})"
                 )
-        _require_unique("gate", [gate.id for gate in self.gates])
-        _require_unique(
+        require_unique("gate", [gate.id for gate in self.gates])
+        require_unique(
             "checklist task", [task.id for gate in self.gates for task in gate.checklist]
         )
         return self
@@ -69,7 +69,7 @@ class ProjectConfig(Frozen):
         raise KeyError(task_id)
 
 
-def _require_unique(kind: str, ids: list[str]) -> None:
+def require_unique(kind: str, ids: list[str]) -> None:
     seen: set[str] = set()
     for item_id in ids:
         if item_id in seen:
