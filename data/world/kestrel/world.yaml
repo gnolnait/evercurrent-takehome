@@ -1,6 +1,6 @@
 # Scripted ground truth for the Kestrel K2 warehouse AMR, ten working days from EVT-2 exit
-# to the DVT-1 build. The scenario ids S1 to S15 and N1 to N5 are the ones that SPEC.md
-# section 6 and docs/plans/m1-store-replay.md B3.5 name.
+# to the DVT-1 build. The scenario ids S1 to S15 and N1 to N5 are the ones that
+# docs/plans/m1-store-replay.md B3.5 names.
 name: kestrel
 program: Kestrel K2
 workspace_url: https://kestrel-k2.slack.com
