@@ -827,8 +827,8 @@ def test_ambiguous_heredoc_git_still_blocks(repos):
 # --------------------------------------------------------------------------------------
 # Linked worktrees share the project's git dir but carry their own HEAD. The branch
 # that decides a commit is the one of the checkout the commit runs in, not the one
-# of the main checkout (false block 2026-10-09: a commit in a feature worktree was
-# refused because the main checkout sat on `main`).
+# of the main checkout. Found while investigating the 2026-10-09 false block, whose
+# own cause was the Git Bash drive path covered by the msys tests below.
 # --------------------------------------------------------------------------------------
 
 
@@ -890,7 +890,7 @@ def test_msys_to_windows_maps_only_drive_paths(path, expected):
 def test_allows_cd_to_sibling_via_msys_drive_path(repos):
     """Git Bash writes `/c/Users/...`, and the hook runs git.exe directly,
     which cannot `-C` into that form. Map it, or the sibling is unresolvable
-    and its commit fails closed."""
+    and its commit fails closed (the false block of 2026-10-09)."""
     sibling = str(repos["sibling"])
     msys = "/" + sibling[0].lower() + sibling[2:]
     cmd = f"cd {msys} && git commit -m update"
