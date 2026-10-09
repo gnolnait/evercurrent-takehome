@@ -18,12 +18,14 @@ from pydantic import BaseModel
 
 from digest.llm import (
     LLMOutputError,
+    LLMOutputInvalid,
     LLMRequest,
     LLMResponse,
     LogicalModel,
     Message,
     ModelIds,
     load_model_ids,
+    strict_schema,
 )
 from digest.llm.anthropic_api import AnthropicBackend
 from digest.llm.cassette import CassetteMiss, Cassettes, request_key
@@ -80,6 +82,11 @@ class Item(BaseModel):
 
 class Outer(BaseModel):
     item: Item
+
+
+class WithMap(BaseModel):
+    item: Item
+    labels: dict[str, str]
 
 
 class Choice(Enum):
@@ -499,10 +506,10 @@ def test_extract_retries_backend_output_error_once(
     sent = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
     valid = response.model_copy(update={"text": '{"count":2}', "data": {"count": 2}})
     second: LLMResponse | LLMOutputError = (
-        valid if second_valid else LLMOutputError("llm_output_not_json", raw="second garbage")
+        valid if second_valid else LLMOutputInvalid("llm_output_not_json", raw="second garbage")
     )
     backend = RaisingBackend(
-        LLMOutputError("llm_output_not_json", raw="garbage"),
+        LLMOutputInvalid("llm_output_not_json", raw="garbage"),
         second,
     )
     cassettes = Cassettes(tmp_path)
@@ -517,6 +524,38 @@ def test_extract_retries_backend_output_error_once(
         assert error.value.raw == "second garbage"
         assert cassettes.get(request_key(sent)) is None
     assert backend.requests == [sent, sent]
+
+
+def test_extract_does_not_retry_transport_error(
+    tmp_path: Path,
+    llm_request: LLMRequest,
+    response: LLMResponse,
+) -> None:
+    """Setup a transport error / Action extract / Assert no retry or cassette write."""
+    sent = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
+    error = LLMOutputError("openrouter status 503", raw="body")
+    backend = RaisingBackend(error, response)
+    cassettes = Cassettes(tmp_path)
+
+    with pytest.raises(LLMOutputError) as caught:
+        LLM(backend, cassettes, "record").extract(llm_request, Item)
+    assert caught.value is error
+    assert caught.value.raw == "body"
+    assert backend.requests == [sent]
+    assert cassettes.get(request_key(sent)) is None
+
+
+def test_strict_schema_preserves_existing_additional_properties() -> None:
+    """Setup nested object schemas / Action normalize / Assert values and input immutability."""
+    schema = WithMap.model_json_schema()
+    original = json.loads(json.dumps(schema))
+
+    normalized = strict_schema(schema)
+
+    assert normalized["additionalProperties"] is False
+    assert normalized["$defs"]["Item"]["additionalProperties"] is False
+    assert normalized["properties"]["labels"]["additionalProperties"] == {"type": "string"}
+    assert schema == original
 
 
 def sdk_message(
@@ -741,6 +780,25 @@ def test_openrouter_rejects_null_content(llm_request: LLMRequest, models: ModelI
         with pytest.raises(LLMOutputError) as error:
             backend.complete(llm_request)
     assert error.value.raw == ""
+
+
+def test_openrouter_rejects_success_payload_without_choices(
+    llm_request: LLMRequest, models: ModelIds
+) -> None:
+    """Setup a 2xx error payload / Action complete / Assert its raw body and one call."""
+    raw = '{"error":{"message":"x"}}'
+    calls: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        calls.append(request)
+        return httpx2.Response(200, text=raw, headers={"content-type": "application/json"})
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend("test-key", models, client=client)
+        with pytest.raises(LLMOutputError) as error:
+            backend.complete(llm_request)
+    assert error.value.raw == raw
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
