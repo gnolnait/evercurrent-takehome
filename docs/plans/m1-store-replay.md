@@ -1,8 +1,7 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3.7, 2026-10-09 (Codex `-p review` and Claude lenses)
-and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
-Converges before any test is written.
+Status: v3.7, 2026-10-09. Process stage 1 (`docs/process.md`) for M1, amended as the
+units were built; stages 2 to 4 ran in the unit pull requests.
 
 M1 from `SPEC.md` section 9: skeleton, models, SQLite store, replay ingest, cassette
 wrapper, world schema and generator scaffold, gate checklist config. Tests for store and
@@ -484,17 +483,18 @@ always calls the backend, never reads or writes a cassette. `complete` returns
 
 B2.5 `extract` sends `request` with `output_schema = model_cls.model_json_schema()`
 when `request.output_schema` is None and validates `response.data` with
-`model_cls.model_validate`. On a validation failure, or an `LLMOutputError` from the
-backend (content that is not a JSON object), in `record` or `live` mode it calls
-`backend.complete` directly once more, bypassing the cassette read, validates
+`model_cls.model_validate`. On invalid output, that is a validation failure or an
+`LLMOutputInvalid` from the backend (content that is not a JSON object), in `record` or
+`live` mode it calls `backend.complete` directly once more, bypassing the cassette read, validates
 again, and in `record` mode overwrites the cassette with the response that
 validated; a second failure raises `LLMOutputError` carrying the raw text. In
 `replay` mode there is no retry: a cassette that fails validation raises at once,
 with no network. This is the single retry D15 describes, placed in the wrapper so
 every backend gets it. `judge` builds the schema `{"type": "object", "properties":
 {"choice": {"enum": [...]}}, "required": ["choice"], "additionalProperties": false}`
-and returns the enum member, with the same retry. The retry logs `llm_retry` with the
-`llm_call` fields.
+and returns the enum member, with the same retry. The retry logs `llm_retry` with the `llm_call` fields and the first failure's
+reason. A plain `LLMOutputError` (status, truncation, refusal, empty content) is not
+retried; a second call with the same request cannot succeed.
 
 B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model =
 models.resolve(request.model, "anthropic_api")`, `system`, `messages`, `max_tokens` and,
@@ -794,8 +794,12 @@ a gate with an empty checklist.
 
 U1. Put `OPENROUTER_API_KEY` in `.env` (never in chat). The first real recording (M2)
 needs it; M1 does not. The first call in M2 is a spike: one extraction request through
-the gateway with a JSON schema against a Claude model, to confirm the schema is
-honoured before any cassette is recorded.
+the gateway with a JSON schema against a Claude model, to confirm the schema is honoured
+before any cassette is recorded. The spike also settles two open points: OpenAI strict
+mode requires every property in `required`, which `strict_schema` does not add, so an
+extraction schema with defaulted fields may need nullable required fields for the GPT
+renderer and judge; and `config/models.yaml` maps `render` and `judge` to Claude on the
+API backend, which is live-mode only (D12 holds through the gateway).
 
 U2. Decided 2026-10-08: the world's timezone (`America/Los_Angeles`) for `--until`.
 
