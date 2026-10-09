@@ -337,6 +337,7 @@ def validation_schema(operation: Operation) -> dict[str, Any]:
         "type": "object",
         "properties": {"choice": {"enum": ["keep", "drop"]}},
         "required": ["choice"],
+        "additionalProperties": False,
     }
 
 
@@ -423,6 +424,37 @@ def test_validation_retries_once_and_overwrites_only_valid_output(
         assert Cassettes(tmp_path).get(key) == first
     if mode == "live":
         assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("retry_valid", [True, False])
+def test_extract_retries_non_json_output_once(
+    tmp_path: Path,
+    llm_request: LLMRequest,
+    response: LLMResponse,
+    retry_valid: bool,
+) -> None:
+    """Setup non-JSON output / Action extract / Assert one retry and cassette state."""
+    sent = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
+    first = response.model_copy(update={"text": "first text", "data": None})
+    second = response.model_copy(
+        update={
+            "text": '{"count":2}' if retry_valid else "second text",
+            "data": {"count": 2} if retry_valid else None,
+        }
+    )
+    backend = FakeBackend(first, second)
+    cassettes = Cassettes(tmp_path)
+    llm = LLM(backend, cassettes, "record")
+
+    if retry_valid:
+        assert llm.extract(llm_request, Item) == Item(count=2)
+        assert cassettes.get(request_key(sent)) == second
+    else:
+        with pytest.raises(LLMOutputError) as error:
+            llm.extract(llm_request, Item)
+        assert error.value.raw == "second text"
+        assert cassettes.get(request_key(sent)) == first
+    assert backend.requests == [sent, sent]
 
 
 def sdk_message(text: str, stop_reason: str = "end_turn", model: str = "api-extract") -> SDKMessage:
