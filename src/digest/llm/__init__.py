@@ -6,6 +6,7 @@ them (SPEC section 6). The client wrapper lives in `digest.llm.client`.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -52,9 +53,35 @@ class LLMOutputError(ValueError):
 def parse_json_output(text: str) -> dict[str, Any]:
     """Parse the text a backend returned for a request with an `output_schema`."""
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except json.JSONDecodeError as error:
         raise LLMOutputError("llm_output_not_json", raw=text) from error
+    if not isinstance(data, dict):
+        raise LLMOutputError("llm_output_not_object", raw=text)
+    return data
+
+
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy in which every object schema has `additionalProperties: false`.
+
+    Anthropic structured outputs and OpenAI strict mode reject an object schema without it.
+    An object schema that already sets `additionalProperties` keeps its value.
+    """
+
+    def close(node: dict[str, Any]) -> None:
+        if node.get("type") == "object" or "properties" in node:
+            node.setdefault("additionalProperties", False)
+        children = [*node.get("properties", {}).values(), *node.get("$defs", {}).values()]
+        for key in ("anyOf", "oneOf", "allOf"):
+            children.extend(node.get(key, []))
+        if isinstance(node.get("items"), dict):
+            children.append(node["items"])
+        for child in children:
+            close(child)
+
+    strict = copy.deepcopy(schema)
+    close(strict)
+    return strict
 
 
 class Backend(Protocol):

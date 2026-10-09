@@ -6,7 +6,14 @@ import anthropic
 from anthropic.types import TextBlock
 from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 
-from digest.llm import LLMOutputError, LLMRequest, LLMResponse, ModelIds, parse_json_output
+from digest.llm import (
+    LLMOutputError,
+    LLMRequest,
+    LLMResponse,
+    ModelIds,
+    parse_json_output,
+    strict_schema,
+)
 
 
 class AnthropicBackend:
@@ -27,11 +34,15 @@ class AnthropicBackend:
         }
         if request.output_schema is not None:
             params["output_config"] = {
-                "format": {"type": "json_schema", "schema": request.output_schema}
+                "format": {"type": "json_schema", "schema": strict_schema(request.output_schema)}
             }
         message = self.client.messages.create(**params)
-        text = next(block.text for block in message.content if isinstance(block, TextBlock))
-        if message.stop_reason in ("max_tokens", "refusal"):
+        text = next((b.text for b in message.content if isinstance(b, TextBlock)), None)
+        if text is None:
+            raise LLMOutputError(
+                f"anthropic no text block, stop_reason {message.stop_reason}", raw=""
+            )
+        if message.stop_reason in ("max_tokens", "refusal", "model_context_window_exceeded"):
             raise LLMOutputError(f"anthropic stop_reason {message.stop_reason}", raw=text)
         return LLMResponse(
             text=text,

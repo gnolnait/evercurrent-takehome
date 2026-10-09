@@ -6,7 +6,14 @@ from typing import Any
 
 import httpx2
 
-from digest.llm import LLMOutputError, LLMRequest, LLMResponse, ModelIds, parse_json_output
+from digest.llm import (
+    LLMOutputError,
+    LLMRequest,
+    LLMResponse,
+    ModelIds,
+    parse_json_output,
+    strict_schema,
+)
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -27,8 +34,8 @@ class OpenRouterBackend:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         model = self.models.resolve(request.model, self.name)
-        # The configured models do not list `temperature` in supported_parameters, and
-        # require_parameters would then exclude every endpoint, so it is not sent.
+        # The configured models do not list `temperature` in supported_parameters, so it
+        # is not sent. With require_parameters it would also exclude every endpoint.
         body: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -40,7 +47,11 @@ class OpenRouterBackend:
         if request.output_schema is not None:
             body["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": "out", "strict": True, "schema": request.output_schema},
+                "json_schema": {
+                    "name": "out",
+                    "strict": True,
+                    "schema": strict_schema(request.output_schema),
+                },
             }
             # Route only to an endpoint that honours the schema.
             body["provider"] = {"require_parameters": True}
@@ -52,9 +63,13 @@ class OpenRouterBackend:
         payload = response.json()
         choice = payload["choices"][0]
         text = choice["message"]["content"]
-        if choice["finish_reason"] in ("length", "content_filter"):
+        if text is None:
+            raise LLMOutputError(
+                f"openrouter null content, finish_reason {choice['finish_reason']}", raw=""
+            )
+        if choice["finish_reason"] in ("length", "content_filter", "error"):
             raise LLMOutputError(f"openrouter finish_reason {choice['finish_reason']}", raw=text)
-        usage = payload.get("usage", {})
+        usage = payload.get("usage") or {}
         return LLMResponse(
             text=text,
             data=parse_json_output(text) if request.output_schema is not None else None,
