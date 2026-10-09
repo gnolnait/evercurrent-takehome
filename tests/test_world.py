@@ -422,7 +422,7 @@ def test_world_check_reports_file_errors_without_traceback(
 
     assert result.exit_code == 1
     assert f"data/world/{world_name}/world.yaml" in result.output.replace("\\", "/")
-    assert "Traceback" not in result.output
+    assert result.exc_info is None or result.exc_info[0] is SystemExit
 
 
 def test_bundled_world_contains_planned_program() -> None:
@@ -581,3 +581,25 @@ def test_bundled_events_match_world_and_working_days() -> None:
         assert event.channel_id in channel_ids
         assert event.user_id in persona_ids
         assert event.at.astimezone(timezone).date() in working_days
+
+
+def test_bundled_world_pins_s3_thermal_cadence_absence() -> None:
+    """Setup the bundled S3 timeline; inspect thermal evidence; assert its day-6 cadence gap."""
+    path = Path(__file__).resolve().parents[1] / "data/world/kestrel/world.yaml"
+    world = load_world(path)
+    task = world.project.task("G-DVT1.thermal")
+
+    evidence_days = [
+        event.day
+        for event in world.events
+        for touch in event.tasks
+        if touch.task == task.id and touch.effect == "evidence"
+    ]
+    touched_days = {
+        event.day for event in world.events for touch in event.tasks if touch.task == task.id
+    }
+    last_evidence_day = max(day for day in evidence_days if day < 6)
+
+    assert last_evidence_day == 2
+    assert touched_days.isdisjoint(range(3, 7))
+    assert 6 - last_evidence_day > task.expected_cadence_days
