@@ -1,6 +1,6 @@
 # Plan: M1 store, replay, cassette and world schema
 
-Status: v3.7, 2026-10-09, after four review rounds and unit 1's implementation review (Codex `-p review` and Claude lenses)
+Status: v3.7, 2026-10-09 (Codex `-p review` and Claude lenses)
 and the user's design review (SPEC v0.3). Process stage 1 (`docs/process.md`).
 Converges before any test is written.
 
@@ -170,6 +170,7 @@ class ThreadDelta(BaseModel, frozen=True):
     changed: tuple[Event, ...] # rows with since_ts < event_ts <= last_ts, ts order; deleted rows included
 
 class Store:
+    path: Path | Literal[":memory:"]
     @classmethod
     def open(cls, path: Path | Literal[":memory:"]) -> Store
     def close(self) -> None
@@ -178,7 +179,8 @@ class Store:
     def set_meta(self, key: str, value: str) -> None
     def get_meta(self, key: str) -> str | None
 
-    def upsert_events(self, events: Iterable[Event]) -> int        # rows written
+    def upsert_events(self, events: Iterable[Event], *, meta: Mapping[str, str] | None = None) -> int
+        # rows written; meta pairs land in the same transaction as the rows
     def events_in_thread(self, thread_id: str, as_of: datetime) -> list[Event]
     def search_events(self, query: str, as_of: datetime, limit: int = 50) -> list[Event]
 
@@ -210,11 +212,10 @@ later than the day, then ingests and writes `meta`. The CLI resolves the world n
 the store path, calls it, and maps `ReplayRefused`, `ReplayFormatError` and the
 `Store.open` errors to a reason on stderr and exit 1.
 
-CLI: `digest replay --until YYYY-MM-DD [--world NAME] [--db PATH]`. `--world` defaults
-to `Settings.world`. Reads `load_world_header(data/world/NAME/world.yaml)`, opens the
-store at `--db` or `data/NAME.sqlite`, refuses a store whose `meta.world` is a
-different world or whose `meta.until` is later than the requested day, ingests
-`data/world/NAME/events.jsonl`, writes `meta` and prints the report.
+CLI: `digest replay --until YYYY-MM-DD [--world NAME] [--db PATH]`. `--world` defaults to
+`Settings.world`; the store path is `--db`, else `Settings.db` (`DIGEST_DB`), else
+`data/NAME.sqlite`. The CLI checks that the world file exists before it opens the store,
+calls `replay_world`, and prints the report as JSON.
 
 ### Schema
 
