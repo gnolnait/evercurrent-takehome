@@ -48,6 +48,21 @@ class FakeBackend:
         return next(self.responses)
 
 
+class RaisingBackend:
+    name = "fake"
+
+    def __init__(self, *results: LLMResponse | LLMOutputError) -> None:
+        self.results = iter(results)
+        self.requests: list[LLMRequest] = []
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        result = next(self.results)
+        if isinstance(result, LLMOutputError):
+            raise result
+        return result
+
+
 class FakeSDKClient:
     def __init__(self, response: SDKMessage) -> None:
         self.messages = self
@@ -61,6 +76,10 @@ class FakeSDKClient:
 
 class Item(BaseModel):
     count: int
+
+
+class Outer(BaseModel):
+    item: Item
 
 
 class Choice(Enum):
@@ -431,6 +450,7 @@ def test_extract_retries_non_json_output_once(
     tmp_path: Path,
     llm_request: LLMRequest,
     response: LLMResponse,
+    caplog: pytest.LogCaptureFixture,
     retry_valid: bool,
 ) -> None:
     """Setup non-JSON output / Action extract / Assert one retry and cassette state."""
@@ -446,24 +466,73 @@ def test_extract_retries_non_json_output_once(
     cassettes = Cassettes(tmp_path)
     llm = LLM(backend, cassettes, "record")
 
+    with caplog.at_level(logging.INFO):
+        if retry_valid:
+            assert llm.extract(llm_request, Item) == Item(count=2)
+            assert cassettes.get(request_key(sent)) == second
+        else:
+            with pytest.raises(LLMOutputError) as error:
+                llm.extract(llm_request, Item)
+            assert error.value.raw == "second text"
+            assert cassettes.get(request_key(sent)) == first
+    assert backend.requests == [sent, sent]
     if retry_valid:
+        records = [record for record in caplog.records if record.getMessage() == "llm_retry"]
+        assert len(records) == 1
+        fields = vars(records[0])
+        assert fields["key"] == request_key(sent)
+        assert fields["mode"] == "record"
+        assert fields["backend"] == second.backend
+        assert fields["model"] == second.model
+        assert fields["input_tokens"] == second.input_tokens
+        assert fields["output_tokens"] == second.output_tokens
+
+
+@pytest.mark.parametrize("second_valid", [True, False])
+def test_extract_retries_backend_output_error_once(
+    tmp_path: Path,
+    llm_request: LLMRequest,
+    response: LLMResponse,
+    second_valid: bool,
+) -> None:
+    """Setup backend output errors / Action extract / Assert one retry and final result."""
+    sent = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
+    valid = response.model_copy(update={"text": '{"count":2}', "data": {"count": 2}})
+    second: LLMResponse | LLMOutputError = (
+        valid if second_valid else LLMOutputError("llm_output_not_json", raw="second garbage")
+    )
+    backend = RaisingBackend(
+        LLMOutputError("llm_output_not_json", raw="garbage"),
+        second,
+    )
+    cassettes = Cassettes(tmp_path)
+    llm = LLM(backend, cassettes, "record")
+
+    if second_valid:
         assert llm.extract(llm_request, Item) == Item(count=2)
-        assert cassettes.get(request_key(sent)) == second
+        assert cassettes.get(request_key(sent)) == valid
     else:
         with pytest.raises(LLMOutputError) as error:
             llm.extract(llm_request, Item)
-        assert error.value.raw == "second text"
-        assert cassettes.get(request_key(sent)) == first
+        assert error.value.raw == "second garbage"
+        assert cassettes.get(request_key(sent)) is None
     assert backend.requests == [sent, sent]
 
 
-def sdk_message(text: str, stop_reason: str = "end_turn", model: str = "api-extract") -> SDKMessage:
+def sdk_message(
+    text: str,
+    stop_reason: str = "end_turn",
+    model: str = "api-extract",
+    content: list[dict[str, Any]] | None = None,
+) -> SDKMessage:
     payload = {
         "id": "msg_test",
         "type": "message",
         "role": "assistant",
         "model": model,
-        "content": [
+        "content": content
+        if content is not None
+        else [
             {"type": "thinking", "thinking": "internal", "signature": "test"},
             {"type": "text", "text": text},
             {"type": "text", "text": "Do not append this block"},
@@ -485,9 +554,10 @@ def test_anthropic_maps_sdk_request_and_response(
     logical: LogicalModel,
 ) -> None:
     """Setup an SDK message / Action complete / Assert SDK kwargs and parsed fields."""
-    schema = Item.model_json_schema() if structured else None
+    schema = Outer.model_json_schema() if structured else None
     request = llm_request.model_copy(update={"model": logical, "output_schema": schema})
-    text = '{"count":2}' if structured else "plain text"
+    original_request = request.model_copy(deep=True)
+    text = '{"item":{"count":2}}' if structured else "plain text"
     model_id = f"api-{logical}"
     client = FakeSDKClient(sdk_message(text, model=model_id))
     result = AnthropicBackend(cast(anthropic.Anthropic, client), models).complete(request)
@@ -498,12 +568,17 @@ def test_anthropic_maps_sdk_request_and_response(
         "max_tokens": 123,
     }
     if structured:
-        expected["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+        wire_schema = json.loads(json.dumps(schema))
+        wire_schema["additionalProperties"] = False
+        wire_schema["$defs"]["Item"]["additionalProperties"] = False
+        expected["output_config"] = {"format": {"type": "json_schema", "schema": wire_schema}}
     assert client.calls == [expected]
     assert "temperature" not in client.calls[0]
+    assert request.output_schema == original_request.output_schema
+    assert request_key(request) == request_key(original_request)
     assert result == LLMResponse(
         text=text,
-        data={"count": 2} if structured else None,
+        data={"item": {"count": 2}} if structured else None,
         backend="anthropic_api",
         model=model_id,
         input_tokens=17,
@@ -511,19 +586,20 @@ def test_anthropic_maps_sdk_request_and_response(
     )
 
 
-def test_anthropic_rejects_non_json_structured_output(
-    llm_request: LLMRequest, models: ModelIds
+@pytest.mark.parametrize("raw", ["not json", "[1]", '"x"'])
+def test_anthropic_rejects_non_object_structured_output(
+    llm_request: LLMRequest, models: ModelIds, raw: str
 ) -> None:
-    """Setup non-JSON SDK content / Action complete / Assert the raw output error."""
+    """Setup invalid SDK content / Action complete / Assert the raw output error."""
     request = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
-    client = FakeSDKClient(sdk_message("not json"))
+    client = FakeSDKClient(sdk_message(raw))
     backend = AnthropicBackend(cast(anthropic.Anthropic, client), models)
     with pytest.raises(LLMOutputError) as error:
         backend.complete(request)
-    assert error.value.raw == "not json"
+    assert error.value.raw == raw
 
 
-@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal", "model_context_window_exceeded"])
 def test_anthropic_rejects_incomplete_output(
     llm_request: LLMRequest, models: ModelIds, stop_reason: str
 ) -> None:
@@ -535,20 +611,51 @@ def test_anthropic_rejects_incomplete_output(
     assert len(client.calls) == 1
 
 
+@pytest.mark.parametrize(
+    "content",
+    [[], [{"type": "thinking", "thinking": "internal", "signature": "test"}]],
+)
+@pytest.mark.parametrize(
+    "stop_reason",
+    [
+        "end_turn",
+        "max_tokens",
+        "stop_sequence",
+        "tool_use",
+        "pause_turn",
+        "refusal",
+        "model_context_window_exceeded",
+    ],
+)
+def test_anthropic_rejects_message_without_text(
+    llm_request: LLMRequest,
+    models: ModelIds,
+    content: list[dict[str, Any]],
+    stop_reason: str,
+) -> None:
+    """Setup an SDK message without text / Action complete / Assert an empty raw error."""
+    client = FakeSDKClient(sdk_message("", stop_reason, content=content))
+    backend = AnthropicBackend(cast(anthropic.Anthropic, client), models)
+    with pytest.raises(LLMOutputError) as error:
+        backend.complete(llm_request)
+    assert error.value.raw == ""
+
+
 @pytest.mark.parametrize("structured", [False, True])
-@pytest.mark.parametrize("with_usage", [False, True])
+@pytest.mark.parametrize("usage", ["missing", "values", "null"])
 @pytest.mark.parametrize("logical", ["extract", "judge"])
 def test_openrouter_maps_http_request_and_response(
     llm_request: LLMRequest,
     models: ModelIds,
     structured: bool,
-    with_usage: bool,
+    usage: Literal["missing", "values", "null"],
     logical: LogicalModel,
 ) -> None:
     """Setup a gateway reply / Action complete / Assert HTTP fields and parsed response."""
-    schema = Item.model_json_schema() if structured else None
+    schema = Outer.model_json_schema() if structured else None
     request = llm_request.model_copy(update={"model": logical, "output_schema": schema})
-    text = '{"count":2}' if structured else "plain text"
+    original_request = request.model_copy(deep=True)
+    text = '{"item":{"count":2}}' if structured else "plain text"
     seen: list[httpx2.Request] = []
 
     def handler(incoming: httpx2.Request) -> httpx2.Response:
@@ -556,8 +663,10 @@ def test_openrouter_maps_http_request_and_response(
         payload: dict[str, Any] = {
             "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
         }
-        if with_usage:
+        if usage == "values":
             payload["usage"] = {"prompt_tokens": 17, "completion_tokens": 5}
+        elif usage == "null":
+            payload["usage"] = None
         return httpx2.Response(200, json=payload)
 
     with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
@@ -576,44 +685,73 @@ def test_openrouter_maps_http_request_and_response(
     assert "temperature" not in body
     assert body["max_tokens"] == 123
     if structured:
+        wire_schema = json.loads(json.dumps(schema))
+        wire_schema["additionalProperties"] = False
+        wire_schema["$defs"]["Item"]["additionalProperties"] = False
         assert body["response_format"] == {
             "type": "json_schema",
-            "json_schema": {"name": "out", "strict": True, "schema": schema},
+            "json_schema": {"name": "out", "strict": True, "schema": wire_schema},
         }
         assert body["provider"] == {"require_parameters": True}
     else:
         assert "response_format" not in body
+    assert request.output_schema == original_request.output_schema
+    assert request_key(request) == request_key(original_request)
     assert result == LLMResponse(
         text=text,
-        data={"count": 2} if structured else None,
+        data={"item": {"count": 2}} if structured else None,
         backend="openrouter",
         model=model_id,
-        input_tokens=17 if with_usage else None,
-        output_tokens=5 if with_usage else None,
+        input_tokens=17 if usage == "values" else None,
+        output_tokens=5 if usage == "values" else None,
     )
 
 
-def test_openrouter_rejects_non_json_structured_output(
-    llm_request: LLMRequest, models: ModelIds
+@pytest.mark.parametrize("raw", ["not json", "[1]", '"x"'])
+def test_openrouter_rejects_non_object_structured_output(
+    llm_request: LLMRequest, models: ModelIds, raw: str
 ) -> None:
-    """Setup non-JSON gateway content / Action complete / Assert the raw output error."""
+    """Setup invalid gateway content / Action complete / Assert the raw output error."""
     request = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
 
     def handler(incoming: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
-            json={"choices": [{"message": {"content": "not json"}, "finish_reason": "stop"}]},
+            json={"choices": [{"message": {"content": raw}, "finish_reason": "stop"}]},
         )
 
     with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         backend = OpenRouterBackend("test-key", models, client=client)
         with pytest.raises(LLMOutputError) as error:
             backend.complete(request)
-    assert error.value.raw == "not json"
+    assert error.value.raw == raw
+
+
+def test_openrouter_rejects_null_content(llm_request: LLMRequest, models: ModelIds) -> None:
+    """Setup null gateway content / Action complete / Assert an empty raw output error."""
+
+    def handler(incoming: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            json={"choices": [{"message": {"content": None}, "finish_reason": "stop"}]},
+        )
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend("test-key", models, client=client)
+        with pytest.raises(LLMOutputError) as error:
+            backend.complete(llm_request)
+    assert error.value.raw == ""
 
 
 @pytest.mark.parametrize(
-    ("status", "reason"), [(400, "stop"), (503, "stop"), (200, "length"), (200, "content_filter")]
+    ("status", "reason"),
+    [
+        (400, "stop"),
+        (503, "stop"),
+        (200, "length"),
+        (200, "content_filter"),
+        (200, "error"),
+    ],
 )
 def test_openrouter_rejects_http_errors_and_incomplete_output(
     llm_request: LLMRequest, models: ModelIds, status: int, reason: str
