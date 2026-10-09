@@ -712,8 +712,8 @@ user_id; a claim never links to its own event; a human persona has a role and a 
 `known_by` value is in `1..days`; a poster is a member of the channel they post in;
 `must_see_for` and `known_by` name human personas only; channel ids, event ids, entity
 ids and persona user_ids are unique; `timezone` is a known IANA zone; the union of all `aliases` (entities and personas) has
-no duplicate, so the glossary is unambiguous. Each failure names the event, entity or
-persona id.
+no duplicate, so the glossary is unambiguous. Each failure names the event, entity, persona or channel id, or the
+rejected value.
 
 B3.2 `ProjectConfig.phases` must be ascending by `from_date` with distinct dates;
 `phase_on(day)` returns the phase of the latest window with `from_date <= day` and
@@ -751,8 +751,9 @@ work; M1 ships a human-authored `events.jsonl` of about ten lines covering S1 an
 (part of the human-authored anchor slice, SPEC section 6) so `digest replay` has
 input.
 
-B3.6 `config/project.yaml` is the same `ProjectConfig` shape as `world.project`,
-written for the live workspace. It validates with `load_project`.
+B3.6 `config/project.yaml` is the same `ProjectConfig` shape as `world.project`, written
+for the live workspace. It validates with `load_project`. Until the live workspace
+diverges it equals the fixture's `world.project`, and a test pins that.
 
 ### Tests
 
