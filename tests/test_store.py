@@ -1,3 +1,4 @@
+import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -100,8 +101,11 @@ def test_edit_and_delete_remain_readable(store: Store, deleted: bool) -> None:
 @pytest.mark.parametrize("field", ["ts", "event_ts", "thread_ts"])
 @pytest.mark.parametrize("bad", ["1760000000.1", "176000000.000001", "1760000000x000001"])
 def test_event_rejects_malformed_timestamp(field: str, bad: str) -> None:
-    with pytest.raises(ValidationError, match=field):
-        event(**{field: bad})
+    changes = {field: bad}
+    if field == "ts":
+        changes["event_ts"] = ROOT
+    with pytest.raises(ValidationError, match=rf"(?m)^{field}\n"):
+        event(**changes)
 
 
 def test_event_rejects_observation_before_post() -> None:
@@ -144,7 +148,8 @@ def test_search_keeps_identifier_tokens(store: Store, token: str) -> None:
 
 def test_search_quotes_terms_and_honors_limit(store: Store) -> None:
     rows = [event(f"1760000000.{i:06d}") for i in range(1, 5)]
-    store.upsert_events([*rows, event("1760000000.000005", text="PN-31010 only")])
+    rows.append(event("1760000000.000005", text="Rev B for PN-31010"))
+    store.upsert_events([*rows, event("1760000000.000006", text="PN-31010 only")])
     assert {row.ts for row in store.search_events("PN-31010 Rev", AS_OF)} == {
         row.ts for row in rows
     }
@@ -260,6 +265,9 @@ def test_file_store_creates_parents_and_preserves_data(tmp_path: Path) -> None:
         (delta,) = db.thread_deltas("extract", "v1", "extract", AS_OF)
         db.record_stage_run(run(delta))
     assert path.is_file()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+        # foreign_keys is per connection, and Store does not expose its connection.
     with Store.open(path) as reopened:
         assert reopened.get_meta("world") == "kestrel"
         assert reopened.events_in_thread(event().thread_id, AS_OF) == [event()]

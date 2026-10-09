@@ -131,7 +131,8 @@ def test_read_events_errors_name_file_and_line(tmp_path: Path, fault: str) -> No
     elif fault == "bad_event_ts":
         invalid["event_ts"] = "1760000002.1"
     elif fault == "before_post":
-        invalid["event_ts"] = "1759999999.000001"
+        invalid["ts"] = "1760000002.000001"
+        invalid["event_ts"] = "1760000001.000001"
     elif fault == "out_of_order":
         invalid["event_ts"] = "1760000001.000001"
     bad_line = "{broken" if fault == "json" else json.dumps(invalid)
@@ -304,7 +305,8 @@ def test_cli_replay_refuses_invalid_target(cli_world: Path, tmp_path: Path, reas
     )
     assert result.exit_code == 1, result.output
     if reason == "missing_world":
-        assert "missing" in result.output.lower()
+        output = result.output.lower().replace("\\", "/")
+        assert "no such world" in output or "data/world/missing" in output
     elif reason == "different_world":
         assert "world" in result.output.lower() and "other" in result.output
     else:
@@ -314,6 +316,42 @@ def test_cli_replay_refuses_invalid_target(cli_world: Path, tmp_path: Path, reas
         assert db.get_meta("world") == original_world
         assert db.get_meta("until") == previous
         assert db.events_in_thread(f"C1:{ROOT}", AS_OF) == [event(text="preserved")]
+
+
+@pytest.mark.parametrize(
+    "previous",
+    ["2026-10-14T06:59:59.999999+00:00", "2026-10-13T06:59:59.999999+00:00"],
+    ids=["equal", "earlier"],
+)
+def test_cli_replay_accepts_existing_store(cli_world: Path, tmp_path: Path, previous: str) -> None:
+    """Setup a compatible store; replay its day; assert its rows remain and metadata advances."""
+    existing = event("1759999999.000001", text="preserved")
+    db_path = tmp_path / "existing.sqlite"
+    with Store.open(db_path) as db:
+        db.set_meta("world", "kestrel")
+        db.set_meta("until", previous)
+        db.upsert_events([existing])
+    result = runner.invoke(
+        app, ["replay", "--until", "2026-10-13", "--world", "kestrel", "--db", str(db_path)]
+    )
+    assert result.exit_code == 0, result.output
+    with Store.open(db_path) as db:
+        assert db.get_meta("until") == "2026-10-14T06:59:59.999999+00:00"
+        assert db.events_in_thread(f"C1:{ROOT}", AS_OF) == [existing, event()]
+
+
+def test_cli_replay_does_not_mark_incomplete_ingest(cli_world: Path, tmp_path: Path) -> None:
+    """Setup a malformed corpus; replay it; assert the failure line and absent watermark."""
+    with (cli_world / "events.jsonl").open("a", encoding="utf-8") as corpus:
+        corpus.write("{broken\n")
+    db_path = tmp_path / "malformed.sqlite"
+    result = runner.invoke(
+        app, ["replay", "--until", "2026-10-13", "--world", "kestrel", "--db", str(db_path)]
+    )
+    assert result.exit_code != 0
+    assert re.search(r"(?:line\s+|:)2\b", result.output, re.IGNORECASE), result.output
+    with Store.open(db_path) as db:
+        assert db.get_meta("until") is None
 
 
 def test_world_header_ignores_extra_keys(tmp_path: Path) -> None:
