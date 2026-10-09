@@ -131,8 +131,8 @@ def test_read_events_errors_name_file_and_line(tmp_path: Path, fault: str) -> No
     elif fault == "bad_event_ts":
         invalid["event_ts"] = "1760000002.1"
     elif fault == "before_post":
-        invalid["ts"] = "1760000002.000001"
-        invalid["event_ts"] = "1760000001.000001"
+        invalid["ts"] = "1760000003.000001"
+        invalid["event_ts"] = "1760000002.000001"
     elif fault == "out_of_order":
         invalid["event_ts"] = "1760000001.000001"
     bad_line = "{broken" if fault == "json" else json.dumps(invalid)
@@ -336,7 +336,11 @@ def test_cli_replay_accepts_existing_store(cli_world: Path, tmp_path: Path, prev
     )
     assert result.exit_code == 0, result.output
     with Store.open(db_path) as db:
-        assert db.get_meta("until") == "2026-10-14T06:59:59.999999+00:00"
+        until = db.get_meta("until")
+        assert until is not None
+        assert datetime.fromisoformat(until) == datetime(
+            2026, 10, 14, 6, 59, 59, 999999, tzinfo=UTC
+        )
         assert db.events_in_thread(f"C1:{ROOT}", AS_OF) == [existing, event()]
 
 
