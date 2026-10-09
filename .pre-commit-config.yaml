@@ -1,6 +1,7 @@
 # Run with prek (https://github.com/j178/prek), a drop-in pre-commit runner:
 #   uv tool install prek && prek install && prek install --hook-type pre-push
-# Commit: fast, auto-fixing checks only. Push: the type check and the test suite.
+# Commit: fast, auto-fixing checks only. Push: the type check, the import contract
+# and the test suite.
 # Everything here is also what CI runs, so a green push is a green CI.
 
 default_install_hook_types: [pre-commit, pre-push]
@@ -40,6 +41,12 @@ repos:
       - id: ty
         name: ty (type check)
         entry: uv run ty check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: lint-imports
+        name: import-linter (import contracts)
+        entry: uv run lint-imports
         language: system
         pass_filenames: false
         stages: [pre-push]
