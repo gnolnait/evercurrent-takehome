@@ -8,6 +8,7 @@ import yaml
 from pydantic import ValidationError
 
 from digest.project import ProjectConfig, load_project
+from digest.world.load import load_world
 
 
 def _project() -> dict[str, Any]:
@@ -171,6 +172,11 @@ def test_load_project_rejects_unknown_keys(tmp_path: Path, path: tuple[str | int
         load_project(file)
 
 
-def test_bundled_live_project_validates() -> None:
-    path = Path(__file__).resolve().parents[1] / "config/project.yaml"
-    assert isinstance(load_project(path), ProjectConfig)
+def test_bundled_live_project_matches_world_project() -> None:
+    """Setup both bundled files; load their project configs; assert they are equal."""
+    root = Path(__file__).resolve().parents[1]
+    project = load_project(root / "config/project.yaml")
+    world = load_world(root / "data/world/kestrel/world.yaml")
+
+    assert isinstance(project, ProjectConfig)
+    assert project == world.project

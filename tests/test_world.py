@@ -146,11 +146,12 @@ def _world() -> dict[str, Any]:
         pytest.param(("events", 1, "channel"), "CFEED", "E2", id="poster-not-member"),
         pytest.param(("events", 1, "must_see_for"), ["BPLM"], "E2", id="must-see-bot"),
         pytest.param(("events", 1, "known_by"), {"BPLM": 2}, "E2", id="known-by-bot"),
+        pytest.param(("channels", 1, "id"), "CMAIN", "CMAIN", id="duplicate-channel-id"),
         pytest.param(("events", 1, "id"), "E1", "E1", id="duplicate-event-id"),
         pytest.param(
             ("entities",),
-            _world()["entities"] + [_world()["entities"][1]],
-            "PN-31010",
+            _world()["entities"][:2] + [{**_world()["entities"][2], "aliases": []}] * 2,
+            "AUX-900",
             id="duplicate-entity-id",
         ),
         pytest.param(
@@ -185,6 +186,18 @@ def _world() -> dict[str, Any]:
             ["mechanical owner", "mechanical owner"],
             "UME",
             id="alias-within-persona",
+        ),
+        pytest.param(
+            ("events", 1, "claims", 0, "supersedes"),
+            "",
+            "E2",
+            id="empty-supersedes",
+        ),
+        pytest.param(
+            ("timezone",),
+            "America/Los_Angelez",
+            "America/Los_Angelez",
+            id="unknown-timezone",
         ),
     ]
     + [
@@ -379,6 +392,37 @@ def test_world_check_reports_counts_or_path(
         for day, count in [(1, 2), (2, 1), (3, 1)]:
             label = rf"(?:\b[Dd]ay\s+{day}\b|\bD{day}\b|2026-10-{11 + day}|^\s*{day}\s*[:|])"
             assert re.search(rf"{label}[^\d\n]*{count}\b", result.output, re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    ("world_name", "contents"),
+    [
+        pytest.param("bad-yaml", "events: [", id="invalid-yaml"),
+        pytest.param("missing", None, id="missing-directory"),
+        pytest.param("bad-encoding", b"\xff", id="non-utf-8"),
+    ],
+)
+def test_world_check_reports_file_errors_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world_name: str,
+    contents: str | bytes | None,
+) -> None:
+    """Setup an unreadable world; invoke the CLI; assert a path-scoped error without a traceback."""
+    path = tmp_path / f"data/world/{world_name}/world.yaml"
+    if contents is not None:
+        path.parent.mkdir(parents=True)
+        if isinstance(contents, bytes):
+            path.write_bytes(contents)
+        else:
+            path.write_text(contents, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["world", "check", "--world", world_name])
+
+    assert result.exit_code == 1
+    assert f"data/world/{world_name}/world.yaml" in result.output.replace("\\", "/")
+    assert "Traceback" not in result.output
 
 
 def test_bundled_world_contains_planned_program() -> None:
