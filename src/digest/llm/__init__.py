@@ -6,8 +6,11 @@ them (SPEC section 6). The client wrapper lives in `digest.llm.client`.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Literal, Protocol
+
+import yaml
 
 from digest.models import Frozen
 
@@ -46,6 +49,14 @@ class LLMOutputError(ValueError):
         self.raw = raw
 
 
+def parse_json_output(text: str) -> dict[str, Any]:
+    """Parse the text a backend returned for a request with an `output_schema`."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise LLMOutputError("llm_output_not_json", raw=text) from error
+
+
 class Backend(Protocol):
     name: str
 
@@ -62,8 +73,8 @@ class ModelIds(Frozen):
     classify: dict[str, str]
 
     def resolve(self, logical: LogicalModel, backend: str) -> str:
-        raise NotImplementedError
+        return getattr(self, logical)[backend]
 
 
 def load_model_ids(path: Path = DEFAULT_MODEL_IDS_PATH) -> ModelIds:
-    raise NotImplementedError
+    return ModelIds.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
