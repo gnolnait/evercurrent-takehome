@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import Counter
 from datetime import date
 from pathlib import Path
 from typing import NoReturn
 
 import typer
+from pydantic import ValidationError
 
 from digest import __version__
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
+from digest.world.load import load_world
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -98,7 +101,27 @@ def world_check(
     ),
 ) -> None:
     """Load and validate a world file; print counts per day and per channel."""
-    raise typer.Exit(code=_not_yet("world check"))
+    path = Path("data/world") / (world or Settings().world) / "world.yaml"
+    try:
+        loaded = load_world(path)
+    except FileNotFoundError as exc:
+        typer.echo(f"{path}: {exc.strerror}", err=True)
+        raise typer.Exit(code=1) from exc
+    except ValidationError as exc:
+        typer.echo(f"{path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"{path}: {len(loaded.events)} events, {len(loaded.personas)} personas, "
+        f"{len(loaded.entities)} entities"
+    )
+    per_day = Counter(event.day for event in loaded.events)
+    typer.echo("events per day:")
+    for day in range(1, loaded.days + 1):
+        typer.echo(f"  {loaded.date_of(day)}  day {day}: {per_day[day]}")
+    per_channel = Counter(event.channel for event in loaded.events)
+    typer.echo("events per channel:")
+    for channel in loaded.channels:
+        typer.echo(f"  {channel.name} ({channel.id}): {per_channel[channel.id]}")
 
 
 def _refuse(reason: str) -> NoReturn:

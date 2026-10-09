@@ -1,0 +1,798 @@
+# Scripted ground truth for the Kestrel K2 warehouse AMR, ten working days from EVT-2 exit
+# to the DVT-1 build. Scenario ids S1 to S15 and N1 to N5 follow the domain scenario table.
+name: kestrel
+program: Kestrel K2
+workspace_url: https://kestrel-k2.slack.com
+timezone: America/Los_Angeles
+start_date: 2026-10-12
+days: 10
+
+project:
+  project_id: kestrel-k2
+  name: Kestrel K2
+  phases:
+    - {phase: EVT, from_date: 2026-08-03}
+    - {phase: DVT, from_date: 2026-10-22}
+  gates:
+    - id: G-EVT2-EXIT
+      name: EVT-2 exit review
+      date: 2026-10-12
+      buffer_days: 0
+      checklist:
+        - {id: G-EVT2-EXIT.review, task: Hold the EVT-2 exit review, owner: EM, expected_cadence_days: 5}
+        - {id: G-EVT2-EXIT.actions, task: Close the EVT-2 exit actions, owner: ME, expected_cadence_days: 3}
+    - id: G-TR1
+      name: Top-cover tooling and texture release (PN-51010)
+      date: 2026-10-20
+      buffer_days: 0
+      priority: high
+      checklist:
+        - {id: G-TR1.dfm, task: Close the top-cover DFM review, owner: ME, expected_cadence_days: 2}
+        - {id: G-TR1.texture, task: Release texture on PN-51010, owner: ME, expected_cadence_days: 3}
+    - id: G-DVT1
+      name: DVT-1 go/no-go
+      date: 2026-10-22
+      buffer_days: 7
+      priority: critical
+      checklist:
+        - {id: G-DVT1.thermal, task: Close the TST-THM-02 thermal review, owner: EE, expected_cadence_days: 2, priority: high}
+        - {id: G-DVT1.emc, task: Pass the TST-EMC-01 EMC pre-scan, owner: EE, expected_cadence_days: 2, priority: high}
+        - {id: G-DVT1.safety, task: Validate e-stop timing (TST-SAF-01) on the DVT firmware, owner: FW, expected_cadence_days: 3, priority: high}
+        - {id: G-DVT1.fai, task: Sign off FAI on DVT-1 mechanical parts, owner: ME, expected_cadence_days: 2}
+        - {id: G-DVT1.ctb, task: Reach clear-to-build for 40 units, owner: supply_chain, expected_cadence_days: 1}
+        - {id: G-DVT1.battery, task: Confirm the DVT-1 battery ship plan, owner: supply_chain, expected_cadence_days: 2, priority: high}
+        - {id: G-DVT1.review, task: Hold the DVT-1 go/no-go review, owner: EM, expected_cadence_days: 5}
+
+channels:
+  - {id: C0KPROG, name: kestrel-program, purpose: "Program status, schedule, gate reviews and decisions"}
+  - {id: C0ENGME, name: eng-mech, purpose: "CAD, drawings, tolerances, tooling and mechanical FA"}
+  - {id: C0ENGEF, name: eng-elec-fw, purpose: "PCBA, harness, EMC, BMS, firmware releases and the safety chain"}
+  - {id: C0SUPCH, name: supply-chain, purpose: "RFQs, POs, shipments, allocation and clear-to-build"}
+  - {id: C0DVT1B, name: dvt1-build, purpose: "DVT-1 build log, test results, FA tickets and yield"}
+  - {id: C0EXTCM, name: ext-sunrise-cm, purpose: Shared channel with Sunrise Precision Mfg}
+  - {id: C0PLMFD, name: plm-feed, purpose: "Posts from PLM, the program schedule and document control"}
+
+personas:
+  - user_id: U0ME01
+    name: Nadia Brenner
+    role: ME
+    team: mechanical
+    manager: U0EM01
+    channels: [C0KPROG, C0ENGME, C0ENGEF, C0DVT1B, C0EXTCM, C0PLMFD]
+    owned_entities: [PN-11020, PN-11034, PN-11051, PN-51010, PN-51012, FA-0031, TST-BMP-01, G-TR1]
+    aliases: [Nadia, "@nadia"]
+  - user_id: U0EE01
+    name: Tobias Lindqvist
+    role: EE
+    team: electrical
+    manager: U0EM01
+    channels: [C0KPROG, C0ENGME, C0ENGEF, C0SUPCH, C0DVT1B, C0PLMFD]
+    owned_entities: [PN-21030, PN-21040, PN-31010, PN-61001, ECO-0142, TST-THM-02, TST-EMC-01, TST-SAF-01]
+    aliases: [Tobias, "@tobias", Tobi]
+  - user_id: U0FW01
+    name: Ana Folau
+    role: FW
+    team: firmware
+    manager: U0EM01
+    channels: [C0KPROG, C0ENGME, C0ENGEF, C0DVT1B]
+    owned_entities: [FW-0.9.3]
+    aliases: [Ana, "@ana"]
+  - user_id: U0SC01
+    name: Hamid Rostami
+    role: supply_chain
+    team: supply chain
+    manager: U0PM01
+    channels: [C0KPROG, C0SUPCH, C0DVT1B, C0EXTCM, C0PLMFD]
+    owned_entities: [PO-45002211]
+    aliases: [Hamid, "@hamid"]
+  - user_id: U0EM01
+    name: Grace Okonkwo
+    role: EM
+    team: engineering
+    channels: [C0KPROG, C0ENGME, C0ENGEF, C0SUPCH, C0DVT1B]
+    owned_entities: [G-EVT2-EXIT, G-DVT1]
+    aliases: [Grace, "@grace"]
+  - user_id: U0PM01
+    name: Wen Hollis
+    role: PM
+    team: program
+    channels: [C0KPROG, C0SUPCH, C0DVT1B, C0EXTCM]
+    owned_entities: [DOC-PRD, DOC-SCHED]
+    aliases: [Wen, "@wen"]
+  - user_id: U0CM01
+    name: Luis Ortega
+    role: PM
+    team: Sunrise Precision Mfg
+    channels: [C0DVT1B, C0EXTCM]
+    aliases: [Luis, "@luis"]
+    authority: cm_stated
+  - user_id: B0PLM01
+    name: plm_bot
+    kind: bot
+    channels: [C0PLMFD]
+    authority: plm_bot
+  - user_id: B0SCH01
+    name: schedule_bot
+    kind: bot
+    channels: [C0PLMFD]
+    authority: plm_bot
+  - user_id: B0DOC01
+    name: doc_control_bot
+    kind: bot
+    channels: [C0PLMFD]
+    authority: plm_bot
+
+entities:
+  - {id: drive, type: subsystem, description: "Drive modules, motors, gearheads and motor drivers"}
+  - {id: compute, type: subsystem, description: "Compute carrier, navigation sensors and signal wiring"}
+  - {id: safety, type: subsystem, description: "Safety scanners, e-stop chain and safety I/O"}
+  - {id: power, type: subsystem, description: "Battery, power distribution and main harness"}
+  - {id: chassis, type: subsystem, description: "Chassis, brackets and top-level assembly"}
+  - {id: enclosure, type: subsystem, description: Molded top cover and bumper}
+
+  - id: PN-90001
+    type: assembly
+    description: Kestrel K2 top-level assembly, DVT config
+    subsystem: chassis
+    aliases: [K2 top level]
+    state: {rev: B, spec_param: payload 500 kg}
+  - id: PN-11020
+    type: part
+    description: Chassis base, 5052-H32 3 mm sheet
+    vendor: Sunrise sheet-metal sub
+    owner: ME
+    subsystem: chassis
+    parent: PN-90001
+    aliases: [chassis base, chassis plate]
+    state: {rev: B}
+  - id: PN-11034
+    type: part
+    description: Drive-module bracket, 6061-T6
+    vendor: Sunrise machine shop
+    owner: ME
+    subsystem: drive
+    parent: PN-90001
+    aliases: [drive bracket]
+    state: {rev: B}
+  - id: PN-11051
+    type: part
+    description: LiDAR mount bracket
+    vendor: Sunrise machine shop
+    owner: ME
+    subsystem: compute
+    parent: PN-90001
+    aliases: [lidar bracket, lidar mount]
+    state: {rev: A}
+  - id: PN-51010
+    type: molded
+    description: Top cover, PC/ABS textured
+    vendor: Sunrise molder
+    owner: ME
+    subsystem: enclosure
+    parent: PN-90001
+    aliases: [top cover]
+    state: {status: T0 done, gate_date: "2026-10-14"}
+  - id: PN-51012
+    type: molded
+    description: Bumper fascia, TPU
+    vendor: Sunrise molder
+    owner: ME
+    subsystem: enclosure
+    parent: PN-90001
+    aliases: [bumper fascia, fascia]
+    state: {rev: B}
+  - id: PN-41001
+    type: purchased
+    description: Drive motor and gearhead, Maxon EC-i 52 with GPX
+    vendor: Maxon
+    subsystem: drive
+    aliases: [drive motor, gearhead]
+    state: {status: AML qualified}
+  - id: PN-21010
+    type: pcba
+    description: Power distribution board, precharge and contactor drive
+    owner: EE
+    subsystem: power
+    aliases: [PDB]
+    state: {rev: D}
+  - id: PN-21020
+    type: pcba
+    description: Compute carrier for Jetson Orin NX
+    owner: EE
+    subsystem: compute
+    aliases: [carrier board, Orin carrier]
+    state: {rev: B}
+  - id: PN-21030
+    type: pcba
+    description: Motor driver board, DRV83xx-class
+    owner: EE
+    subsystem: drive
+    aliases: [motor driver]
+    state: {rev: C}
+  - id: PN-21040
+    type: pcba
+    description: Safety I/O board, e-stop chain and STO
+    owner: EE
+    subsystem: safety
+    aliases: [safety IO board]
+    state: {rev: A}
+  - id: PN-42010
+    type: purchased
+    description: Jetson Orin NX 16GB module
+    vendor: NVIDIA via Arrow
+    subsystem: compute
+    parent: PN-21020
+    aliases: [Orin NX]
+    state: {status: active}
+  - id: PN-42011
+    type: purchased
+    description: Xavier NX carrier used on the EVT reliability fleet
+    vendor: Connect Tech
+    subsystem: compute
+    aliases: [Xavier carrier, CTI carrier]
+    state: {status: LTB notice}
+  - id: PN-43010
+    type: purchased
+    description: Safety laser scanner, front and rear (SICK nanoScan3)
+    vendor: SICK
+    subsystem: safety
+    aliases: [nanoScan, safety scanner]
+    state: {lead_time: 16 weeks}
+  - id: PN-43020
+    type: purchased
+    description: 3D navigation LiDAR (Ouster OS0)
+    vendor: Ouster
+    subsystem: compute
+    aliases: [OS0, nav lidar]
+    state: {status: active}
+  - id: PN-44010
+    type: purchased
+    description: E-stop button (Schneider Harmony XB5)
+    vendor: Schneider
+    subsystem: safety
+    aliases: [e-stop button]
+    state: {status: active}
+  - id: PN-61001
+    type: battery
+    description: 48 V LFP pack, 16S, BQ769x0-class BMS
+    vendor: pack vendor (Shenzhen)
+    owner: EE
+    subsystem: power
+    aliases: [battery pack, pack]
+    state: {rev: B}
+  - id: PN-31010
+    type: harness
+    description: Main power and motor-phase harness, TE DEUTSCH DT
+    vendor: harness vendor
+    owner: EE
+    subsystem: power
+    parent: PN-90001
+    aliases: [main harness, motor harness]
+    state: {rev: B}
+  - id: PN-31020
+    type: harness
+    description: Signal harness, Molex Micro-Fit 3.0 and JST GH
+    vendor: harness vendor
+    owner: EE
+    subsystem: compute
+    parent: PN-90001
+    aliases: [signal harness]
+    state: {rev: B, qty: "40"}
+  - id: C-MLCC-100V
+    type: component
+    description: 100 V X7R 1210 MLCC on the motor driver (Murata GRM, Samsung alternate)
+    vendor: Murata
+    subsystem: drive
+    parent: PN-21030
+    aliases: [the 1210s, 100V MLCC]
+    state: {lead_time: 14-18 weeks}
+  - id: ECO-0139
+    type: eco
+    description: BMS board change on the battery pack
+    owner: EE
+    subsystem: power
+    state: {status: released}
+  - id: ECO-0142
+    type: eco
+    description: Harness PN-31010 Rev B to C, adds the safety-I/O pigtail
+    owner: EE
+    subsystem: power
+    aliases: ["0142"]
+    state: {status: in review}
+  - id: DEV-0007
+    type: deviation
+    description: Rev A bumper fascia allowed for EVT-2 only, qty 12
+    owner: ME
+    subsystem: enclosure
+    state: {status: expires 2026-10-12}
+  - id: FA-0031
+    type: fa
+    description: EVT2-SN007 drive wheel loosened, set screw backed out
+    owner: ME
+    subsystem: drive
+    state: {status: open}
+  - id: PO-45002211
+    type: po
+    description: PO for 50 main harnesses PN-31010
+    owner: supply_chain
+    vendor: harness vendor
+    subsystem: power
+    aliases: [PO 4500-2211, harness PO]
+  - id: G-EVT2-EXIT
+    type: gate
+    description: EVT-2 exit review
+    owner: EM
+    subsystem: chassis
+    state: {gate_date: "2026-10-12"}
+  - id: G-TR1
+    type: gate
+    description: Tooling and texture release for top cover PN-51010
+    owner: ME
+    subsystem: enclosure
+    aliases: [texture release]
+    state: {gate_date: "2026-10-20"}
+  - id: G-DVT1
+    type: gate
+    description: DVT-1 go/no-go
+    owner: EM
+    subsystem: chassis
+    aliases: [DVT gate, go/no-go]
+    state: {gate_date: "2026-10-22", priority: critical}
+  - id: BLD-DVT1
+    type: build
+    description: DVT-1, 40 units at Sunrise Precision Mfg
+    subsystem: chassis
+    aliases: [DVT-1, DVT1 build]
+    state: {status: planned, qty: "40"}
+  - id: TST-THM-02
+    type: test
+    description: Thermal soak at 40 C ambient, full duty
+    owner: EE
+    subsystem: drive
+    aliases: [thermal soak, thermal review]
+    state: {status: open}
+  - id: TST-EMC-01
+    type: test
+    description: EMC pre-scan, FCC 15B radiated and IEC 61000-4-2 ESD
+    owner: EE
+    subsystem: drive
+    aliases: [EMC pre-scan]
+    state: {status: scheduled}
+  - id: TST-SAF-01
+    type: test
+    description: E-stop and safety-stop validation, ISO 13849-1 PL d
+    owner: EE
+    subsystem: safety
+    aliases: [safety validation]
+    state: {status: pass on FW v0.9.1}
+  - id: TST-BMP-01
+    type: test
+    description: Bumper stop-force and personnel-contact test
+    owner: ME
+    subsystem: enclosure
+    aliases: [bumper test]
+    state: {status: pending}
+  - id: TST-UN383
+    type: test
+    description: UN 38.3 battery transport test
+    subsystem: power
+    parent: PN-61001
+    aliases: [UN 38.3]
+    state: {status: pass on Rev A only}
+  - id: FW-0.9.3
+    type: release
+    description: Firmware v0.9.3
+    owner: FW
+    subsystem: safety
+    aliases: [v0.9.3]
+  - id: V-SUNRISE
+    type: vendor
+    description: Sunrise Precision Mfg, the contract manufacturer
+    aliases: [Sunrise, the CM]
+  - id: DOC-11020-CM
+    type: document
+    description: CM drawing pack for chassis base PN-11020
+    subsystem: chassis
+    parent: PN-11020
+    aliases: [CM drawing pack]
+    state: {rev: B, status: issued to Sunrise}
+  - id: DOC-PRD
+    type: document
+    description: Kestrel K2 product requirements document
+    parent: PN-90001
+    aliases: [PRD]
+    state: {rev: "3", status: released}
+  - id: DOC-SCHED
+    type: document
+    description: Kestrel K2 program schedule
+    parent: PN-90001
+    aliases: [program schedule, Smartsheet]
+    state: {status: current}
+
+events:
+  # Day 1, Monday 2026-10-12
+  - id: PLM-0142
+    day: 1
+    channel: C0PLMFD
+    poster: B0PLM01
+    kind: bom_change
+    scenario: S2
+    summary: PLM releases ECO-0142, which moves harness PN-31010 from Rev B to Rev C.
+    claims:
+      - {entity: ECO-0142, attribute: status, value: released}
+      - {entity: PN-31010, attribute: rev, value: C}
+    affected_roles: [EE, supply_chain]
+    known_by: {U0EE01: 1}
+  - id: SCHED-1
+    day: 1
+    channel: C0PLMFD
+    poster: B0SCH01
+    kind: fyi
+    scenario: S12
+    summary: The schedule sync shows top-cover PN-51010 T1 on 2026-10-14 and G-DVT1 on 2026-10-22.
+    claims:
+      - {entity: PN-51010, attribute: gate_date, value: "2026-10-14"}
+      - {entity: G-DVT1, attribute: gate_date, value: "2026-10-22"}
+    affected_roles: [PM, EM, ME]
+    known_by: {U0ME01: 1, U0SC01: 1}
+  - id: DOC-1
+    day: 1
+    channel: C0PLMFD
+    poster: B0DOC01
+    kind: fyi
+    scenario: S4
+    summary: Document control shows the CM drawing pack for PN-11020 issued to Sunrise at Rev B.
+    claims:
+      - {entity: DOC-11020-CM, attribute: rev, value: B}
+    affected_roles: [ME]
+    known_by: {U0ME01: 1}
+  - id: EVT2-EXIT
+    day: 1
+    channel: C0KPROG
+    poster: U0EM01
+    kind: decision
+    scenario: S7
+    summary: The EVT-2 exit review passes with actions, and deviation DEV-0007 expires today.
+    claims:
+      - {entity: G-EVT2-EXIT, attribute: status, value: passed with actions}
+      - {entity: DEV-0007, attribute: status, value: expired}
+    tasks:
+      - {task: G-EVT2-EXIT.review, effect: done}
+      - {task: G-EVT2-EXIT.actions, effect: evidence}
+    affected_roles: [ME, EE, FW, supply_chain, EM, PM]
+    known_by: {U0ME01: 1, U0EE01: 1, U0FW01: 1, U0SC01: 1, U0EM01: 1, U0PM01: 1}
+
+  # Day 2, Tuesday 2026-10-13
+  - id: S1-AGREE
+    day: 2
+    channel: C0ENGME
+    poster: U0ME01
+    kind: decision
+    scenario: S1
+    summary: ME and EE agree in a thread to raise the LiDAR mount PN-11051 by 8 mm, and nobody files an ECO.
+    claims:
+      - {entity: PN-11051, attribute: spec_param, value: mount height +8 mm}
+    affected_roles: [ME, EE, supply_chain]
+    must_see_for: [U0SC01, U0CM01, U0EM01]
+    known_by: {U0ME01: 2, U0EE01: 2}
+    noise: {indirection: true}
+  - id: N1-TORQUE
+    day: 2
+    channel: C0EXTCM
+    poster: U0CM01
+    kind: distractor
+    scenario: N1
+    summary: The CM asks for the M5 fastener torque spec and the ME answers within 15 minutes.
+    known_by: {U0CM01: 2, U0ME01: 2}
+  - id: PLM-11020C
+    day: 2
+    channel: C0PLMFD
+    poster: B0PLM01
+    kind: spec_change
+    scenario: S4
+    summary: PLM releases chassis base PN-11020 Rev C, which moves the hole pattern for the Orin carrier standoffs.
+    claims:
+      - {entity: PN-11020, attribute: rev, value: C}
+    affected_roles: [ME, supply_chain]
+    known_by: {U0ME01: 2}
+  - id: S14-LTB
+    day: 2
+    channel: C0SUPCH
+    poster: U0SC01
+    kind: risk
+    scenario: S14
+    summary: The six EVT spare compute units use the Xavier NX carrier, whose LTB has passed, so new POs are NCNR.
+    claims:
+      - {entity: PN-42011, attribute: status, value: "LTB passed, NCNR"}
+    affected_roles: [FW, EM]
+    must_see_for: [U0FW01, U0EM01]
+    known_by: {U0SC01: 2, U0EM01: 3}
+
+  # Day 3, Wednesday 2026-10-14
+  - id: S2-PO
+    day: 3
+    channel: C0SUPCH
+    poster: U0SC01
+    kind: risk
+    scenario: S2
+    summary: SC places PO-45002211 for 50 harnesses PN-31010 at Rev B, after ECO-0142 released Rev C.
+    claims:
+      - {entity: PO-45002211, attribute: status, value: placed}
+      - {entity: PO-45002211, attribute: qty, value: "50"}
+      - {entity: PN-31010, attribute: rev, value: B, contradicts: [PLM-0142]}
+    tasks:
+      - {task: G-DVT1.ctb, effect: evidence}
+    affected_roles: [supply_chain, EE]
+    must_see_for: [U0SC01, U0EE01]
+    known_by: {U0SC01: 3}
+  - id: S6-EMC
+    day: 3
+    channel: C0ENGEF
+    poster: U0EE01
+    kind: blocker
+    scenario: S6
+    summary: The EMC pre-scan fails by about 6 dB at 150 MHz on the motor-phase harness, and the fix needs PN-31010 Rev D.
+    claims:
+      - {entity: TST-EMC-01, attribute: status, value: fail}
+      - {entity: PN-31010, attribute: rev, value: D, contradicts: [PLM-0142, S2-PO]}
+    tasks:
+      - {task: G-DVT1.emc, effect: evidence}
+    affected_roles: [EE, supply_chain, EM, PM]
+    must_see_for: [U0SC01, U0EM01, U0PM01]
+    known_by: {U0EE01: 3, U0FW01: 3}
+  - id: S12-SLIP
+    day: 3
+    channel: C0EXTCM
+    poster: U0CM01
+    kind: schedule_change
+    scenario: S12
+    summary: The CM says the molder slips top-cover PN-51010 T1 from 2026-10-14 to 2026-10-21 for slider rework.
+    claims:
+      - {entity: PN-51010, attribute: gate_date, value: "2026-10-21", contradicts: [SCHED-1]}
+    affected_roles: [PM, EM, ME]
+    must_see_for: [U0PM01, U0EM01, U0ME01]
+    known_by: {U0CM01: 3, U0SC01: 3}
+    noise: {delayed_crosspost: true}
+  - id: N5-LUNCH
+    day: 3
+    channel: C0KPROG
+    poster: U0FW01
+    kind: distractor
+    scenario: N5
+    summary: Chatter about the 3D-printer queue and lunch.
+
+  # Day 4, Thursday 2026-10-15
+  - id: S1-CUT
+    day: 4
+    channel: C0EXTCM
+    poster: U0CM01
+    kind: fyi
+    scenario: S1
+    summary: The CM starts machining 40 LiDAR brackets PN-11051 at Rev A for DVT-1.
+    claims:
+      - {entity: PN-11051, attribute: rev, value: A}
+    affected_roles: [ME, supply_chain, EM]
+    must_see_for: [U0ME01, U0SC01, U0EM01]
+    known_by: {U0CM01: 4, U0SC01: 4}
+  - id: S5-MLCC
+    day: 4
+    channel: C0SUPCH
+    poster: U0SC01
+    kind: blocker
+    scenario: S5
+    summary: The 100 V MLCC on motor driver PN-21030 goes into allocation with no ship date, and the Samsung alternate is not on the AML.
+    claims:
+      - {entity: C-MLCC-100V, attribute: lead_time, value: "allocation, no ship date"}
+    tasks:
+      - {task: G-DVT1.ctb, effect: evidence}
+    affected_roles: [EE, EM]
+    must_see_for: [U0EE01, U0EM01]
+    known_by: {U0SC01: 4, U0EE01: 4}
+  - id: S9-FA
+    day: 4
+    channel: C0DVT1B
+    poster: U0ME01
+    kind: spec_change
+    scenario: S9
+    summary: The FA-0031 corrective action moves PN-11034 to Rev C with a keyed shaft, but 40 Rev B brackets are already machined.
+    claims:
+      - {entity: FA-0031, attribute: status, value: corrective action identified}
+      - {entity: PN-11034, attribute: rev, value: C}
+    affected_roles: [ME, supply_chain, EM]
+    must_see_for: [U0SC01, U0CM01, U0EM01]
+    known_by: {U0ME01: 4, U0CM01: 5}
+  - id: N2-DHL-SC
+    day: 4
+    channel: C0SUPCH
+    poster: U0SC01
+    kind: distractor
+    scenario: N2
+    summary: A DHL tracking update for the SICK scanners.
+    claims:
+      - {entity: PN-43010, attribute: status, value: in transit}
+  - id: N2-DHL-PROG
+    day: 4
+    channel: C0KPROG
+    poster: U0SC01
+    kind: distractor
+    scenario: N2
+    summary: The same DHL tracking update for the SICK scanners, posted again.
+    noise: {delayed_crosspost: true}
+
+  # Day 5, Friday 2026-10-16
+  - id: S4-FAI
+    day: 5
+    channel: C0EXTCM
+    poster: U0CM01
+    kind: risk
+    scenario: S4
+    summary: The CM's FAI photos and CMM for chassis base PN-11020 show the Rev B hole pattern, so the CM drawing pack is stale.
+    claims:
+      - {entity: PN-11020, attribute: rev, value: B, contradicts: [PLM-11020C]}
+    tasks:
+      - {task: G-DVT1.fai, effect: evidence}
+    affected_roles: [ME, supply_chain, EM]
+    must_see_for: [U0ME01, U0SC01, U0EM01]
+    known_by: {U0CM01: 5, U0SC01: 5, U0ME01: 6}
+  - id: S8-PAYLOAD
+    day: 5
+    channel: C0KPROG
+    poster: U0PM01
+    kind: spec_change
+    scenario: S8
+    summary: The PM raises the payload from 500 kg to 600 kg in a thread for a pilot customer, with no PRD change and no decision.
+    claims:
+      - {entity: PN-90001, attribute: spec_param, value: payload 600 kg}
+    affected_roles: [ME, EE, EM]
+    must_see_for: [U0ME01, U0EE01, U0EM01]
+    known_by: {U0PM01: 5}
+    noise: {indirection: true}
+  - id: N3-LOGO
+    day: 5
+    channel: C0ENGME
+    poster: U0ME01
+    kind: distractor
+    scenario: N3
+    summary: A long argument about the logo font and emboss depth on the top cover.
+
+  # Day 6, Monday 2026-10-19
+  - id: S3-BUFFER
+    day: 6
+    channel: C0KPROG
+    poster: U0EM01
+    kind: risk
+    scenario: S3
+    summary: G-DVT1 is on day 9 and the team is 3 days into the 7-day buffer, with the thermal review and the top-cover DFM review still open.
+    claims:
+      - {entity: TST-THM-02, attribute: status, value: open}
+    affected_roles: [EM, PM, ME]
+    must_see_for: [U0EM01, U0PM01, U0ME01]
+    known_by: {U0EM01: 6, U0PM01: 6, U0ME01: 6}
+  - id: S10-UN383
+    day: 6
+    channel: C0SUPCH
+    poster: U0SC01
+    kind: blocker
+    scenario: S10
+    summary: The battery vendor cannot air-ship 40 packs PN-61001 Rev B because the UN 38.3 summary covers Rev A only.
+    claims:
+      - {entity: PN-61001, attribute: status, value: air shipment blocked}
+      - {entity: TST-UN383, attribute: status, value: covers Rev A only}
+    tasks:
+      - {task: G-DVT1.battery, effect: evidence}
+    affected_roles: [EM, PM, EE, supply_chain]
+    must_see_for: [U0EM01, U0PM01, U0EE01]
+    known_by: {U0SC01: 6}
+  - id: N4-MISSING
+    day: 6
+    channel: C0DVT1B
+    poster: U0CM01
+    kind: blocker
+    scenario: N4
+    summary: The CM reports 8 signal harnesses PN-31020 missing from the DVT-1 kit.
+    claims:
+      - {entity: PN-31020, attribute: qty, value: "32"}
+    known_by: {U0CM01: 6}
+  - id: N4-FOUND
+    day: 6
+    channel: C0DVT1B
+    poster: U0CM01
+    kind: fyi
+    scenario: N4
+    summary: The CM finds the 8 harnesses in incoming QC; it was a false alarm.
+    claims:
+      - {entity: PN-31020, attribute: qty, value: "40", supersedes: N4-MISSING}
+    known_by: {U0CM01: 6}
+
+  # Day 7, Tuesday 2026-10-20
+  - id: S7-FASCIA
+    day: 7
+    channel: C0DVT1B
+    poster: U0CM01
+    kind: risk
+    scenario: S7
+    summary: The CM plans to use 30 leftover Rev A bumper fascias PN-51012 on DVT-1, but DEV-0007 covered EVT-2 only.
+    claims:
+      - {entity: PN-51012, attribute: rev, value: A}
+    affected_roles: [ME, PM]
+    must_see_for: [U0ME01, U0PM01]
+    known_by: {U0CM01: 7}
+  - id: S3-TEXTURE
+    day: 7
+    channel: C0ENGME
+    poster: U0ME01
+    kind: decision
+    scenario: S3
+    summary: The ME holds the PN-51010 texture release until the top-cover vent layout is confirmed.
+    claims:
+      - {entity: G-TR1, attribute: status, value: texture release on hold}
+    tasks:
+      - {task: G-TR1.dfm, effect: evidence}
+    affected_roles: [ME, PM]
+    known_by: {U0ME01: 7, U0EE01: 7}
+  - id: S13-BRACKET
+    day: 7
+    channel: C0ENGME
+    poster: U0ME01
+    kind: spec_change
+    scenario: S13
+    summary: The ME designs a stiffer bumper-switch bracket to stop false triggers.
+    affected_roles: [ME, EM]
+    must_see_for: [U0EM01]
+    known_by: {U0ME01: 7}
+
+  # Day 8, Wednesday 2026-10-21
+  - id: S11-DEBOUNCE
+    day: 8
+    channel: C0ENGEF
+    poster: U0FW01
+    kind: spec_change
+    scenario: S11
+    summary: FW v0.9.3 changes the e-stop debounce from 5 ms to 20 ms after TST-SAF-01 ran on v0.9.1.
+    claims:
+      - {entity: FW-0.9.3, attribute: status, value: released}
+      - {entity: FW-0.9.3, attribute: spec_param, value: e-stop debounce 20 ms}
+    affected_roles: [EE, FW, EM]
+    must_see_for: [U0EE01, U0EM01]
+    known_by: {U0FW01: 8}
+  - id: S13-FILTER
+    day: 8
+    channel: C0ENGEF
+    poster: U0FW01
+    kind: spec_change
+    scenario: S13
+    summary: FW adds a 50 ms software filter on the bumper input, in parallel with the ME bracket fix.
+    claims:
+      - {entity: PN-21040, attribute: spec_param, value: bumper input filter 50 ms}
+    affected_roles: [FW, ME, EM]
+    must_see_for: [U0EM01]
+    known_by: {U0FW01: 8, U0EE01: 8}
+
+  # Day 9, Thursday 2026-10-22
+  - id: S15-GO
+    day: 9
+    channel: C0KPROG
+    poster: U0EM01
+    kind: decision
+    scenario: S15
+    summary: G-DVT1 is a conditional GO, with the thermal review and the battery ship plan as open conditions.
+    claims:
+      - {entity: G-DVT1, attribute: status, value: conditional GO}
+    tasks:
+      - {task: G-DVT1.review, effect: done}
+    affected_roles: [ME, EE, FW, supply_chain, EM, PM]
+    must_see_for: [U0ME01, U0EE01, U0FW01, U0SC01, U0EM01, U0PM01, U0CM01]
+    known_by: {U0EM01: 9, U0PM01: 9, U0ME01: 9, U0EE01: 9, U0FW01: 9, U0SC01: 9}
+
+  # Day 10, Friday 2026-10-23
+  - id: BUILD-D1
+    day: 10
+    channel: C0DVT1B
+    poster: U0CM01
+    kind: fyi
+    summary: The CM posts the first DVT-1 build log.
+    claims:
+      - {entity: BLD-DVT1, attribute: status, value: started}
+    tasks:
+      - {task: G-DVT1.ctb, effect: evidence}
+    known_by: {U0CM01: 10}

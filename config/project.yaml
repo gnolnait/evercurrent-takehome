@@ -1,0 +1,36 @@
+# Project configuration for the live workspace (SPEC section 4). Same shape as `project`
+# in data/world/kestrel/world.yaml, which replay reads instead of this file.
+project_id: kestrel-k2
+name: Kestrel K2
+phases:
+  - {phase: EVT, from_date: 2026-08-03}
+  - {phase: DVT, from_date: 2026-10-22}
+gates:
+  - id: G-EVT2-EXIT
+    name: EVT-2 exit review
+    date: 2026-10-12
+    buffer_days: 0
+    checklist:
+      - {id: G-EVT2-EXIT.review, task: Hold the EVT-2 exit review, owner: EM, expected_cadence_days: 5}
+      - {id: G-EVT2-EXIT.actions, task: Close the EVT-2 exit actions, owner: ME, expected_cadence_days: 3}
+  - id: G-TR1
+    name: Top-cover tooling and texture release (PN-51010)
+    date: 2026-10-20
+    buffer_days: 0
+    priority: high
+    checklist:
+      - {id: G-TR1.dfm, task: Close the top-cover DFM review, owner: ME, expected_cadence_days: 2}
+      - {id: G-TR1.texture, task: Release texture on PN-51010, owner: ME, expected_cadence_days: 3}
+  - id: G-DVT1
+    name: DVT-1 go/no-go
+    date: 2026-10-22
+    buffer_days: 7
+    priority: critical
+    checklist:
+      - {id: G-DVT1.thermal, task: Close the TST-THM-02 thermal review, owner: EE, expected_cadence_days: 2, priority: high}
+      - {id: G-DVT1.emc, task: Pass the TST-EMC-01 EMC pre-scan, owner: EE, expected_cadence_days: 2, priority: high}
+      - {id: G-DVT1.safety, task: Validate e-stop timing (TST-SAF-01) on the DVT firmware, owner: FW, expected_cadence_days: 3, priority: high}
+      - {id: G-DVT1.fai, task: Sign off FAI on DVT-1 mechanical parts, owner: ME, expected_cadence_days: 2}
+      - {id: G-DVT1.ctb, task: Reach clear-to-build for 40 units, owner: supply_chain, expected_cadence_days: 1}
+      - {id: G-DVT1.battery, task: Confirm the DVT-1 battery ship plan, owner: supply_chain, expected_cadence_days: 2, priority: high}
+      - {id: G-DVT1.review, task: Hold the DVT-1 go/no-go review, owner: EM, expected_cadence_days: 5}
