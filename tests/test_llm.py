@@ -231,7 +231,9 @@ def test_cassette_file_round_trip_and_atomic_overwrite(
     assert Cassettes(root).get(key) == updated
     assert json.loads(target.read_text(encoding="utf-8")) == replacements[-1]
     assert list(root.iterdir()) == [target]
-    assert any(str(target) in str(vars(record)) for record in caplog.records)
+    assert any(
+        Path(str(value)) == target for record in caplog.records for value in vars(record).values()
+    )
 
 
 @pytest.mark.parametrize(
@@ -416,19 +418,19 @@ def test_validation_retries_once_and_overwrites_only_valid_output(
     if mode == "record" and retry_valid:
         assert Cassettes(tmp_path).get(key) == second
     if mode == "record" and not retry_valid:
-        assert Cassettes(tmp_path).get(key) != second
+        assert Cassettes(tmp_path).get(key) == first
     if mode == "replay":
         assert Cassettes(tmp_path).get(key) == first
     if mode == "live":
         assert list(tmp_path.iterdir()) == []
 
 
-def sdk_message(text: str, stop_reason: str = "end_turn") -> SDKMessage:
+def sdk_message(text: str, stop_reason: str = "end_turn", model: str = "api-extract") -> SDKMessage:
     payload = {
         "id": "msg_test",
         "type": "message",
         "role": "assistant",
-        "model": "api-extract",
+        "model": model,
         "content": [
             {"type": "thinking", "thinking": "internal", "signature": "test"},
             {"type": "text", "text": text},
@@ -443,17 +445,22 @@ def sdk_message(text: str, stop_reason: str = "end_turn") -> SDKMessage:
 
 
 @pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("logical", ["extract", "judge"])
 def test_anthropic_maps_sdk_request_and_response(
-    llm_request: LLMRequest, models: ModelIds, structured: bool
+    llm_request: LLMRequest,
+    models: ModelIds,
+    structured: bool,
+    logical: LogicalModel,
 ) -> None:
     """Setup an SDK message / Action complete / Assert SDK kwargs and parsed fields."""
     schema = Item.model_json_schema() if structured else None
-    request = llm_request.model_copy(update={"output_schema": schema})
+    request = llm_request.model_copy(update={"model": logical, "output_schema": schema})
     text = '{"count":2}' if structured else "plain text"
-    client = FakeSDKClient(sdk_message(text))
+    model_id = f"api-{logical}"
+    client = FakeSDKClient(sdk_message(text, model=model_id))
     result = AnthropicBackend(cast(anthropic.Anthropic, client), models).complete(request)
     expected: dict[str, Any] = {
-        "model": "api-extract",
+        "model": model_id,
         "system": request.system,
         "messages": [message.model_dump() for message in request.messages],
         "temperature": 0.25,
@@ -466,7 +473,7 @@ def test_anthropic_maps_sdk_request_and_response(
         text=text,
         data={"count": 2} if structured else None,
         backend="anthropic_api",
-        model="api-extract",
+        model=model_id,
         input_tokens=17,
         output_tokens=5,
     )
@@ -486,12 +493,17 @@ def test_anthropic_rejects_incomplete_output(
 
 @pytest.mark.parametrize("structured", [False, True])
 @pytest.mark.parametrize("with_usage", [False, True])
+@pytest.mark.parametrize("logical", ["extract", "judge"])
 def test_openrouter_maps_http_request_and_response(
-    llm_request: LLMRequest, models: ModelIds, structured: bool, with_usage: bool
+    llm_request: LLMRequest,
+    models: ModelIds,
+    structured: bool,
+    with_usage: bool,
+    logical: LogicalModel,
 ) -> None:
     """Setup a gateway reply / Action complete / Assert HTTP fields and parsed response."""
     schema = Item.model_json_schema() if structured else None
-    request = llm_request.model_copy(update={"output_schema": schema})
+    request = llm_request.model_copy(update={"model": logical, "output_schema": schema})
     text = '{"count":2}' if structured else "plain text"
     seen: list[httpx2.Request] = []
 
@@ -511,7 +523,8 @@ def test_openrouter_maps_http_request_and_response(
     assert str(seen[0].url) == "https://openrouter.ai/api/v1/chat/completions"
     assert seen[0].headers["Authorization"] == "Bearer test-key"
     body = json.loads(seen[0].content)
-    assert body["model"] == "gateway/extract"
+    model_id = f"gateway/{logical}"
+    assert body["model"] == model_id
     assert body["messages"] == [
         {"role": "system", "content": request.system},
         *[message.model_dump() for message in request.messages],
@@ -530,7 +543,7 @@ def test_openrouter_maps_http_request_and_response(
         text=text,
         data={"count": 2} if structured else None,
         backend="openrouter",
-        model="gateway/extract",
+        model=model_id,
         input_tokens=17 if with_usage else None,
         output_tokens=5 if with_usage else None,
     )
@@ -574,6 +587,15 @@ def test_load_model_ids_resolves_yaml(
     assert models.resolve(logical, backend) == expected
 
 
+@pytest.mark.parametrize("logical", MODELS)
+@pytest.mark.parametrize("backend", ["anthropic_api", "openrouter"])
+def test_shipped_model_ids_resolve_default_path(
+    monkeypatch: pytest.MonkeyPatch, logical: LogicalModel, backend: str
+) -> None:
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    assert load_model_ids().resolve(logical, backend)
+
+
 @pytest.mark.parametrize(
     ("mode", "backend_name"),
     [
@@ -596,6 +618,22 @@ def test_from_settings_selects_backend_and_cassette_root(
     """Setup explicit settings / Action build and complete / Assert selected backend and root."""
     monkeypatch.chdir(models_path.parent.parent)
     seen: list[str] = []
+    constructor_keys: list[tuple[str, str]] = []
+
+    def init_anthropic(
+        backend: AnthropicBackend, client: anthropic.Anthropic, models: ModelIds
+    ) -> None:
+        assert client.api_key is not None
+        constructor_keys.append((backend.name, client.api_key))
+
+    def init_openrouter(
+        backend: OpenRouterBackend,
+        api_key: str,
+        models: ModelIds,
+        client: httpx2.Client | None = None,
+        timeout_s: float = 120,
+    ) -> None:
+        constructor_keys.append((backend.name, api_key))
 
     def complete(backend: AnthropicBackend | OpenRouterBackend, request: LLMRequest) -> LLMResponse:
         seen.append(backend.name)
@@ -610,6 +648,9 @@ def test_from_settings_selects_backend_and_cassette_root(
     if mode == "replay":
         monkeypatch.setattr(AnthropicBackend, "__init__", forbid_backend)
         monkeypatch.setattr(OpenRouterBackend, "__init__", forbid_backend)
+    else:
+        monkeypatch.setattr(AnthropicBackend, "__init__", init_anthropic)
+        monkeypatch.setattr(OpenRouterBackend, "__init__", init_openrouter)
     root = tmp_path / "selected-cassettes"
     config = Settings(
         _env_file=None,
@@ -625,6 +666,8 @@ def test_from_settings_selects_backend_and_cassette_root(
         Cassettes(root).put(request_key(llm_request), llm_request, response)
     assert from_settings(config).complete(llm_request) == response
     assert seen == ([] if mode == "replay" else [backend_name])
+    expected_key = "api-test-key" if backend_name == "anthropic_api" else "gateway-test-key"
+    assert constructor_keys == ([] if mode == "replay" else [(backend_name, expected_key)])
     if mode != "live":
         assert Cassettes(root).get(request_key(llm_request)) == response
     else:
@@ -701,5 +744,6 @@ def test_complete_logs_metadata_without_prompt(
     assert fields["input_tokens"] == 17
     assert fields["output_tokens"] == 5
     for secret in (llm_request.system, *(message.content for message in llm_request.messages)):
-        assert secret not in records[0].getMessage()
-        assert secret not in repr(fields)
+        for record in caplog.records:
+            assert secret not in record.getMessage()
+            assert all(secret not in str(value) for value in vars(record).values())
