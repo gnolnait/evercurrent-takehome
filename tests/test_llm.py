@@ -463,12 +463,12 @@ def test_anthropic_maps_sdk_request_and_response(
         "model": model_id,
         "system": request.system,
         "messages": [message.model_dump() for message in request.messages],
-        "temperature": 0.25,
         "max_tokens": 123,
     }
     if structured:
         expected["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
     assert client.calls == [expected]
+    assert "temperature" not in client.calls[0]
     assert result == LLMResponse(
         text=text,
         data={"count": 2} if structured else None,
@@ -477,6 +477,18 @@ def test_anthropic_maps_sdk_request_and_response(
         input_tokens=17,
         output_tokens=5,
     )
+
+
+def test_anthropic_rejects_non_json_structured_output(
+    llm_request: LLMRequest, models: ModelIds
+) -> None:
+    """Setup non-JSON SDK content / Action complete / Assert the raw output error."""
+    request = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
+    client = FakeSDKClient(sdk_message("not json"))
+    backend = AnthropicBackend(cast(anthropic.Anthropic, client), models)
+    with pytest.raises(LLMOutputError) as error:
+        backend.complete(request)
+    assert error.value.raw == "not json"
 
 
 @pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
@@ -529,7 +541,7 @@ def test_openrouter_maps_http_request_and_response(
         {"role": "system", "content": request.system},
         *[message.model_dump() for message in request.messages],
     ]
-    assert body["temperature"] == 0.25
+    assert "temperature" not in body
     assert body["max_tokens"] == 123
     if structured:
         assert body["response_format"] == {
@@ -547,6 +559,25 @@ def test_openrouter_maps_http_request_and_response(
         input_tokens=17 if with_usage else None,
         output_tokens=5 if with_usage else None,
     )
+
+
+def test_openrouter_rejects_non_json_structured_output(
+    llm_request: LLMRequest, models: ModelIds
+) -> None:
+    """Setup non-JSON gateway content / Action complete / Assert the raw output error."""
+    request = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
+
+    def handler(incoming: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            json={"choices": [{"message": {"content": "not json"}, "finish_reason": "stop"}]},
+        )
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend("test-key", models, client=client)
+        with pytest.raises(LLMOutputError) as error:
+            backend.complete(request)
+    assert error.value.raw == "not json"
 
 
 @pytest.mark.parametrize(
