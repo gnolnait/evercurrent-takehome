@@ -252,6 +252,18 @@ def test_meta_missing_and_replaced(store: Store) -> None:
     assert store.get_meta("world") == "second"
 
 
+def test_events_and_meta_commit_atomically(store: Store) -> None:
+    row = event()
+    invalid_meta: Any = {"until": None}
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert_events([row], meta=invalid_meta)
+    assert store.events_in_thread(row.thread_id, AS_OF) == []
+    assert store.get_meta("until") is None
+    assert store.upsert_events([row], meta={"world": "kestrel"}) == 1
+    assert store.events_in_thread(row.thread_id, AS_OF) == [row]
+    assert store.get_meta("world") == "kestrel"
+
+
 def test_file_store_creates_parents_and_preserves_data(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "store.sqlite"
     with Store.open(path) as db:

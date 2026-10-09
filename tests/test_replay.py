@@ -340,6 +340,23 @@ def test_cli_missing_world_does_not_create_store(cli_world: Path, tmp_path: Path
     assert not db_path.exists()
 
 
+@pytest.mark.parametrize("stored_until", ["yesterday", "2026-10-13T06:59:59"])
+def test_cli_refuses_invalid_stored_until(
+    cli_world: Path, tmp_path: Path, stored_until: str
+) -> None:
+    db_path = tmp_path / "invalid-until.sqlite"
+    with Store.open(db_path) as db:
+        db.set_meta("world", "kestrel")
+        db.set_meta("until", stored_until)
+    result = runner.invoke(
+        app, ["replay", "--until", "2026-10-13", "--world", "kestrel", "--db", str(db_path)]
+    )
+    assert result.exit_code == 1, result.output
+    assert "until" in result.output.lower()
+    assert stored_until in result.output
+    assert result.exc_info is None or result.exc_info[0] is SystemExit
+
+
 @pytest.mark.parametrize(
     "previous",
     ["2026-10-14T06:59:59.999999+00:00", "2026-10-13T06:59:59.999999+00:00"],
