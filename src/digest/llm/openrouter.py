@@ -61,6 +61,8 @@ class OpenRouterBackend:
         if not response.is_success:
             raise LLMOutputError(f"openrouter status {response.status_code}", raw=response.text)
         payload = response.json()
+        if "choices" not in payload:
+            raise LLMOutputError("openrouter reply without choices", raw=response.text)
         choice = payload["choices"][0]
         text = choice["message"]["content"]
         if text is None:

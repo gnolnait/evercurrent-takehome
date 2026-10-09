@@ -50,14 +50,18 @@ class LLMOutputError(ValueError):
         self.raw = raw
 
 
+class LLMOutputInvalid(LLMOutputError):
+    """The output is complete but does not parse or validate. The wrapper retries it once."""
+
+
 def parse_json_output(text: str) -> dict[str, Any]:
     """Parse the text a backend returned for a request with an `output_schema`."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
-        raise LLMOutputError("llm_output_not_json", raw=text) from error
+        raise LLMOutputInvalid("llm_output_not_json", raw=text) from error
     if not isinstance(data, dict):
-        raise LLMOutputError("llm_output_not_object", raw=text)
+        raise LLMOutputInvalid("llm_output_not_object", raw=text)
     return data
 
 

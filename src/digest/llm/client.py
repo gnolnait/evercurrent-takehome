@@ -9,7 +9,13 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel, ValidationError, create_model
 
-from digest.llm import Backend, LLMOutputError, LLMRequest, LLMResponse, load_model_ids
+from digest.llm import (
+    Backend,
+    LLMOutputInvalid,
+    LLMRequest,
+    LLMResponse,
+    load_model_ids,
+)
 from digest.llm.anthropic_api import AnthropicBackend
 from digest.llm.cassette import CassetteMiss, Cassettes, request_key
 from digest.llm.openrouter import OpenRouterBackend
@@ -68,23 +74,28 @@ class LLM:
 
     def _validated[T: BaseModel](self, request: LLMRequest, model_cls: type[T]) -> T:
         backend = self.backend
+        key = request_key(request)
+        # A cassette that fails to decode raises from `complete` and is not retried.
         try:
             response = self.complete(request)
-            return model_cls.model_validate(response.data)
-        except ValidationError as error:
-            if backend is None:
-                raise LLMOutputError("llm_output_invalid", raw=response.text) from error
-        except LLMOutputError:
-            if backend is None:
-                raise
+        except LLMOutputInvalid as error:
+            failure, raw = error, error.raw
+        else:
+            try:
+                return model_cls.model_validate(response.data)
+            except ValidationError as error:
+                failure, raw = error, response.text
+        if backend is None:
+            raise LLMOutputInvalid(f"llm_output_invalid key {key}", raw=raw) from failure
         # The retry bypasses the cassette read: a read would return the same invalid output.
-        key = request_key(request)
         response = backend.complete(request)
-        self._log("llm_retry", key, response)
+        self._log("llm_retry", key, response, reason=str(failure))
         try:
             result = model_cls.model_validate(response.data)
         except ValidationError as error:
-            raise LLMOutputError("llm_output_invalid_after_retry", raw=response.text) from error
+            raise LLMOutputInvalid(
+                f"llm_output_invalid_after_retry key {key}", raw=response.text
+            ) from error
         if self.mode == "record":
             self.cassettes.put(key, request, response)
         return result
