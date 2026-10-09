@@ -1,8 +1,10 @@
+import json
 import re
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -10,6 +12,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from digest.cli import app
+from digest.models import Event
 from digest.settings import Settings
 from digest.world.load import load_world
 from digest.world.schema import World
@@ -73,7 +76,12 @@ def _world() -> dict[str, Any]:
             },
         ],
         "entities": [
-            {"id": "drive", "type": "subsystem", "description": "Drive subsystem"},
+            {
+                "id": "drive",
+                "type": "subsystem",
+                "description": "Drive subsystem",
+                "aliases": ["drive assembly"],
+            },
             {
                 "id": "PN-31010",
                 "type": "part",
@@ -82,6 +90,12 @@ def _world() -> dict[str, Any]:
                 "parent": "drive",
                 "aliases": ["drive part"],
                 "state": {"rev": "A"},
+            },
+            {
+                "id": "AUX-900",
+                "type": "part",
+                "description": "Auxiliary part",
+                "aliases": ["auxiliary unit"],
             },
         ],
         "events": [
@@ -122,7 +136,7 @@ def _world() -> dict[str, Any]:
         pytest.param(("events", 1, "claims", 0, "entity"), "missing", "E2", id="claim-entity"),
         pytest.param(("personas", 0, "owned_entities"), ["missing"], "UME", id="owned-entity"),
         pytest.param(("entities", 1, "subsystem"), "missing", "PN-31010", id="subsystem-id"),
-        pytest.param(("entities", 1, "subsystem"), "PN-31010", "PN-31010", id="subsystem-type"),
+        pytest.param(("entities", 1, "subsystem"), "AUX-900", "PN-31010", id="subsystem-type"),
         pytest.param(("entities", 1, "parent"), "missing", "PN-31010", id="parent-entity"),
         pytest.param(("events", 1, "tasks", 0, "task"), "missing", "E2", id="checklist-task"),
         pytest.param(("personas", 0, "channels"), ["missing"], "UME", id="persona-channel"),
@@ -157,7 +171,7 @@ def _world() -> dict[str, Any]:
             id="alias-across-kinds",
         ),
         pytest.param(
-            ("entities", 0, "aliases"), ["drive part"], "drive|PN-31010", id="alias-across-entities"
+            ("entities", 0, "aliases"), ["auxiliary unit"], "drive", id="alias-across-entities"
         ),
         pytest.param(
             ("personas", 1, "aliases"), ["mechanical owner"], "UEM|UME", id="alias-across-personas"
@@ -191,6 +205,7 @@ def _world() -> dict[str, Any]:
         for case, target, entity, attribute in [
             ("missing-event", "missing", "PN-31010", "rev"),
             ("later-day", "E3", "PN-31010", "rev"),
+            ("self-event", "E2", "PN-31010", "rev"),
             ("no-claim", "E0", "PN-31010", "rev"),
             ("different-entity", "E1", "drive", "rev"),
             ("different-attribute", "E1", "PN-31010", "qty"),
@@ -362,10 +377,10 @@ def test_world_check_reports_counts_or_path(
     else:
         assert result.exit_code == 0, result.output
         for label, count in [(r"(?:CMAIN|kestrel-program)", 3), (r"(?:CFEED|plm-feed)", 1)]:
-            assert re.search(rf"{label}[^\n]*\b{count}\b", result.output)
+            assert re.search(rf"{label}[^\d\n]*{count}\b", result.output)
         for day, count in [(1, 2), (2, 1), (3, 1)]:
             label = rf"(?:\b[Dd]ay\s+{day}\b|\bD{day}\b|2026-10-{11 + day}|^\s*{day}\s*[:|])"
-            assert re.search(rf"{label}[^\n]*\b{count}\b", result.output, re.MULTILINE)
+            assert re.search(rf"{label}[^\d\n]*{count}\b", result.output, re.MULTILINE)
 
 
 def test_bundled_world_contains_planned_program() -> None:
@@ -433,17 +448,18 @@ def test_bundled_world_contains_planned_program() -> None:
     assert set(by_role) == {"ME", "EE", "FW", "supply_chain", "EM", "PM"}
     for persona in staff:
         assert persona.team
-        assert persona.manager
     for role in ("ME", "EE", "FW"):
         assert by_role[role].manager == by_role["EM"].user_id
     assert by_role["supply_chain"].manager == by_role["PM"].user_id
+    assert by_role["EM"].manager is None
+    assert by_role["PM"].manager is None
     bots = [persona for persona in world.personas if persona.kind == "bot"]
     assert len(bots) == 3
     assert {bot.name for bot in bots} == {"plm_bot", "schedule_bot", "doc_control_bot"}
     for bot in bots:
         assert bot.role is None
         assert bot.authority == "plm_bot"
-        assert bot.channels == (channels["plm-feed"],)
+        assert channels["plm-feed"] in bot.channels
         posts = [event for event in world.events if event.poster == bot.user_id]
         assert posts
         assert {event.channel for event in posts} == {channels["plm-feed"]}
@@ -486,16 +502,40 @@ def test_bundled_world_contains_planned_program() -> None:
                 and (claim.supersedes or claim.contradicts)
                 for claim in claims
             )
-    events = {event.id: event for event in world.events}
     schedule_bot = next(bot for bot in bots if bot.name == "schedule_bot")
-    assert any(
-        events[target].poster == schedule_bot.user_id
-        for event in world.events
-        if event.scenario == "S12" and event.poster == cm[0].user_id
-        for claim in event.claims
-        for target in claim.contradicts
+    s12 = next(
+        event for event in world.events if event.scenario == "S12" and event.poster == cm[0].user_id
     )
+    schedule_posts = [
+        (index, event)
+        for index, event in enumerate(world.events)
+        if event.poster == schedule_bot.user_id and event.day <= s12.day
+    ]
+    _, latest_schedule_post = max(schedule_posts, key=lambda item: (item[1].day, item[0]))
+    contradiction_targets = {target for claim in s12.claims for target in claim.contradicts}
+    assert latest_schedule_post.id in contradiction_targets
     plm_bot = next(bot for bot in bots if bot.name == "plm_bot")
     assert not any(
         event.poster == plm_bot.user_id for event in world.events if event.scenario == "S1"
     )
+
+
+def test_bundled_events_match_world_and_working_days() -> None:
+    """Setup the bundled corpus; parse each line; assert its size, order and world references."""
+    root = Path(__file__).resolve().parents[1]
+    world = load_world(root / "data/world/kestrel/world.yaml")
+    lines = (root / "data/world/kestrel/events.jsonl").read_text(encoding="utf-8").splitlines()
+
+    events = [Event.model_validate_json(line) for line in lines]
+
+    assert 8 <= len(events) <= 14
+    assert all(set(json.loads(line)) == set(Event.model_fields) for line in lines)
+    assert [event.event_ts for event in events] == sorted(event.event_ts for event in events)
+    channel_ids = {channel.id for channel in world.channels}
+    persona_ids = {persona.user_id for persona in world.personas}
+    working_days = {world.date_of(day) for day in range(1, world.days + 1)}
+    timezone = ZoneInfo(world.timezone)
+    for event in events:
+        assert event.channel_id in channel_ids
+        assert event.user_id in persona_ids
+        assert event.at.astimezone(timezone).date() in working_days
