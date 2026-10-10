@@ -6,12 +6,15 @@
 # The anthropic_api backend serves Claude only, so render and judge use Claude there.
 # The different-family renderer and judge (D12) need the openrouter backend.
 
+# Model class by job follows D2: Haiku-class for bulk extraction, Sonnet-class for
+# adjudication; the Haiku-versus-Sonnet question for extraction is decided after the first
+# twenty golden threads (M2).
 extract:
-  anthropic_api: claude-opus-5-5
-  openrouter: anthropic/claude-opus-5.5
+  anthropic_api: claude-haiku-5-5
+  openrouter: anthropic/claude-haiku-5.5
 adjudicate:
-  anthropic_api: claude-opus-5-5
-  openrouter: anthropic/claude-opus-5.5
+  anthropic_api: claude-sonnet-5-5
+  openrouter: anthropic/claude-sonnet-5.5
 render:
   # anthropic_api is for live mode only; recordings of render come from the gateway (D12).
   anthropic_api: claude-opus-5-5
