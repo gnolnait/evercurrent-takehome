@@ -104,7 +104,8 @@ reactions[{name, user_id, ts}], files[], permalink, edited, deleted}`
 - `ts` is the message time and the identity; `event_ts` is when this version was
   observed (equal to `ts` for the original post, later for an edit or a delete).
 - A system of record (PLM, schedule tool, document control, issue tracker) appears as a
-  bot user posting into a feed channel, live or rendered from a CSV by `digest import`;
+  bot user posting into a feed channel, live or (for PLM) rendered from a CSV by
+  `digest import plm`;
   its claims carry `plm_bot` authority. The issue tracker's claims are `status`, `owner`
   and `priority` on `issue` entities.
 - Channels carry `private: bool` and `external: bool`. A public channel is visible to
@@ -209,8 +210,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 1. Ingest: events into SQLite, idempotent on (channel_id, ts). Replay feeds the JSONL
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
    Mode events, event_id dedup and a nightly 26-hour reconciliation read. `digest import plm`
-   (stretch) renders each CSV row as a `plm_bot` post into the feed channel, `ts` from the
-   row's `asserted_ts` and row order, so it enters this step like any event and obeys the
+   (stretch) renders each CSV row as a `plm_bot` post into the feed channel named by
+   `--channel`, which must already exist in the store with its visibility (else refused),
+   `ts` from the row's `asserted_ts` and row order, so it enters this step like any event and obeys the
    replay clock. `digest import people` sets profile fields with source `imported`,
    shown for confirmation beside inferred ones; it never overwrites a `confirmed` field.
 2. Extract: a classifier first decides whether the thread delta contains project
@@ -469,6 +471,26 @@ built on that day only after the day's core items are done, when time is left;
 otherwise it waits for days 6 to 7. A stretch item never displaces a core item of a
 later day.
 
+v0.4 at a glance. The cut list for the v0.4 additions, by milestone; "core" here is
+what section 10 means by "section 9 names it core".
+- M2. Core: absence sources (c) and (e); the reference pass; the world schema fields
+  (`depends_on`, `priority`, task `entities`, claim `certainty`, `kind` and `scope`,
+  channel `private` and `external`, document revision histories). Stretch: field-level
+  verification; loud-noise negatives; the cost-derived triage threshold; the `ticket`
+  reaction rule; the tracker bot persona.
+- M3. Core: `depends_on` edges with fan-out; absence source (d); stale-reference items;
+  the action-time audit; the visibility filter. Stretch: scoped claims; the
+  external-channel stale-reference rule; absence sources (f) and (g); ledger values in
+  the extraction prompt; decision exposure; contradiction routing with the confirm
+  action; the feedback event log; the per-subsystem phase override; history labels;
+  resolved-since lines; per-role consequence templates; the "last to know" term.
+- M4. Core: the headline metrics; the regression gate; the coverage line. Stretch:
+  baselines beside every rate; abstention precision; pairwise judging; `digest diff`;
+  `why_ranked` on an undelivered item.
+- M5. Core: exposure recorded on Slack's acceptance. Stretch: send idempotency;
+  dead-credential handling; the admin alert; the "nothing today" line; the mock issue
+  tracker; the CSV import.
+
 - M1 (day 1): skeleton, models, SQLite store, replay ingest, cassette wrapper with the
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
@@ -487,7 +509,7 @@ later day.
   reads the ledger), stale-reference items, the action-time staleness audit (an as-of read of the ledger
   and the actor's exposure), and the visibility filter (a correctness rule, not new
   scope). v0.4 stretch also: scoped claims, the external-channel stale-reference rule,
-  suspect evidence (source f).
+  suspect evidence (source f), ended scope (source g).
   v0.4 stretch: ledger values in the extraction prompt, decision exposure, contradiction
   routing with the confirm action, the feedback event log, the per-subsystem phase
   override, history labels, resolved-since lines, per-role consequence templates, the
@@ -513,8 +535,9 @@ later day.
   import command (`digest import people <csv>` for user_id, role, team, manager,
   owned_entities; `digest import plm <csv>` for entity, attribute, value, asserted_ts,
   rendered as feed posts per section 5 step 1) with two demo files generated from the
-  Kestrel world script; the check is that an import into an empty store yields the
-  profiles and feed claims that replay produces.
+  Kestrel world script; the check is that an import into an
+  empty store yields the feed claims and the profile fields (sources aside) that replay
+  produces.
 - Days 6 to 7: adversarial validation, second-model review, retro, polish, then
   stretch items in the order they are listed above. If a core day slips, the web
   preview is the first core item deferred, as in v0.2.
