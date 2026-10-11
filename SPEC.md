@@ -104,8 +104,9 @@ reactions[{name, user_id, ts}], files[], permalink, edited, deleted}`
 - `ts` is the message time and the identity; `event_ts` is when this version was
   observed (equal to `ts` for the original post, later for an edit or a delete).
 - A system of record (PLM, schedule tool, document control, issue tracker) appears as a
-  bot user posting into a feed channel; its claims carry `plm_bot` authority. The issue
-  tracker's claims are `status`, `owner` and `priority` on `issue` entities.
+  bot user posting into a feed channel, live or rendered from a CSV by `digest import`;
+  its claims carry `plm_bot` authority. The issue tracker's claims are `status`, `owner`
+  and `priority` on `issue` entities.
 - Channels carry `private: bool` and `external: bool`. A public channel is visible to
   every reader; a private one only to its members. Visibility, not membership, decides
   what a reader may be told. An external channel is shared with a contract manufacturer
@@ -176,7 +177,7 @@ watch_prompts[], interest{entity_or_topic: weight}, exposed{key: (value, ts, how
 seen{item_id: ts}, feedback[{event, item_id, run_id, profile_version, ts, payload}],
 delivery{time, weekdays[], quiet_hours, paused},
 style{description, length, section_order[], sections_off[], language},
-sources{field: configured | inferred | confirmed | pasted}}`
+sources{field: configured | inferred | confirmed | pasted | imported}}`
 - role: ME | EE | FW | supply_chain | EM | PM
 - exposed.how: authored | replied | reacted | shown_in_digest | linked (the reader posted, replied to or reacted on a message carrying a file or link
   that names a value, so they hold it)
@@ -207,9 +208,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 
 1. Ingest: events into SQLite, idempotent on (channel_id, ts). Replay feeds the JSONL
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
-   Mode events, event_id dedup and a nightly 26-hour reconciliation read. CSV exports of
-   people and PLM records enter through `digest import` (stretch, M5); they are the
-   universal form every HRIS and PLM provides.
+   Mode events, event_id dedup and a nightly 26-hour reconciliation read. `digest import plm`
+   (stretch) renders each CSV row as a `plm_bot` post into the feed channel, `ts` from the
+   row's `asserted_ts` and row order, so it enters this step like any event and obeys the
+   replay clock. `digest import people` sets profile fields with source `imported`,
+   shown for confirmation beside inferred ones; it never overwrites a `confirmed` field.
 2. Extract: a classifier first decides whether the thread delta contains project
    information (triage; a dropped golden item counts as a miss in the eval). The
    classifier returns a probability, through the structured-output path (`extract` with
@@ -507,11 +510,11 @@ later day.
   admin alert, the "nothing today" line, and a mock issue tracker (an in-process
   stand-in with create, assign and status behind the function layer) so a `ticket`
   reaction creates an issue live until a tracker connector exists (later.md); a file
-  import command (`digest import people <csv>` for user_id, name, role, team, manager,
-  owned subsystems into profiles; `digest import plm <csv>` for entity, attribute, value,
-  asserted date into the ledger with `plm_bot` authority) with the two demo files
-  generated from the Kestrel world script, so the import path runs on scripted data in
-  the demo.
+  import command (`digest import people <csv>` for user_id, role, team, manager,
+  owned_entities; `digest import plm <csv>` for entity, attribute, value, asserted_ts,
+  rendered as feed posts per section 5 step 1) with two demo files generated from the
+  Kestrel world script; the check is that an import into an empty store yields the
+  profiles and feed claims that replay produces.
 - Days 6 to 7: adversarial validation, second-model review, retro, polish, then
   stretch items in the order they are listed above. If a core day slips, the web
   preview is the first core item deferred, as in v0.2.

@@ -46,9 +46,9 @@ would promote it.
 - Org-chart and HR connectors to fill team and manager. First: Google Workspace
   Directory API, where each user record carries a `relations` entry of type manager and
   dynamic group queries list a manager's reports; Microsoft Graph has the same shape.
-  Vendor PLM APIs (Arena, Duro, Onshape, Teamcenter) stay deferred until a customer names
-  the tool; until then PLM enters as bot posts in a feed channel or as a CSV through
-  `digest import`. The Slack-inferred profile draft and the file import cover the demo.
+  Vendor PLM APIs (Arena, Duro, Onshape) stay deferred until a customer names the tool;
+  until then PLM enters as feed posts (SPEC section 4). The Slack-inferred profile draft
+  covers the demo; `digest import people` (SPEC section 9, M5 stretch) is the fallback.
   Trigger: a second real workspace on Google Workspace or Microsoft 365.
 - Point-in-time history of edited messages (row versioning in the store). The snapshot
   rule (a digest for day D runs on a store replayed to day D) covers the demo and the

@@ -283,7 +283,12 @@ which the extraction client turns into the same fields plus watch prompts. Every
 records its source (configured, inferred, confirmed, pasted). The web preview's
 profile page is the single settings surface; the onboarding DM links to it; delivery
 time defaults to the Slack timezone. Slack App Home settings and slash commands are
-stretch (SPEC section 9). No org-chart, HR or LinkedIn sources.
+stretch (SPEC section 9). No org-chart, HR or LinkedIn connectors.
+
+Amended 2026-10-11 (SPEC v0.4): an HRIS CSV may fill profile fields through
+`digest import people` (M5 stretch), recorded with source `imported`, never over a
+`confirmed` field. The profile page stays the single settings surface; connectors stay in
+later.md.
 
 Why. The data the bootstrap needs is already ingested; a confirmed draft beats a blank
 form; a source per field keeps inferred values from being mistaken for stated ones.
