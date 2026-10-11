@@ -72,3 +72,24 @@ would promote it.
 - Embedding-based recall in the linker (voyage-4 or sqlite-vec) behind the existing
   blocking step. Trigger: lexical blocking misses measured on the eval.
 - Temporal-style durable execution for the stage DAG. Trigger: production deployment.
+
+## Deferred from the v0.4 review of public submissions (2026-10-11)
+
+- Reaction kind (alarm versus acknowledgement emoji) as an urgency signal; only if the
+  ablation shows engagement moves the numbers.
+- Implicit thread continuation for top-level follow-ups that point at a thread.
+- Phase-change proposal from checklist state, confirmed by a human (a non-chat variant
+  of the change-point entry above).
+- An "acknowledged" button feeding exposure and the landing map.
+- A shared section of 0 to 3 items every reader gets (phase change, major decision);
+  take it if the landing map shows decisions not landing.
+- A holdout world written by a fresh agent from a brief, scored on aggregates only.
+- A repair prompt that re-asks with the validator's reason after a verification failure.
+- A per-stage trace page for one item in the web preview.
+- `cost` as an attribute in the claim vocabulary; entity criticality beyond `priority`;
+  a per-reader attention budget.
+- "You are the last to know": the gap between the reader's exposure and their peers'
+  as a ranking term (needs no new data; stretch in M3).
+- The author's digest showing where their own decision did not land (landing map read
+  from the author's side).
+- Transient backoff for 429 and 5xx on the gateway during record runs.

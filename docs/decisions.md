@@ -73,6 +73,10 @@ Why. The Citations API cannot be combined with structured outputs, so grounding 
 be verified by us. Verification in code is also the only faithfulness guarantee that does
 not depend on another model's judgment.
 
+Amended 2026-10-11 (SPEC v0.4): verification also covers `owner`, `due` and claim values
+against the cited text, with unit-aware numbers and user ids for people; the digest renders
+quoted and model text as plain text and links only constructed permalinks.
+
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction
 
 Decision. Must-see is rule-based and never ranked away: asks addressed to the user,
@@ -98,6 +102,11 @@ each user's local time from `users.info`.
 Why. No public URL during development, Tier 3 history limits for an internal app, and
 the simplest thing that is honest about failure modes. Detailed facts in
 `notes/research/slack-platform.md`.
+
+Amended 2026-10-11 (SPEC v0.4): exposure is recorded only after Slack accepts the message;
+each sent part carries the run id in message metadata so retries post only missing parts;
+revoked or invalid tokens stop retries and mark the install inactive; auth failures and an
+empty run raise an admin alert.
 
 ## D8. Web preview: server-rendered, no frontend build
 
@@ -280,6 +289,11 @@ stale-belief lines can say when a value stopped being true, supersession recall 
 measured on time rather than only on links, and a tracker connector later writes the
 same rows.
 
+Amended 2026-10-11 (SPEC v0.4): claims carry `certainty`, `kind` and `conditions`; a
+hedged or question claim never supersedes, a target never supersedes a measurement, and
+measurements under different conditions never contradict; a lower-authority change to a
+recorded key is `pending` until the system of record confirms it.
+
 ## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
 
 Decision. Queries and feedback over the store and the ranker are plain functions in
@@ -303,6 +317,57 @@ concrete answer to the take-home's question on function calling versus MCP.
 
 Would change it. A hosted deployment: the MCP server gains an HTTP transport with
 per-user tokens (docs/later.md).
+
+## D21. The objective is stale-belief person-days
+
+Decision. The digest minimises the working days readers hold a value the ledger has
+superseded, summed over readers and facts, under a per-digest length budget. Ranking
+terms are derivatives of that sum; the evaluation reports it directly (digest on versus
+off), with time-to-told per role and the novelty rate beside it. The formulas read only
+world fields (`supersedes`, `must_see_for`, `known_by`, event days) and the store.
+
+Why. One scalar that ranking and evaluation share stops the two from drifting apart,
+and it is the quantity the thesis names. It needs per-reader exposure and a bi-temporal
+ledger, which the public submissions to the same brief do not have, so it is also the
+line a reviewer has not read fifteen times.
+
+Would change it. A measured case where person-days and reader judgement disagree on
+what mattered; then the weight by decision exposure becomes the headline instead.
+
+## D22. A light entity graph: edges, decision exposure, routed contradictions
+
+Decision. Entities carry `depends_on` edges; a change on an entity an owned entity
+depends on reaches the owner through the must-see lane with the edge in the reason.
+Decision exposure comes from the gate checklists: a stale value on an entity the
+reader's pending task touches is urgent, the same value for a reader with no pending
+task is FYI. An open contradiction is routed to the owner of the key as a `needs_you`
+line with both claims and their authority; code never picks a winner. No graph
+database: edges are a list on the entity, read by the ranker and the golden-label
+derivation.
+
+Why. Four public submissions model cross-team reach; the one that measured it
+delivered 12 of 12 planted cross-team changes with edges and lost them without. The
+checklist already states what each reader is about to do, so decision exposure costs
+one lookup. Contradictions routed to a person stay honest states in the ledger.
+
+Would change it. More than two edge kinds, or queries that walk more than one hop:
+then the `relations` table in later.md.
+
+## D23. Evaluation gates
+
+Decision. Golden labels and the ranking configuration are fingerprinted and `digest
+eval` refuses a mismatch. Every ranking rate is reported beside two baselines, role-only
+and send-everything, even when a baseline wins. Quiet world days give an abstention
+precision. `digest eval --gate` compares the report to a frozen baseline and CI fails on
+a drop beyond a stated tolerance per metric; citation validity stays a hard 100 percent.
+Prose ablations (renderer, prompt version) use a pairwise judge with position swap.
+
+Why. A single run on self-written labels is the common failure of the field. A frozen
+baseline, published baselines and a gate make the report a regression instrument, and
+pairwise judging is more reliable than a 1 to 10 score for text.
+
+Would change it. A metric that gates noisily under cassette replay: raise its tolerance
+or move it to report-only, and say so in the report.
 
 ## Validation against EverCurrent's published experience
 

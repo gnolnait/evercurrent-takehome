@@ -8,7 +8,7 @@ Instructions for every model working in this repo. `CLAUDE.md` is a byte-identic
 A role- and phase-aware daily Slack digest for hardware engineering teams. Thesis: a
 digest is the diff between what the project knows and what you were last told, plus what
 should have happened but didn't. Read `SPEC.md` (the contract), `docs/decisions.md`
-(architecture decisions D1 to D20) and `docs/process.md` (how work is dispatched) before
+(architecture decisions D1 to D23) and `docs/process.md` (how work is dispatched) before
 any non-trivial change. Deferred scope lives in `docs/later.md`.
 
 Stack: Python 3.12, uv, pydantic, typer, SQLite with FTS5, the Anthropic SDK, slack-bolt,
