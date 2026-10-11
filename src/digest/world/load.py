@@ -26,4 +26,5 @@ def load_world_header(path: Path) -> WorldHeader:
 
 
 def load_world(path: Path) -> World:
-    raise NotImplementedError
+    with path.open(encoding="utf-8") as f:
+        return World.model_validate(yaml.safe_load(f))

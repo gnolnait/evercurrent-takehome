@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal
+from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 from digest.models import Attribute, Authority, Frozen, Role
-from digest.project import ProjectConfig
+from digest.project import ProjectConfig, require_unique
 
 EntityType = Literal[
     "part",
@@ -118,5 +119,124 @@ class World(Frozen):
     entities: tuple[Entity, ...]
     events: tuple[WorldEvent, ...]
 
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown timezone {value}") from exc
+        return value
+
+    @model_validator(mode="after")
+    def _check_references(self) -> Self:
+        require_unique("channel", [channel.id for channel in self.channels])
+        require_unique("event", [event.id for event in self.events])
+        require_unique("entity", [entity.id for entity in self.entities])
+        require_unique("persona", [persona.user_id for persona in self.personas])
+        self._check_aliases()
+        self._check_entities()
+        self._check_personas()
+        self._check_events()
+        self._check_calendar()
+        return self
+
+    def _check_aliases(self) -> None:
+        holders: dict[str, list[str]] = {}
+        for item_id, aliases in [(e.id, e.aliases) for e in self.entities] + [
+            (p.user_id, p.aliases) for p in self.personas
+        ]:
+            for alias in aliases:
+                holders.setdefault(alias, []).append(item_id)
+        for alias, ids in holders.items():
+            if len(ids) > 1:
+                raise ValueError(f"alias {alias!r} is used by {', '.join(ids)}")
+
+    def _check_entities(self) -> None:
+        types = {entity.id: entity.type for entity in self.entities}
+        for entity in self.entities:
+            if entity.subsystem is not None and types.get(entity.subsystem) != "subsystem":
+                raise ValueError(
+                    f"entity {entity.id}: subsystem {entity.subsystem} is not a subsystem entity"
+                )
+            if entity.parent is not None and entity.parent not in types:
+                raise ValueError(f"entity {entity.id}: unknown parent {entity.parent}")
+
+    def _check_personas(self) -> None:
+        channels = {channel.id for channel in self.channels}
+        entities = {entity.id for entity in self.entities}
+        personas = {persona.user_id for persona in self.personas}
+        for persona in self.personas:
+            pid = persona.user_id
+            if (persona.kind == "human") != (persona.role is not None):
+                raise ValueError(f"persona {pid}: a human needs a role and a bot has none")
+            for channel in persona.channels:
+                if channel not in channels:
+                    raise ValueError(f"persona {pid}: unknown channel {channel}")
+            for entity in persona.owned_entities:
+                if entity not in entities:
+                    raise ValueError(f"persona {pid}: unknown owned entity {entity}")
+            if persona.manager is not None and (
+                persona.manager == pid or persona.manager not in personas
+            ):
+                raise ValueError(f"persona {pid}: manager {persona.manager} is not another persona")
+
+    def _check_events(self) -> None:
+        channels = {channel.id for channel in self.channels}
+        entities = {entity.id for entity in self.entities}
+        personas = {persona.user_id: persona for persona in self.personas}
+        humans = {pid for pid, persona in personas.items() if persona.kind == "human"}
+        tasks = {task.id for gate in self.project.gates for task in gate.checklist}
+        events = {event.id: event for event in self.events}
+        for event in self.events:
+            eid = event.id
+            if event.channel not in channels:
+                raise ValueError(f"event {eid}: unknown channel {event.channel}")
+            poster = personas.get(event.poster)
+            if poster is None:
+                raise ValueError(f"event {eid}: unknown poster {event.poster}")
+            if event.channel not in poster.channels:
+                raise ValueError(f"event {eid}: poster {poster.user_id} is not in {event.channel}")
+            for day in [event.day, *event.known_by.values()]:
+                if not 1 <= day <= self.days:
+                    raise ValueError(f"event {eid}: day {day} is outside 1..{self.days}")
+            for pid in [*event.must_see_for, *event.known_by]:
+                if pid not in humans:
+                    raise ValueError(f"event {eid}: {pid} is not a human persona")
+            for touch in event.tasks:
+                if touch.task not in tasks:
+                    raise ValueError(f"event {eid}: unknown checklist task {touch.task}")
+            for claim in event.claims:
+                if claim.entity not in entities:
+                    raise ValueError(f"event {eid}: unknown claim entity {claim.entity}")
+                links = [claim.supersedes] if claim.supersedes is not None else []
+                for target_id in [*links, *claim.contradicts]:
+                    target = events.get(target_id)
+                    if (
+                        target is None
+                        or target is event
+                        or target.day > event.day
+                        or not any(
+                            (c.entity, c.attribute) == (claim.entity, claim.attribute)
+                            for c in target.claims
+                        )
+                    ):
+                        raise ValueError(
+                            f"event {eid}: {target_id} is not another earlier or same-day event "
+                            f"with a claim on {claim.entity} {claim.attribute}"
+                        )
+
+    def _check_calendar(self) -> None:
+        if self.start_date.weekday() != 0:
+            raise ValueError(f"start_date {self.start_date} is not a Monday")
+        first = self.project.phases[0]
+        if first.from_date > self.start_date:
+            raise ValueError(f"phase {first.phase} starts after start_date {self.start_date}")
+        working_days = {self.date_of(day) for day in range(1, self.days + 1)}
+        for gate in self.project.gates:
+            if gate.date not in working_days:
+                raise ValueError(f"gate {gate.id}: {gate.date} is not a working day of the world")
+
     def date_of(self, day: int) -> dt.date:
-        raise NotImplementedError
+        weeks, weekday = divmod(day - 1, 5)
+        return self.start_date + dt.timedelta(weeks=weeks, days=weekday)
