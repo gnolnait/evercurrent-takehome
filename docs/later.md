@@ -34,18 +34,22 @@ would promote it.
   Trigger: the interactive agent exists and a real workspace has used the digest for a
   month, so the ask-user rate and the triage thresholds can be set from data.
 - Full entity model beyond the v1 minimum. v1 has entity types with `subsystem`,
-  `parent` and `aliases`, personas with `team` and `manager`, and claims as the only
-  edges. The full model adds: a `relations` table with typed edges (`part_of`,
-  `owned_by`, `member_of`, `reports_to`, `governs`, `depends_on`) each with a validity
-  window; `team` and `person` as entity types so ownership can be held by a team;
+  `parent` and `aliases`, personas with `team` and `manager`, claims and `depends_on` as the
+  only edges (v0.4 added `depends_on`). The full model adds: a `relations` table with
+  typed edges (`part_of`, `owned_by`, `member_of`, `reports_to`, `governs`) each with a
+  validity window; `team` and `person` as entity types so ownership can be held by a team;
   documents with a content reference (PLM or Drive id, version) rather than a title;
   `deliverable` as a grouping of tasks, builds and tests that a gate consumes; a
   glossary table with alias provenance. Each is additive to the v1 schema. Trigger:
   a ranking or landing-map need that the v1 fields cannot express, or a connector that
   supplies the edges.
-- Org-chart and HR connectors (Google Directory, Workday, BambooHR) to fill team and
-  manager. The Slack-inferred profile draft approximates them. Trigger: a second real
-  workspace.
+- Org-chart and HR connectors to fill team and manager. First: Google Workspace
+  Directory API, where each user record carries a `relations` entry of type manager and
+  dynamic group queries list a manager's reports; Microsoft Graph has the same shape.
+  Vendor PLM APIs (Arena, Duro, Onshape) stay deferred until a customer names the tool;
+  until then PLM enters as feed posts (SPEC section 4). The Slack-inferred profile draft
+  covers the demo; `digest import people` (SPEC section 9, M5 stretch) is the fallback.
+  Trigger: a second real workspace on Google Workspace or Microsoft 365.
 - Point-in-time history of edited messages (row versioning in the store). The snapshot
   rule (a digest for day D runs on a store replayed to day D) covers the demo and the
   eval. Trigger: a live deployment that must answer "what did the digest say last
@@ -72,3 +76,22 @@ would promote it.
 - Embedding-based recall in the linker (voyage-4 or sqlite-vec) behind the existing
   blocking step. Trigger: lexical blocking misses measured on the eval.
 - Temporal-style durable execution for the stage DAG. Trigger: production deployment.
+
+## Deferred from the v0.4 review of public submissions (2026-10-11)
+
+- Reaction kind (alarm versus acknowledgement emoji) as an urgency signal; only if the
+  ablation shows engagement moves the numbers.
+- Implicit thread continuation for top-level follow-ups that point at a thread.
+- Phase-change proposal from checklist state, confirmed by a human (a non-chat variant
+  of the change-point entry above).
+- An "acknowledged" button feeding exposure and the landing map.
+- A shared section of 0 to 3 items every reader gets (phase change, major decision);
+  take it if the landing map shows decisions not landing.
+- A holdout world written by a fresh agent from a brief, scored on aggregates only.
+- A repair prompt that re-asks with the validator's reason after a verification failure.
+- A per-stage trace page for one item in the web preview.
+- `cost` as an attribute in the claim vocabulary; entity criticality beyond `priority`;
+  a per-reader attention budget.
+- The author's digest showing where their own decision did not land (landing map read
+  from the author's side).
+- Transient backoff for 429 and 5xx on the gateway during record runs.
