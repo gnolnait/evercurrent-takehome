@@ -221,8 +221,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    their units and people by user id. Entity ids must match the normalizers. Items failing verification are dropped and
    counted per field. Before the model runs, a deterministic pass reads file names in
    `files[]` and URLs in the text: a revision token in a file name or a pinned-version
-   URL yields a `referenced` claim on the document entity and `linked` exposure for the
-   poster and every reader who replied or reacted; a reference older than the ledger's value as of the message's `asserted_ts` is a
+   URL yields a `referenced` claim on the document entity whose evidence is the file name or
+   URL itself (the quote rule above applies to model-written items), and `linked`
+   exposure for the poster and every reader who replied or reacted; a reference older than the ledger's value as of the message's `asserted_ts` is a
    stale-reference item, suppressed when the thread also cites the current value. A
    `ticket` reaction by a human on a message creates an `issue` item owned by the reactor
    with `owner_stated` authority and cites the message; it is also a human label that a
@@ -460,8 +461,8 @@ later day.
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
 - M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
   prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c) and (e), the reference pass (revision tokens in file
-  names and links as `referenced` claims and `linked` exposure, with stale-reference
-  items), and the world schema additions they and M3 need (`depends_on`, `priority`,
+  names and links as `referenced` claims and `linked` exposure; the stale-reference item
+  itself waits for the ledger in M3), and the world schema additions they and M3 need (`depends_on`, `priority`,
   task `entities`, claim `certainty`, `kind` and `scope`, channel `private` and
   `external`, documents with revision histories). v0.4 stretch: field-level verification, loud-noise negatives, the cost-derived triage
   threshold, the `ticket` reaction rule and the tracker bot persona. Jev triage when a TypeSafe key exists stays stretch.
@@ -469,8 +470,8 @@ later day.
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
   precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
-  plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the must-see lane, absence source (d)
-  (it reads the ledger), the action-time staleness audit (an as-of read of the ledger
+  plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the must-see lane, absence source (d) (it
+  reads the ledger), stale-reference items, the action-time staleness audit (an as-of read of the ledger
   and the actor's exposure), and the visibility filter (a correctness rule, not new
   scope). v0.4 stretch also: scoped claims, the external-channel stale-reference rule,
   suspect evidence (source f).
