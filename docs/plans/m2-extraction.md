@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.0, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.1, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -106,6 +106,11 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 - `digest/cli.py`: `extract`, `absences`, `world render`, `world golden` with their
   option declarations and `_not_yet` bodies; `eval` keeps its stub.
 - `pyproject.toml`: the layers contract above. No new dependency.
+- `tests/test_world.py`: the bundled-world test that pins seven channels and their
+  names gains the eighth, and the corpus test's `8 <= len(events) <= 14` becomes a lower
+  bound of 8 (the data pull request regenerates `events.jsonl` with every scripted
+  thread). This is the one test edit in the stubs pull request; it gets its own
+  RED-GREEN proof like any other.
 - `SPEC.md`: the two section 9 lines that listed the cost-derived triage threshold as
   stretch (this plan's pull request; see "Decisions").
 
@@ -128,7 +133,8 @@ class Claim(Frozen):
     entity: str              # entity id after normalization
     attribute: Attribute
     value: str
-    authority: Authority     # the cited message's author, from the glossary; "hearsay" when unknown
+    message_ts: str          # the evidence message that states the value; its ts is the claim's asserted time
+    authority: Authority     # that message's author, from the glossary; "hearsay" when unknown
 
 class TaskLink(Frozen):
     task: str                # ChecklistTask.id
@@ -231,6 +237,7 @@ class ExtractedClaim(Frozen):
     entity: str                # id or alias
     attribute: Attribute
     value: str
+    message_ts: str            # one of the item's evidence message_ts
 
 class ExtractedTask(Frozen):
     task: str                  # ChecklistTask.id from the prompt
@@ -289,8 +296,8 @@ def resolve_person(text: str, glossary: Glossary) -> str | None         # user i
 
 ```python
 DROP_FIELDS = ("evidence.unknown_message", "evidence.quote", "item_id.unknown",
-               "entities.unresolved", "claims.entity", "owner.unresolved",
-               "due.format", "tasks.unknown")
+               "entities.unresolved", "claims.entity", "claims.message",
+               "owner.unresolved", "due.format", "tasks.unknown")
 
 class Verified(Frozen):
     items: tuple[Item, ...]
@@ -440,19 +447,25 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
   `permalink` is the cited event's `permalink`.
 - An `item_id` that is not a key of `existing` drops the item (`item_id.unknown`). A
   null `item_id` makes a new item with id `f"{thread_id}#{last_ts}#{n}"`, `n` the
-  item's index in the output; an existing id keeps `item_id` and `first_seen` and
-  replaces every other field.
+  item's index in the output. An existing id keeps `item_id`; its `evidence` is the
+  union of the old and new entries, deduplicated by `message_ts` in ts order, and its
+  `claims` the union deduplicated by `(entity, attribute, value, message_ts)`; every
+  scalar field, `entities`, `affected_roles` and `tasks` are replaced by the new
+  values. The old quotes stay, so a reader shown the item while open can later be shown
+  the closing evidence beside it (SPEC section 4).
 - An entity string that `resolve_entity` cannot resolve is dropped from `entities`
   (`entities.unresolved`); the item survives. Resolved entities are the ids,
   deduplicated, in output order.
-- A claim whose entity does not resolve is dropped (`claims.entity`). A claim's
-  `authority` is the glossary authority of the author of the item's first evidence
-  message, `hearsay` when that author is not in the glossary.
+- A claim whose entity does not resolve is dropped (`claims.entity`). A claim whose
+  `message_ts` is not one of the item's verified evidence messages is dropped
+  (`claims.message`). A claim's `authority` is the glossary authority of that message's
+  author, `hearsay` when the author is not in the glossary; the message's ts is the
+  claim's asserted time (D19), so M3 reads it without a schema change.
 - An `owner` that `resolve_person` cannot resolve becomes None (`owner.unresolved`).
 - A `due` that `date.fromisoformat` rejects becomes None (`due.format`).
 - A task id not in `tasks` is dropped from the item (`tasks.unknown`).
-- `first_seen` is the smallest evidence ts (or the existing item's `first_seen` on an
-  update); `last_updated` the largest. `status == "resolved"` sets `resolved_by` to the
+- `first_seen` is the smallest evidence ts and `last_updated` the largest, over the
+  merged evidence on an update. `status == "resolved"` sets `resolved_by` to the
   largest evidence ts.
 `drops` has every `DROP_FIELDS` key, zero when nothing was dropped.
 
@@ -468,7 +481,9 @@ Extraction)`, verifies, upserts the items with the extraction prompt version and
 records a `failed` run, logs `extract_failed` with the thread id and the error class,
 counts `failed`, and continues with the next thread. A `CassetteMiss` propagates: strict
 replay is the contract (SPEC section 6). Running twice on an unchanged store writes
-nothing the second time and the report shows `threads == 0`.
+nothing the second time and the report shows `threads == 0`. Because dropped threads
+record an extract run, a change to `TRIAGE_PROMPT_VERSION` alone re-triages nothing:
+bump `EXTRACT_PROMPT_VERSION` with it.
 
 B1.7 The thread delta a kept thread extracts is the one `thread_deltas("extract", ...)`
 returned: since the last `ok` extract run, root included. A thread dropped at revision
@@ -701,10 +716,11 @@ B2.9 Fixture content (stubs commit, pinned by unit 2's tests on the bundled worl
 channel `C0LEADS` `kestrel-leads` with `private: true`, members `U0EM01` and `U0PM01`,
 one event `LEADS-1` (day 4, PM to EM, kind `risk`: the pilot customer presses for 600 kg
 and the two agree to keep the PRD at 500 kg until after DVT-1; claim `PN-90001
-spec_param` `payload 500 kg`; `must_see_for` `U0EM01`); two ask events: `ASK-SAF` (day
-3, `C0ENGEF`, EM asks FW when TST-SAF-01 reruns on the DVT firmware, `answered_day`
-None, `must_see_for` `U0FW01`) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether
-PO-45002211 was amended to Rev C, `answered_day` 5). Every other channel stays public.
+spec_param` `payload 500 kg`; `must_see_for` `U0EM01`; `known_by` PM and EM on day 4);
+two ask events: `ASK-SAF` (day 3, `C0ENGEF`, EM asks FW when TST-SAF-01 reruns on the
+DVT firmware, `answered_day` None, `must_see_for` `U0FW01`, `known_by` EM and FW on day
+3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
+`answered_day` 5, `known_by` EE and SC on day 4). Every other channel stays public.
 The private channel has at least one human persona outside it (five of seven). No
 existing event changes.
 
@@ -823,7 +839,9 @@ text. Reactions get `ts` one second after their message. `channel_id`, `channel_
 message has `day_offset = answered_day - day`; any other value is a `RenderError`.
 
 B3.3 Code checks each rendered thread: every claim entity's id or one of its aliases
-appears in the thread text (case-insensitive), the thread text contains no entry of the
+appears in the thread text (case-insensitive) unless the event sets `noise.indirection`
+(the knob asks for the value to be implied, and the extractor missing it under noise is
+what the degradation measurement reads), the thread text contains no entry of the
 negative-name list, the message count is at least one, and a reply never precedes the
 root. A failed check raises `RenderError` naming the event and the rule; nothing is
 written. The schema enforces posters and reactors through the per-event Literals, so
@@ -992,8 +1010,9 @@ None); a golden item with no entities (excluded from Jaccard, `n` unchanged).
 Runs after units 1 to 4 have merged and the user has put `OPENROUTER_API_KEY` in
 `.env`. Steps, in order, from a clean worktree:
 
-1. Spike (premise P7): one `extract` call with the `TriageOutput` schema and one
-   `render` call with a one-message `RenderedThread` schema, through
+1. Spike (premise P7): one `extract` call with the `Extraction` schema (it carries a
+   `$ref` list with `minItems: 1`, nullable fields and enums, the constructs P8 asserts)
+   and one `render` call with a one-message `RenderedThread` schema, through
    `OpenRouterBackend.complete` directly (no cassette written; `live` mode is for the
    API backend only, M1 B2.8), printed and discarded. Both must
    return schema-conforming JSON. If the Claude call does not, extraction cassettes are
@@ -1038,6 +1057,9 @@ The pull request holds data and the README change only. Both reviewers see it.
 | DISCO realism comparison | `not_run` unless reference figures with a source are in the repo | No number is reconstructed from memory. |
 | HERB | Schema reference only | CC BY-NC; its generator is not released; the unanswerable-question idea is covered by distractor threads that look like project chatter. |
 | Deleted messages | Omitted from prompts and the citable set | The corpus has no deletes in M2; retraction is M3's rule. |
+| Claim provenance | Each claim names its evidence `message_ts`; authority and asserted time derive from that message | One item can carry claims by different authors (a CM root, an EE reply); M3's bi-temporal ledger needs the asserted time per claim, and adding it later is a schema change. |
+| Item update | Evidence and claims merge; scalars replace | Dropping the earlier quotes would lose the evidence a reader was shown while the item was open. |
+| Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
 
 ## Open items for the user
