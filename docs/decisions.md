@@ -73,9 +73,10 @@ Why. The Citations API cannot be combined with structured outputs, so grounding 
 be verified by us. Verification in code is also the only faithfulness guarantee that does
 not depend on another model's judgment.
 
-Amended 2026-10-11 (SPEC v0.4): verification also covers `owner`, `due` and claim values
-against the cited text, with unit-aware numbers and user ids for people; the digest renders
-quoted and model text as plain text and links only constructed permalinks.
+Amended 2026-10-11 (SPEC v0.4): the extraction prompt also carries the current ledger
+values for the entities the thread names; verification also covers `owner`, `due` and
+claim values against the cited text, with unit-aware numbers and user ids for people; the
+digest renders quoted and model text as plain text and links only constructed permalinks.
 
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction
 
@@ -89,6 +90,12 @@ Why. The prompt asks for adaptation over time. Adaptation you can inspect and co
 worth more than a learned ranker nobody can explain, and at this data volume a learned
 ranker would be fiction anyway. Logging terms per impression also makes offline
 evaluation of ranking changes possible from day one.
+
+Amended 2026-10-11 (SPEC v0.4): the must-see lane also carries a change on an entity an
+owned entity depends on, an open contradiction on an owned key, and a stale value on an
+entity the reader's pending checklist task touches; a visibility check (public channels,
+or private with membership) runs before both lanes and fails closed; the ranked score
+gains `decision_exposure` and a one-hop `dependency_distance`; learned interest is clamped.
 
 ## D7. Slack integration: Bolt sync, Socket Mode, internal app, scheduler in-process
 
@@ -339,14 +346,15 @@ what mattered; then the weight by decision exposure becomes the headline instead
 Decision. Entities carry `depends_on` edges; a change on an entity an owned entity
 depends on reaches the owner through the must-see lane with the edge in the reason.
 Decision exposure comes from the gate checklists: a stale value on an entity the
-reader's pending task touches is urgent, the same value for a reader with no pending
-task is FYI. An open contradiction is routed to the owner of the key as a `needs_you`
+reader's pending task touches is urgent; stale beliefs on owned entities stay must-see
+either way, and decision exposure orders them. An open contradiction is routed to the owner of the key as a `needs_you`
 line with both claims and their authority; code never picks a winner. No graph
 database: edges are a list on the entity, read by the ranker and the golden-label
 derivation.
 
-Why. Four public submissions model cross-team reach; the one that measured it
-delivered 12 of 12 planted cross-team changes with edges and lost them without. The
+Why. Four public submissions model cross-team reach; the one that measured it derived its
+gold from the same fan-out rules, so its 12 of 12 is construction, not evidence, but the
+mechanism is the only one that reaches owners who were never in the thread. The
 checklist already states what each reader is about to do, so decision exposure costs
 one lookup. Contradictions routed to a person stay honest states in the ledger.
 
@@ -355,8 +363,10 @@ then the `relations` table in later.md.
 
 ## D23. Evaluation gates
 
-Decision. Golden labels and the ranking configuration are fingerprinted and `digest
-eval` refuses a mismatch. Every ranking rate is reported beside two baselines, role-only
+Decision. Golden labels and the ranking configuration are fingerprinted; `digest eval
+--gate` refuses a mismatch, while a plain `digest eval` runs and reports it, so ablations
+and deliberate ranking changes still run. A deliberate change re-freezes the baseline in
+its own commit with the before and after in the report. Every ranking rate is reported beside two baselines, role-only
 and send-everything, even when a baseline wins. Quiet world days give an abstention
 precision. `digest eval --gate` compares the report to a frozen baseline and CI fails on
 a drop beyond a stated tolerance per metric; citation validity stays a hard 100 percent.

@@ -34,10 +34,10 @@ would promote it.
   Trigger: the interactive agent exists and a real workspace has used the digest for a
   month, so the ask-user rate and the triage thresholds can be set from data.
 - Full entity model beyond the v1 minimum. v1 has entity types with `subsystem`,
-  `parent` and `aliases`, personas with `team` and `manager`, and claims as the only
-  edges. The full model adds: a `relations` table with typed edges (`part_of`,
-  `owned_by`, `member_of`, `reports_to`, `governs`, `depends_on`) each with a validity
-  window; `team` and `person` as entity types so ownership can be held by a team;
+  `parent` and `aliases`, personas with `team` and `manager`, claims and `depends_on` as the
+  only edges (v0.4 added `depends_on`). The full model adds: a `relations` table with
+  typed edges (`part_of`, `owned_by`, `member_of`, `reports_to`, `governs`) each with a
+  validity window; `team` and `person` as entity types so ownership can be held by a team;
   documents with a content reference (PLM or Drive id, version) rather than a title;
   `deliverable` as a grouping of tasks, builds and tests that a gate consumes; a
   glossary table with alias provenance. Each is additive to the v1 schema. Trigger:
@@ -88,8 +88,6 @@ would promote it.
 - A per-stage trace page for one item in the web preview.
 - `cost` as an attribute in the claim vocabulary; entity criticality beyond `priority`;
   a per-reader attention budget.
-- "You are the last to know": the gap between the reader's exposure and their peers'
-  as a ranking term (needs no new data; stretch in M3).
 - The author's digest showing where their own decision did not land (landing map read
   from the author's side).
 - Transient backoff for 429 and 5xx on the gateway during record runs.

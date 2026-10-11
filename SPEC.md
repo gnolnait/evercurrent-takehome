@@ -42,8 +42,8 @@ Four consequences:
 
 The objective behind all four: minimise stale-belief person-days, the working days a
 reader holds a value the ledger has superseded, summed over readers and facts, under a
-length budget per digest. Every ranking term is a derivative of that sum and section 7
-measures it directly. Cost follows the same shape: extraction runs once per thread
+length budget per digest. Every ranking term earns its place by moving that sum in the ablation, and section 7
+measures the sum directly. Cost follows the same shape: extraction runs once per thread
 revision and personalisation is code, so cost grows with thread revisions, not with
 messages times readers.
 
@@ -104,6 +104,8 @@ reactions[{name, user_id, ts}], files[], permalink, edited, deleted}`
   observed (equal to `ts` for the original post, later for an edit or a delete).
 - A system of record (PLM, schedule tool, document control) appears as a bot user
   posting into a feed channel; its claims carry `plm_bot` authority.
+- Channels carry `private: bool`. A public channel is visible to every reader; a private
+  one only to its members. Visibility, not membership, decides what a reader may be told.
 
 Item: one extracted unit of information.
 `{item_id, type, title, summary, entities[], owner, due, affected_roles[], phase_tags[],
@@ -129,12 +131,13 @@ text naming the test, rig, load or rev a measurement was taken under.
 Ledger: current value per key with history; `supersedes` when a later authoritative
 claim replaces a value; `contradicts` when concurrent claims from different channels
 disagree and neither is superseded. A `plm_bot` claim is the system of record: a
-lower-authority claim never supersedes it; a disagreement is a contradiction. A hedged or
-question claim never supersedes anything; a target never supersedes a measurement; two
-measurements with different `conditions` never contradict. A lower-authority change to a
-key the system of record has recorded is `pending` until the record confirms it, and
-becomes an absence item for the owner after a cadence (section 5 step 5). An open
-contradiction is work for the owner of the key, never resolved in code.
+lower-authority claim never supersedes it. A hedged or question claim never supersedes
+anything; a target never supersedes a measurement; two measurements with different
+`conditions` never contradict. A lower-authority claim that disagrees with a recorded
+value is `pending`: the record resolves it by confirming the new value (supersession) or
+restating its own (a contradiction, routed to the owner of the key as work, never
+resolved in code), and silence past a cadence makes it an absence item for the owner
+(section 5 step 5 source d).
 
 Entity: `{id, type, description, owner, vendor, subsystem, parent, depends_on[], aliases[],
 priority, state}`
@@ -146,11 +149,13 @@ priority, state}`
   re-check of this one, so a change reaches owners who were never in the thread;
   `priority` defaults to the containing gate's or subsystem's.
 
-ProjectState: `{project_id, phases{subsystem: {phase, entered}}, gates[{id, name, date,
-buffer_days, priority, checklist[{id, task, owner, expected_cadence, priority}]}]}`
-- phase: concept | EVT | DVT | PVT | ramp, held per subsystem; the project's phase is
-  its slowest subsystem's, and the role-by-phase prior reads the phase of the item's
-  subsystem
+ProjectState: `{project_id, phases[{phase, from_date}], subsystem_phases{subsystem: phase},
+gates[{id, name, date, buffer_days, priority, checklist[{id, task, owner, expected_cadence,
+priority}]}]}`
+- phase: concept | EVT | DVT | PVT | ramp. `phases` are the project's dated windows (as
+  M1 built them); `subsystem_phases` is an optional override per subsystem. The
+  role-by-phase prior reads the override for the item's subsystem when one exists, else
+  the project phase; an item with no subsystem reads the project phase
 - priority: critical | high | normal | low (default normal)
 
 UserProfile: `{user_id, role, team, manager, projects[], owned_entities[],
@@ -170,12 +175,12 @@ sources{field: configured | inferred | confirmed | pasted}}`
   Stretch: slash commands `/digest now`, `/digest pause <duration>`, `/digest style
   <text>`, `/digest watch <prompt>`, `/digest mute <topic>`, `/digest why <item>`.
 
-Digest: `{user_id, as_of, coverage{through, missing_channels[], partial}, sections{needs_you[],
+Digest: `{user_id, as_of, coverage{window_start, through, missing_channels[], partial}, sections{needs_you[],
 stale_beliefs[], not_happened[], decisions[], risks[], fyi[]}, items[],
 rationale{item_id: score_breakdown}}`
-- `coverage` states the data the digest was built from: the time the store reaches, any
-  channel not ingested, and a partial marker when a stage failed. A digest never looks
-  complete when it is not.
+- `coverage` states the data the digest was built from: the window it covers, the time
+  the store reaches, any channel not ingested, and a partial marker when a stage failed.
+  A digest never looks complete when it is not.
 
 LandingMap: per decision item, per role: landed | contradicted | unknown, each with
 evidence item ids. Only contradicting evidence may mark a cell contradicted; silence is
@@ -192,8 +197,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 2. Extract: a classifier first decides whether the thread delta contains project
    information (triage; a dropped golden item counts as a miss in the eval; a thread
    is kept when its probability of carrying information is at least 1 / (1 + the
-   stated cost of a miss), and the triage decision is stored per thread revision so
-   the rationale can read it back). Then, per thread delta, the LLM receives new
+   stated cost of a miss relative to a false keep, a constant in `config/priors.yaml`,
+   default 10), and the triage decision is stored per thread revision so the rationale
+   can read it back). Then, per thread delta, the LLM receives new
    messages, the thread root, existing items for the thread, the current ledger values
    for the entities the thread names, and the project glossary, and returns items with
    evidence and claims. Code verifies each evidence quote is a whitespace-normalized substring of the
@@ -206,9 +212,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    related, distinct} with quoted evidence. Claims update the ledger. `status` moves to
    resolved only on explicit evidence; on doubt the item stays open. A contradiction is
    not resolved here: it is routed to the owner of the key (section 5 step 6).
-4. Project state: gates and checklists from `config/project.yaml`; phase may be
-   overridden by a human and is otherwise the configured phase for the date.
-5. Absence: two sources. (a) For each open checklist task on a gate inside its buffer,
+4. Project state: gates and checklists from `config/project.yaml`; the project phase is the configured window for the date, and a human may override it
+   per subsystem (`subsystem_phases`).
+5. Absence. (a) For each open checklist task on a gate inside its buffer,
    find the last evidence item; if the age exceeds the task's expected cadence
    (weekend-aware), emit an absence item citing that last evidence. (b) An ask
    addressed to a person with no reply from them after a cadence is an absence for the
@@ -217,9 +223,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    the owner is an absence for the owner and the asker, citing the promise. (d) A
    human claim that changes a recorded key (rev, part, qty) with no system-of-record
    claim on the same key after a cadence, including workaround language with no ECO or
-   deviation after it, is an absence for the owner and supply chain, citing the claim.
-   (e) A blocker with no owner and no reply after a cadence is an absence for the
-   channel's role owners, citing the blocker. The window before a gate in which an
+   deviation after it, is an absence for the owner of the key, citing the claim.
+   (e) A blocker with no owner and no reply after a cadence is an absence for the owners
+   of the entities it names, else for the EM, citing the blocker. The window before a gate in which an
    absence can fire scales with the task's priority, and an absence that persists
    across days rises in rank and states how many days it has been silent. Never emit an
    absence without a citation.
@@ -227,21 +233,22 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
    owned entities, a change on an entity an owned entity depends on, an open
    contradiction on an owned key, a stale value on an entity the reader's pending
-   checklist task touches). Before either lane, a reader sees an item only through
-   evidence from a channel they are a member of; the check fails closed. Ranked lane:
+   checklist task touches). Before either lane, a reader sees an item only through evidence from a channel they
+   can see (public, or private with the reader a member); the check fails closed, and an
+   access drop is recorded per impression so "why not shown" can name it. Must-see
+   lines are never cut by a section cap; the caps bound the ranked lane. Ranked lane:
    `score = importance * role_phase_prior * personal_relevance * decision_exposure *
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
    impression. `decision_exposure` rises when the reader owns a checklist task inside
-   its gate buffer that touches the item's entities; `dependency_distance` falls with
-   the number of `depends_on` edges between the item's entities and the reader's owned
-   entities; a claim still `pending` confirmation raises urgency for its owner. `importance`
+   its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
+   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner. `importance`
    includes type, severity, authority, affected-role count and engagement (replies and
    reactions on the source thread). `sender_affinity` is highest for the reader's
    manager and reports, then the same team, then frequent collaborators (counted from
    shared threads in a trailing window), else neutral. An open blocker or unanswered
    ask re-surfaces when its age crosses a threshold. Stale-belief items are keys where
-   the user's exposed value differs from the ledger value, weighted by the prior. Learned interest is clamped so repeated feedback never takes a key to zero; mute is
-   the only hard filter and wins over every term. Every term is a row in the ablation
+   the user's exposed value differs from the ledger value, weighted by the prior. Learned interest is clamped so repeated feedback never takes a key to zero; the two
+   hard filters are mute and the visibility check, and both win over every term. Every term is a row in the ablation
    table (section 7) or it is removed.
 7. Render: sections capped (needs_you 5, stale_beliefs 3, not_happened 3, decisions 5,
    risks 5, fyi 5); caps are maximums, and a section with nothing above threshold
@@ -260,18 +267,19 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    logged with run_id, item_id and the profile version in force. Feedback is an event
    log: every action is undoable from the same surface, profile weights are recomputed
    from the log, a vote moves the item most, its entity less and its item type least,
-   and no learned weight leaves a bounded band around the role default. `needs_you`
-   lines carry done (item resolved), snooze until a date, and not mine (reader removed
-   from the audience).
+   and no learned weight leaves a bounded band around the role default. `needs_you` lines carry done (resolves the item when the clicker owns it, else records
+   exposure for that reader only), snooze until a date, not mine (reader removed from the
+   audience), and, on a contradiction line, confirm (the owner picks a value, which
+   writes an `owner_stated` claim).
 9. Delivery: a two-tier policy. Items in the must-see lane whose urgency crosses the
    interrupt threshold (a blocker on an owned entity, an ask with a same-day due) may be
    sent in real time when the user has enabled it; everything else waits for the digest
-   at the user's delivery time, on their weekdays, outside quiet hours. Exposure is
-   recorded only after Slack accepts the message. Each sent part carries the run id in
+   at the user's delivery time, on their weekdays, outside quiet hours. Exposure is recorded when the digest is delivered: on Slack's acceptance of the
+   message for Slack, and on render for the terminal, markdown, web preview and replay. Each sent part carries the run id in
    message metadata so a retry posts only the missing parts. A digest's window starts
    where the reader's last delivered digest ended, bounded. A revoked or invalid token
-   stops retries and marks the install inactive; auth failures and a run that delivered
-   nothing raise an admin alert.
+   stops retries and marks the install inactive; auth failures, and a run with scheduled recipients that delivered nothing, raise an
+   admin alert.
 
 ## 6. World-first simulator and playback harness
 
@@ -290,9 +298,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   knobs: indirection, wrong claims by agents, revision typos, delayed cross-posting,
   distractor threads, late delivery and missed events (for reconciliation), a planted
   instruction aimed at the extractor, and loud threads with urgent words, many replies
-  and no state change. The script holds more than five candidate items per persona-day
-  around the EVT to DVT change, so phase sensitivity can show, and quiet days with no
-  planted change, for abstention. The renderer's prompt carries a negative list of the
+  and no state change. The script holds more candidate items per persona-day than the affected section caps
+  around the EVT to DVT change, so the caps bite and re-weighting changes the cut, quiet days with no planted change, for abstention, and at least one private channel
+  with a persona outside it, so the visibility check is tested. The renderer's prompt carries a negative list of the
   names and storylines used by public submissions to the same brief. One 40-message
   slice is human-authored as an anchor.
 - `data/world/<name>/golden.jsonl`: labels derived from the script, not hand-written:
@@ -313,13 +321,16 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   present, with judge agreement on a hand-checked sample of 50.
 - Ranking: must-see recall at 5 and nDCG at 5 per persona per day; role separation;
   phase sensitivity.
-- Headline: stale-belief person-days with the digest on versus off (for each
-  superseding golden claim and each persona who must see it, the working days from the
-  superseding event to the first digest that delivers it, or to the end of the world),
-  time-to-told per role (median, p90, never-told count) over every must-see fact, and
-  novelty rate (delivered lines whose discriminating fields differ from what the reader
-  was last shown). All three compute from the store and the world file with no model
-  call. The plan holds the formulas.
+- Headline, on simulated personas and labelled as such: stale-belief person-days. For
+  each golden claim E that supersedes E0 and each persona P in E's `must_see_for` who
+  held E0's value (P is in E0's `known_by` or was shown E0), `told_day` is the earliest
+  of P's `known_by` day for E and the first digest day that delivers an item citing E,
+  else the world's last day plus one; the metric sums `told_day - E.day` over all (P, E),
+  with the digest on and with it off (digest days removed). Beside it: time-to-told per
+  role (median, p90, never-told count) over every must-see fact for personas not in
+  `known_by` by E.day, and novelty rate (delivered lines whose discriminating fields
+  differ from what the reader was last shown, over delivered lines). All three compute
+  from the store and the world file with no model call.
 - Ledger: supersession recall; contradiction precision; abstention precision (zero
   contradictions, stale-belief lines and absences on quiet days).
 - Baselines beside every ranking metric: role-only and send-everything on the same
@@ -327,7 +338,8 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Absence: false-alarm rate on simulated silences that were not stalls.
 - Reconciliation lag on the late-delivery and missed-event knobs: digest days between a
   late or missed event and its first delivery.
-- Access: no delivered item cites a channel its reader cannot see.
+- Access: no delivered item cites a channel its reader cannot see, checked on a world
+  with at least one private channel and a reader outside it.
 - Duplicate rate among delivered items.
 - Mirror metrics: missed golden items and hallucinated items, both counted.
 - Degradation curve: extraction and supersession recall as the renderer's noise knobs rise.
@@ -339,15 +351,19 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   reported.
 - Regression gate: `digest eval --gate` compares the report to a frozen baseline, with
   golden labels and ranking config fingerprinted; CI fails on a drop beyond a stated
-  tolerance per metric, and citation validity stays a hard 100 percent.
+  tolerance per metric, on a metric present in the baseline and missing or "not run" in
+  the report, on an abstention set with zero quiet days, and citation validity stays a
+  hard 100 percent. A deliberate ranking change re-freezes the baseline in its own
+  commit, with the before and after in the report.
 - Cost and latency per stage, n beside every rate, and a "not run: reason" row for any
   configuration without its key.
 - Ranking ablation: each score term switched off in turn, with must-see recall and nDCG
   per persona reported; a term that does not move the numbers is removed.
 - Profile scrutability: for every persona and every single-field profile edit (role,
-  owned subsystem, a watch prompt, phase), re-run the day on cassettes and check the
-  digest changes in the expected direction with the rationale naming the edit; a
-  parametrized test, not a one-off.
+  owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
+  re-run the day on cassettes and check the digest changes in the expected direction
+  with the rationale naming the edit; a parametrized test that fails when the world
+  yields no cases.
 - Classifier comparison (stretch): triage recall against golden items,
   faithfulness-judge agreement with the hand-checked sample, and latency per call, for
   the Haiku-class model through the gateway (core) against Jev (TypeSafe's native API,
@@ -398,35 +414,37 @@ later day.
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
 - M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
-  prompt and schema with evidence verification; absence detector with both sources
-  ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. Core additions in v0.4: field-level
-  verification, ledger values in the extraction prompt, claim certainty and kind, absence
-  sources (c) to (e). Stretch: Jev triage when a TypeSafe key exists; loud-noise negatives;
-  the cost-derived triage threshold.
+  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c)
+  to (e), and the world schema additions they and M3 need (`depends_on`, `priority`,
+  claim `certainty` and `kind`, channel `private`). v0.4 stretch: field-level
+  verification, ledger values in the extraction prompt, loud-noise negatives, the
+  cost-derived triage threshold. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
   precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
-  plus absences and the README says so. Core additions in v0.4: `depends_on` edges with
-  fan-out to the must-see lane, decision exposure, contradiction routing to the key's
-  owner, the feedback event log, the reader access filter. Stretch: re-surfacing by age;
-  diversity at render; history labels; resolved-since lines; per-role consequence
-  templates; the "last to know" term.
+  plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the
+  must-see lane, and the visibility filter (a correctness rule, not new scope). v0.4
+  stretch: decision exposure, contradiction routing with the confirm action, the
+  feedback event log, history labels, resolved-since lines, per-role consequence
+  templates, the "last to know" term. Re-surfacing by age and diversity at render stay
+  stretch.
 - M4 (day 4): landing map; eval harness and report with the ablation table;
   faithfulness judge; degradation curve; web preview with the profile page (paste
   supported, the single settings surface) and the open-items page; the MCP server's
-  read tools and usage skill. A1 to A8, A10. Core additions in v0.4: the headline
-  metrics, baselines beside every rate, the regression gate, the coverage line. Stretch:
-  the scrutability check (A12) as a parametrized test; the classifier comparison (Laya
-  on Linux); MCP write tools; pairwise judging; `digest diff`; "why not shown".
+  read tools and usage skill. A1 to A8, A10. v0.4 core: the headline metrics and the
+  regression gate. v0.4 stretch: baselines beside every rate, abstention precision, the
+  coverage line, pairwise judging, `digest diff`, `why_ranked` accepting an undelivered
+  item. The scrutability check (A12), the classifier comparison (Laya on Linux) and MCP
+  write tools stay stretch.
 - M5 (day 5): live Slack mode, Block Kit, failure handling, profile bootstrap from
   Slack with the onboarding DM, batch seeding of the corpus into a workspace. A9.
   Docker, devcontainer check, README design doc, ANSWERS.md, demo screenshots.
   Stretch: two-tier delivery; seeder pacing; App Home settings and `/digest`
   commands; natural-language style parsing (structured style fields are core); A11.
-  v0.4 additions, all core because A9 depends on them: exposure after acceptance, send
-  idempotency through message metadata, dead-credential handling, the admin alert, the
-  "nothing today" line.
+  v0.4 core: exposure recorded on Slack's acceptance (a correctness rule). v0.4 stretch:
+  send idempotency through message metadata, dead-credential handling, the admin alert,
+  the "nothing today" line.
 - Days 6 to 7: adversarial validation, second-model review, retro, polish, then
   stretch items in the order they are listed above. If a core day slips, the web
   preview is the first core item deferred, as in v0.2.
@@ -449,9 +467,10 @@ later day.
   with a named milestone and a place in the cut order above. The M1 interface changes
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
-  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names
-  it core; the core promotions (edges and fan-out, the absence sources, the headline
-  metrics, the regression gate) are the ones the thesis cannot be demonstrated without,
-  and they come out of days 6 and 7.
+  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The
+  core additions are the absence sources (c) to (e) with the world schema fields they
+  need, `depends_on` edges with fan-out, the headline metrics and the regression gate,
+  plus two correctness rules (visibility filter, exposure on acceptance); they come out
+  of days 6 and 7.
 - Ranking factor sprawl: every term is stored per impression and the ablation table
   reports its effect; a term without measured effect on the golden corpus is removed.
