@@ -1,6 +1,6 @@
 # SPEC: role- and phase-aware daily Slack digest
 
-Status: v0.4, 2026-10-11. This is the contract the tests are written against. Change it by
+Status: v0.4.1, 2026-10-11. This is the contract the tests are written against. Change it by
 editing this file first, then the tests, then the code. v0.2 added the belief ledger,
 absence detection, decision landing map and world-first simulator on top of the v0.1
 baseline pipeline. v0.3 adds, after the design review: bot personas for systems of
@@ -483,8 +483,9 @@ is stretch, built after its milestone's core items, and a world field is added o
 the item that reads it is built.
 - M2. Core: channel `private` (the M3 visibility filter reads it). Stretch: absence sources (c)
   and (e); the reference pass; the other world schema fields (`depends_on`, task `entities`, claim `certainty`,
-  `kind`, `conditions` and `scope`, channel `external`, document revision histories); field-level verification; loud-noise negatives; the cost-derived
-  triage threshold; the `ticket` reaction rule; the tracker bot persona.
+  `kind`, `conditions` and `scope`, channel `external`, document revision histories); field-level verification; loud-noise negatives; the `ticket`
+  reaction rule; the tracker bot persona. The triage threshold derived from the cost of a
+  miss is part of the core triage shape (section 5 step 2), not a stretch item.
 - M3. Core: the visibility filter; the feedback event log. Stretch: the certainty, kind
   and conditions rules; `depends_on` edges with fan-out; absence sources (d), (f) and (g); stale-reference items; the action-time
   audit; scoped claims; the external-channel stale-reference rule; ledger values in the
@@ -508,8 +509,7 @@ the item that reads it is built.
   world schema fields the stretch items read (`depends_on`, task `entities`, claim
   `certainty`, `kind`, `conditions` and `scope`, channel `external`, documents with
   revision histories), each added when its reader is built, field-level verification,
-  loud-noise negatives, the cost-derived triage
-  threshold, the `ticket` reaction rule and the tracker bot persona. Jev triage when a TypeSafe key exists stays stretch.
+  loud-noise negatives, the `ticket` reaction rule and the tracker bot persona. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
