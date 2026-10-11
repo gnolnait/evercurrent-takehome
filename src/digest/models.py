@@ -60,20 +60,26 @@ class Event(Frozen):
 
     @property
     def ts_us(self) -> int:
-        return _micros(self.ts)
+        return ts_micros(self.ts)
 
     @property
     def at(self) -> datetime:
-        return _EPOCH + timedelta(microseconds=_micros(self.ts))
+        return _EPOCH + timedelta(microseconds=ts_micros(self.ts))
 
     @property
     def observed_at(self) -> datetime:
-        return _EPOCH + timedelta(microseconds=_micros(self.event_ts))
+        return _EPOCH + timedelta(microseconds=ts_micros(self.event_ts))
 
 
-def _micros(ts: str) -> int:
+def ts_micros(ts: str) -> int:
+    """Microseconds since the Unix epoch for a Slack `ts`."""
     seconds, fraction = ts.split(".")
     return int(seconds) * 1_000_000 + int(fraction)
+
+
+def micros_since_epoch(moment: datetime) -> int:
+    """Microseconds from the Unix epoch to an aware datetime, the integer form of a Slack `ts`."""
+    return (moment - _EPOCH) // timedelta(microseconds=1)
 
 
 def permalink_for(workspace_url: str, channel_id: str, ts: str, thread_ts: str) -> str:

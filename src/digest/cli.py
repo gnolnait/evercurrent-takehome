@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import date
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 
 from digest import __version__
+from digest.replay import replay_world
+from digest.settings import Settings
+from digest.store import Store
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -49,10 +55,36 @@ def replay(
     world: str | None = typer.Option(
         None, "--world", help="World under data/world; default DIGEST_WORLD."
     ),
-    db: Path | None = typer.Option(None, "--db", help="Store path; default data/<world>.sqlite."),
+    db: Path | None = typer.Option(
+        None, "--db", help="Store path; default DIGEST_DB, then data/<world>.sqlite."
+    ),
 ) -> None:
     """Ingest the world's corpus into the store up to and including a day."""
-    raise typer.Exit(code=_not_yet("replay"))
+    settings = Settings()
+    name = world or settings.world
+    try:
+        day = date.fromisoformat(until)
+    except ValueError:
+        _refuse(f"--until must be YYYY-MM-DD, got {until!r}")
+    world_dir = Path("data") / "world" / name
+    # replay_world checks this too; checking first keeps a typo from creating a store file.
+    if not (world_dir / "world.yaml").is_file():
+        _refuse(f"no such world: {world_dir / 'world.yaml'}")
+    path = db or settings.db or Path("data") / f"{name}.sqlite"
+    try:
+        store = Store.open(path)
+    except ValueError as error:  # another schema version; the message names the store
+        _refuse(str(error))
+    except (OSError, sqlite3.DatabaseError) as error:
+        _refuse(f"cannot open store {path}: {error}")
+    with store:
+        try:
+            report = replay_world(store, world_dir, day)
+        except ValueError as error:  # ReplayRefused and ReplayFormatError
+            _refuse(str(error))
+        except sqlite3.DatabaseError as error:
+            _refuse(f"store error: {error}")
+    typer.echo(report.model_dump_json())
 
 
 world_app = typer.Typer(help="Inspect a scripted world.", no_args_is_help=True)
@@ -67,6 +99,11 @@ def world_check(
 ) -> None:
     """Load and validate a world file; print counts per day and per channel."""
     raise typer.Exit(code=_not_yet("world check"))
+
+
+def _refuse(reason: str) -> NoReturn:
+    typer.echo(reason, err=True)
+    raise typer.Exit(code=1)
 
 
 def _not_yet(name: str) -> int:
