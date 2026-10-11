@@ -345,8 +345,8 @@ server-initiated request, so no migration path is needed.
 
 Decision. The digest minimises the working days readers hold a value the ledger has
 superseded, summed over readers and facts, under a per-digest length budget. A ranking term earns its place by moving that sum, or must-see recall for the facts the
-sum does not count, in the ablation; the evaluation reports
-the sum directly (digest on versus off), with time-to-told per role and the novelty rate
+sum does not count, in the ablation; the evaluation reports the sum directly (digest on versus off; the
+measure is M4 stretch, and until it is built the ablation reads must-see recall and nDCG), with time-to-told per role and the novelty rate
 beside it. The formulas read only
 world fields (`supersedes`, `must_see_for`, `known_by`, event days) and the store.
 
