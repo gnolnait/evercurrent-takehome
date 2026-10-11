@@ -336,6 +336,11 @@ concrete answer to the take-home's question on function calling versus MCP.
 Would change it. A hosted deployment: the MCP server gains an HTTP transport with
 per-user tokens (docs/later.md).
 
+Amended 2026-10-11: the server targets protocol revision 2026-07-28 (stateless requests,
+no handshake, stdio still a standard transport) through the Python SDK 2.x. The design
+uses none of the features that revision deprecates (roots, sampling, logging) and no
+server-initiated request, so no migration path is needed.
+
 ## D21. The objective is stale-belief person-days
 
 Decision. The digest minimises the working days readers hold a value the ledger has
