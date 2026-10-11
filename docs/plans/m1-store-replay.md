@@ -423,6 +423,8 @@ class ModelIds(BaseModel, frozen=True):       # config/models.yaml: logical name
     def resolve(self, logical: LogicalModel, backend: str) -> str
 
 def load_model_ids(path: Path = DEFAULT_MODEL_IDS_PATH) -> ModelIds   # config/models.yaml
+def parse_json_output(text: str) -> dict[str, Any]   # LLMOutputError (raw text) unless a JSON object
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]   # copy with additionalProperties false on every object
 ```
 
 `digest/llm/client.py`
@@ -497,23 +499,28 @@ always calls the backend, never reads or writes a cassette. `complete` returns
 
 B2.5 `extract` sends `request` with `output_schema = model_cls.model_json_schema()`
 when `request.output_schema` is None and validates `response.data` with
-`model_cls.model_validate`. On a validation failure in `record` or `live` mode it
-calls `backend.complete` directly once more, bypassing the cassette read, validates
+`model_cls.model_validate`. On invalid output, that is a validation failure or an
+`LLMOutputInvalid` from the backend (content that is not a JSON object), in `record` or
+`live` mode it calls `backend.complete` directly once more, bypassing the cassette read, validates
 again, and in `record` mode overwrites the cassette with the response that
 validated; a second failure raises `LLMOutputError` carrying the raw text. In
 `replay` mode there is no retry: a cassette that fails validation raises at once,
 with no network. This is the single retry D15 describes, placed in the wrapper so
 every backend gets it. `judge` builds the schema `{"type": "object", "properties":
-{"choice": {"enum": [...]}}, "required": ["choice"]}` and returns the enum member,
-with the same retry.
+{"choice": {"enum": [...]}}, "required": ["choice"], "additionalProperties": false}`
+and returns the enum member, with the same retry. The retry logs `llm_retry` with the `llm_call` fields and the first failure's
+reason. A plain `LLMOutputError` (status, truncation, refusal, empty content) is not
+retried; a second call with the same request cannot succeed.
 
 B2.6 `AnthropicBackend.complete` calls `client.messages.create` with `model =
-models.resolve(request.model, "anthropic_api")`, `system`, `messages`, `max_tokens`,
-`temperature` and, when `output_schema` is given,
-`output_config={"format": {"type": "json_schema", "schema": output_schema}}` (present in
-anthropic 1.11.0, P2). It reads the first text block, parses JSON when a schema was
-given, and fills token counts from `usage`. `stop_reason` of `max_tokens` or
-`refusal` raises `LLMOutputError`. The test boundary is the SDK client (D13): the test
+models.resolve(request.model, "anthropic_api")`, `system`, `messages`, `max_tokens` and,
+when `output_schema` is given, `output_config={"format": {"type": "json_schema",
+"schema": strict_schema(output_schema)}}` (present in anthropic 1.11.0, P2). It does not
+send `temperature`: the SDK's `create` has no such parameter (checked 2026-10-09); the
+field stays in the request and the cassette key. It reads the first text block (none:
+`LLMOutputError` with empty raw text), parses JSON when a schema was given, and fills
+token counts from `usage`. `stop_reason` of `max_tokens`, `refusal` or
+`model_context_window_exceeded` raises `LLMOutputError`. The test boundary is the SDK client (D13): the test
 passes a fake client object whose `messages.create` records its kwargs and returns an
 `anthropic.types.Message` built with `Message.model_validate({...})`. No HTTP
 transport mock of any kind.
@@ -521,13 +528,16 @@ transport mock of any kind.
 B2.7 `OpenRouterBackend.complete` posts to
 `https://openrouter.ai/api/v1/chat/completions` with the `Authorization: Bearer`
 header, `model = models.resolve(request.model, "openrouter")`, the system prompt as
-the first message, `temperature`, `max_tokens`, and, when `output_schema` is given,
-`response_format = {"type": "json_schema", "json_schema": {"name": "out", "strict":
-true, "schema": output_schema}}` plus `provider = {"require_parameters": true}` so the
-request is routed only to an endpoint that honours the schema. It reads
-`choices[0].message.content`, parses JSON when a schema was given, fills token counts
-from `usage`, and raises `LLMOutputError` on a non-2xx status (carrying the body) or
-a `finish_reason` of `length` or `content_filter`. The test injects
+the first message, `max_tokens`, and, when `output_schema` is given, `response_format =
+{"type": "json_schema", "json_schema": {"name": "out", "strict": true, "schema":
+strict_schema(output_schema)}}` plus `provider = {"require_parameters": true}` so the
+request is routed only to an endpoint that honours the schema. It does not send
+`temperature`: the chosen models do not list it in `supported_parameters` (catalogue,
+2026-10-09), and `require_parameters` would then match no endpoint. It reads
+`choices[0].message.content` (null: `LLMOutputError` with empty raw text), parses JSON
+when a schema was given, fills token counts from `usage` (absent or null: None), and
+raises `LLMOutputError` on a non-2xx status (carrying the body) or a `finish_reason` of
+`length`, `content_filter` or `error`. The test injects
 `httpx2.Client(transport=httpx2.MockTransport(handler))` and asserts the request
 body and the parsed response; this is our own HTTP client, not the Anthropic SDK, so
 D13 does not apply. The `openai` package is not used.
@@ -800,8 +810,12 @@ a gate with an empty checklist.
 
 U1. Put `OPENROUTER_API_KEY` in `.env` (never in chat). The first real recording (M2)
 needs it; M1 does not. The first call in M2 is a spike: one extraction request through
-the gateway with a JSON schema against a Claude model, to confirm the schema is
-honoured before any cassette is recorded.
+the gateway with a JSON schema against a Claude model, to confirm the schema is honoured
+before any cassette is recorded. The spike also settles two open points: OpenAI strict
+mode requires every property in `required`, which `strict_schema` does not add, so an
+extraction schema with defaulted fields may need nullable required fields for the GPT
+renderer and judge; and `config/models.yaml` maps `render` and `judge` to Claude on the
+API backend, which is live-mode only (D12 holds through the gateway).
 
 U2. Decided 2026-10-08: the world's timezone (`America/Los_Angeles`) for `--until`.
 

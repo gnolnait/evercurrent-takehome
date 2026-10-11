@@ -6,8 +6,12 @@ them (SPEC section 6). The client wrapper lives in `digest.llm.client`.
 
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 from typing import Any, Literal, Protocol
+
+import yaml
 
 from digest.models import Frozen
 
@@ -46,6 +50,44 @@ class LLMOutputError(ValueError):
         self.raw = raw
 
 
+class LLMOutputInvalid(LLMOutputError):
+    """The output is complete but does not parse or validate. The wrapper retries it once."""
+
+
+def parse_json_output(text: str) -> dict[str, Any]:
+    """Parse the text a backend returned for a request with an `output_schema`."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise LLMOutputInvalid("llm_output_not_json", raw=text) from error
+    if not isinstance(data, dict):
+        raise LLMOutputInvalid("llm_output_not_object", raw=text)
+    return data
+
+
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy in which every object schema has `additionalProperties: false`.
+
+    Anthropic structured outputs and OpenAI strict mode reject an object schema without it.
+    An object schema that already sets `additionalProperties` keeps its value.
+    """
+
+    def close(node: dict[str, Any]) -> None:
+        if node.get("type") == "object" or "properties" in node:
+            node.setdefault("additionalProperties", False)
+        children = [*node.get("properties", {}).values(), *node.get("$defs", {}).values()]
+        for key in ("anyOf", "oneOf", "allOf"):
+            children.extend(node.get(key, []))
+        if isinstance(node.get("items"), dict):
+            children.append(node["items"])
+        for child in children:
+            close(child)
+
+    strict = copy.deepcopy(schema)
+    close(strict)
+    return strict
+
+
 class Backend(Protocol):
     name: str
 
@@ -62,8 +104,8 @@ class ModelIds(Frozen):
     classify: dict[str, str]
 
     def resolve(self, logical: LogicalModel, backend: str) -> str:
-        raise NotImplementedError
+        return getattr(self, logical)[backend]
 
 
 def load_model_ids(path: Path = DEFAULT_MODEL_IDS_PATH) -> ModelIds:
-    raise NotImplementedError
+    return ModelIds.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
