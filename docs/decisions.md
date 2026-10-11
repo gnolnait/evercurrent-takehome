@@ -384,7 +384,7 @@ Decision. Golden labels and the ranking configuration are fingerprinted; `digest
 and deliberate ranking changes still run. A deliberate change re-freezes the baseline in
 its own commit with the before and after in the report. Every ranking rate is reported beside two baselines, role-only
 and send-everything, even when a baseline wins. Quiet world days give an abstention
-precision. `digest eval --gate` compares the report to a frozen baseline and CI fails on
+precision. `digest eval --gate` (M4 stretch) compares the report to a frozen baseline and CI fails on
 a drop beyond a stated tolerance per metric; citation validity stays a hard 100 percent.
 Prose ablations (renderer, prompt version) use a pairwise judge with position swap.
 

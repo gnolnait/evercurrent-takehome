@@ -253,13 +253,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    find the last evidence item; if the age exceeds the task's expected cadence
    (weekend-aware), emit an absence item citing that last evidence. (b) An ask
    addressed to a person with no reply from them after a cadence is an absence for the
-   asker and the owner, citing the ask. (c) A promise with an owner and a due date
+   asker and the owner, citing the ask. (c, stretch) A promise with an owner and a due date
    (an item with `owner` and `due`) whose due date passes with no later evidence from
-   the owner is an absence for the owner and the asker, citing the promise. (d) A
-   human claim that changes a recorded key (rev, part, qty) with no system-of-record
+   the owner is an absence for the owner and the asker, citing the promise. (d, stretch) A human claim that changes a recorded key (rev, part, qty) with no system-of-record
    claim on the same key after a cadence, including workaround language with no ECO or
-   deviation after it, is an absence for the owner of the key, citing the claim.
-   (e) A blocker with no owner and no reply after a cadence is an absence for the owners
+   deviation after it, is an absence for the owner of the key, citing the claim. (e, stretch) A blocker with no owner and no reply after a cadence is an absence for the owners
    of the entities it names, else for the EM, citing the blocker. (f, stretch) Evidence for a checklist task that predates a revision change of the
    task's own entity makes the task an absence again ("passed on Rev B; Rev C since day
    9; no evidence on Rev C"). (g, stretch) A scoped claim whose scope has ended while the old value is still in use is
@@ -479,16 +477,15 @@ runs the tests without the metric gate.
 
 v0.4 at a glance. The cut list for the v0.4 additions, by milestone; "core" here is
 what section 10 means by "section 9 names it core".
-Core is three correctness rules; everything else v0.4 is stretch, built after its
-milestone's core items, and a world field is added only when the item that reads it is
-built.
-- M2. Core: channel `private` (the access filter reads it). Stretch: absence sources (c)
-  and (e); the reference pass; the other world schema fields (`depends_on`, `priority`,
-  task `entities`, claim `certainty`, `kind` and `scope`, channel `external`, document
-  revision histories); field-level verification; loud-noise negatives; the cost-derived
+Core is three correctness rules and the one world field they read; everything else v0.4
+is stretch, built after its milestone's core items, and a world field is added only when
+the item that reads it is built.
+- M2. Core: channel `private` (the M3 visibility filter reads it). Stretch: absence sources (c)
+  and (e); the reference pass; the other world schema fields (`depends_on`, task `entities`, claim `certainty`,
+  `kind`, `conditions` and `scope`, channel `external`, document revision histories); field-level verification; loud-noise negatives; the cost-derived
   triage threshold; the `ticket` reaction rule; the tracker bot persona.
-- M3. Core: the visibility filter; the feedback event log. Stretch: `depends_on` edges
-  with fan-out; absence sources (d), (f) and (g); stale-reference items; the action-time
+- M3. Core: the visibility filter; the feedback event log. Stretch: the certainty, kind
+  and conditions rules; `depends_on` edges with fan-out; absence sources (d), (f) and (g); stale-reference items; the action-time
   audit; scoped claims; the external-channel stale-reference rule; ledger values in the
   extraction prompt; decision exposure; contradiction routing with the confirm action;
   the per-subsystem phase override; history labels; resolved-since lines; per-role
@@ -507,9 +504,9 @@ built.
   prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: channel `private`. v0.4 stretch: absence sources (c) and (e), the
   reference pass (revision tokens in file names and links as `referenced` claims and
   `linked` exposure; the stale-reference item itself waits for the ledger in M3), the
-  world schema fields the stretch items read (`depends_on`, `priority`, task `entities`,
-  claim `certainty`, `kind` and `scope`, channel `external`, documents with revision
-  histories), each added when its reader is built, field-level verification,
+  world schema fields the stretch items read (`depends_on`, task `entities`, claim
+  `certainty`, `kind`, `conditions` and `scope`, channel `external`, documents with
+  revision histories), each added when its reader is built, field-level verification,
   loud-noise negatives, the cost-derived triage
   threshold, the `ticket` reaction rule and the tracker bot persona. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
@@ -517,7 +514,8 @@ built.
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
   precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
   plus absences and the README says so. v0.4 core: the visibility filter and the feedback event log (correctness rules, not
-  new scope). v0.4 stretch also: `depends_on` edges with fan-out to the must-see lane,
+  new scope). v0.4 stretch also: the certainty, kind and conditions rules, `depends_on` edges with
+  fan-out to the must-see lane,
   absence source (d) (it reads the ledger), stale-reference items, the action-time
   staleness audit (an as-of read of the ledger and the actor's exposure), scoped claims,
   the external-channel stale-reference rule, suspect evidence (source f), ended scope
