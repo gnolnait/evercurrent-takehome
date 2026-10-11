@@ -43,9 +43,13 @@ would promote it.
   glossary table with alias provenance. Each is additive to the v1 schema. Trigger:
   a ranking or landing-map need that the v1 fields cannot express, or a connector that
   supplies the edges.
-- Org-chart and HR connectors (Google Directory, Workday, BambooHR) to fill team and
-  manager. The Slack-inferred profile draft approximates them. Trigger: a second real
-  workspace.
+- Org-chart and HR connectors to fill team and manager. First: Google Workspace
+  Directory API, where each user record carries a `relations` entry of type manager and
+  dynamic group queries list a manager's reports; Microsoft Graph has the same shape.
+  Vendor PLM APIs (Arena, Duro, Onshape, Teamcenter) stay deferred until a customer names
+  the tool; until then PLM enters as bot posts in a feed channel or as a CSV through
+  `digest import`. The Slack-inferred profile draft and the file import cover the demo.
+  Trigger: a second real workspace on Google Workspace or Microsoft 365.
 - Point-in-time history of edited messages (row versioning in the store). The snapshot
   rule (a digest for day D runs on a store replayed to day D) covers the demo and the
   eval. Trigger: a live deployment that must answer "what did the digest say last

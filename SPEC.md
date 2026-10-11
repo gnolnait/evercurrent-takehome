@@ -207,7 +207,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 
 1. Ingest: events into SQLite, idempotent on (channel_id, ts). Replay feeds the JSONL
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
-   Mode events, event_id dedup and a nightly 26-hour reconciliation read.
+   Mode events, event_id dedup and a nightly 26-hour reconciliation read. CSV exports of
+   people and PLM records enter through `digest import` (stretch, M5); they are the
+   universal form every HRIS and PLM provides.
 2. Extract: a classifier first decides whether the thread delta contains project
    information (triage; a dropped golden item counts as a miss in the eval). The
    classifier returns a probability, through the structured-output path (`extract` with
@@ -504,7 +506,12 @@ later day.
   v0.4 core: exposure recorded on Slack's acceptance (a correctness rule). v0.4 stretch: send idempotency through message metadata, dead-credential handling, the
   admin alert, the "nothing today" line, and a mock issue tracker (an in-process
   stand-in with create, assign and status behind the function layer) so a `ticket`
-  reaction creates an issue live until a tracker connector exists (later.md).
+  reaction creates an issue live until a tracker connector exists (later.md); a file
+  import command (`digest import people <csv>` for user_id, name, role, team, manager,
+  owned subsystems into profiles; `digest import plm <csv>` for entity, attribute, value,
+  asserted date into the ledger with `plm_bot` authority) with the two demo files
+  generated from the Kestrel world script, so the import path runs on scripted data in
+  the demo.
 - Days 6 to 7: adversarial validation, second-model review, retro, polish, then
   stretch items in the order they are listed above. If a core day slips, the web
   preview is the first core item deferred, as in v0.2.
