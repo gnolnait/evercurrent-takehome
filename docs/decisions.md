@@ -296,9 +296,9 @@ stale-belief lines can say when a value stopped being true, supersession recall 
 measured on time rather than only on links, and a tracker connector later writes the
 same rows.
 
-Amended 2026-10-11 (SPEC v0.4): claims carry `certainty`, `kind` and `conditions`; a
-hedged or question claim never supersedes, a target never supersedes a measurement, and
-measurements under different conditions never contradict; a lower-authority change to a
+Amended 2026-10-11 (SPEC v0.4): claims carry `certainty`, `kind` (stated, target or measured) and `conditions`; a hedged
+or question claim never supersedes, a target never supersedes a stated or measured value
+(the two coexist), and measurements under different conditions never contradict; a lower-authority change to a
 recorded key is `pending` until the system of record confirms it.
 
 ## D20. Interfaces: one function layer, three thin adapters, MCP for assistants

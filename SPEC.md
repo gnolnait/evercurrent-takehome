@@ -122,8 +122,9 @@ certainty, kind, conditions}`
 where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
 rev, lead_time, gate_date, owner, status, qty, spec_param, priority. authority is a
 small enum (owner_stated, plm_bot, cm_stated, hearsay). `certainty` is decided |
-reported | hedged | question; `kind` is target | measured; `conditions` is optional free
-text naming the test, rig, load or rev a measurement was taken under.
+reported | hedged | question; `kind` is stated (default: a fact such as a rev, owner,
+status or date) | target | measured; `conditions` is optional free text naming the test,
+rig, load or rev a measurement was taken under.
 - The ledger is bi-temporal: `asserted_ts` is when the claim was made, `observed_ts`
   when the pipeline saw it, `invalid_ts` when a later claim superseded it (null while
   current).
@@ -132,8 +133,9 @@ Ledger: current value per key with history; `supersedes` when a later authoritat
 claim replaces a value; `contradicts` when concurrent claims from different channels
 disagree and neither is superseded. A `plm_bot` claim is the system of record: a
 lower-authority claim never supersedes it. A hedged or question claim never supersedes
-anything; a target never supersedes a measurement; two measurements with different
-`conditions` never contradict. A lower-authority claim that disagrees with a recorded
+anything; a target never supersedes a stated or measured value, and a target and a measured value
+on one key coexist (the gap between them is the finding); two measurements with
+different `conditions` never contradict. A lower-authority claim that disagrees with a recorded
 value is `pending`: the record resolves it by confirming the new value (supersession) or
 restating its own (a contradiction, routed to the owner of the key as work, never
 resolved in code), and silence past a cadence makes it an absence item for the owner
@@ -151,16 +153,18 @@ priority, state}`
 
 ProjectState: `{project_id, phases[{phase, from_date}], subsystem_phases{subsystem: phase},
 gates[{id, name, date, buffer_days, priority, checklist[{id, task, owner, expected_cadence,
-priority}]}]}`
+priority, entities[]}]}]}`
 - phase: concept | EVT | DVT | PVT | ramp. `phases` are the project's dated windows (as
   M1 built them); `subsystem_phases` is an optional override per subsystem. The
   role-by-phase prior reads the override for the item's subsystem when one exists, else
   the project phase; an item with no subsystem reads the project phase
 - priority: critical | high | normal | low (default normal)
+- `entities` on a checklist task names the entities the task touches; decision exposure
+  reads it, and the world script sets it where it sets `tasks` on events
 
 UserProfile: `{user_id, role, team, manager, projects[], owned_entities[],
 watch_prompts[], interest{entity_or_topic: weight}, exposed{key: (value, ts, how)},
-seen{item_id: ts}, feedback[{event, item_id, run_id, profile_version, ts}],
+seen{item_id: ts}, feedback[{event, item_id, run_id, profile_version, ts, payload}],
 delivery{time, weekdays[], quiet_hours, paused},
 style{description, length, section_order[], sections_off[], language},
 sources{field: configured | inferred | confirmed | pasted}}`
@@ -265,8 +269,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    say sends one line that says so. Rationale on demand.
 8. Feedback: button, web or CLI feedback updates the profile, records exposure, and is
    logged with run_id, item_id and the profile version in force. Feedback is an event
-   log: every action is undoable from the same surface, profile weights are recomputed
-   from the log, a vote moves the item most, its entity less and its item type least,
+   log: each event carries a typed payload (a snooze date, a topic, the id of the event it
+   undoes); an undo reverses exactly the referenced event's effect; profile weights are
+   recomputed from the log, a vote moves the item most, its entity less and its item type least,
    and no learned weight leaves a bounded band around the role default. `needs_you` lines carry done (resolves the item when the clicker owns it, else records
    exposure for that reader only), snooze until a date, not mine (reader removed from the
    audience), and, on a contradiction line, confirm (the owner picks a value, which
@@ -299,7 +304,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   distractor threads, late delivery and missed events (for reconciliation), a planted
   instruction aimed at the extractor, and loud threads with urgent words, many replies
   and no state change. The script holds more candidate items per persona-day than the affected section caps
-  around the EVT to DVT change, so the caps bite and re-weighting changes the cut, quiet days with no planted change, for abstention, and at least one private channel
+  around the EVT to DVT change, so the caps bite and re-weighting changes the cut, quiet days with no planted change and no outstanding golden absence or contradiction,
+  for abstention, and at least one private channel
   with a persona outside it, so the visibility check is tested. The renderer's prompt carries a negative list of the
   names and storylines used by public submissions to the same brief. One 40-message
   slice is human-authored as an anchor.
@@ -326,13 +332,16 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   held E0's value (P is in E0's `known_by` or was shown E0), `told_day` is the earliest
   of P's `known_by` day for E and the first digest day that delivers an item citing E,
   else the world's last day plus one; the metric sums `told_day - E.day` over all (P, E),
-  with the digest on and with it off (digest days removed). Beside it: time-to-told per
+  with the digest on and with it off (digest days removed); when a later claim supersedes
+  E before P is told, P's interval for E ends there and a new interval starts for the
+  later claim. Beside it: time-to-told per
   role (median, p90, never-told count) over every must-see fact for personas not in
   `known_by` by E.day, and novelty rate (delivered lines whose discriminating fields
   differ from what the reader was last shown, over delivered lines). All three compute
   from the store and the world file with no model call.
-- Ledger: supersession recall; contradiction precision; abstention precision (zero
-  contradictions, stale-belief lines and absences on quiet days).
+- Ledger: supersession recall; contradiction precision; abstention precision (on quiet
+  days, every delivered contradiction, stale-belief line or absence must match an
+  outstanding golden state; any other is a false positive).
 - Baselines beside every ranking metric: role-only and send-everything on the same
   golden sets, published even when a baseline wins.
 - Absence: false-alarm rate on simulated silences that were not stalls.
@@ -414,20 +423,20 @@ later day.
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
 - M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
-  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c)
-  to (e), and the world schema additions they and M3 need (`depends_on`, `priority`,
-  claim `certainty` and `kind`, channel `private`). v0.4 stretch: field-level
-  verification, ledger values in the extraction prompt, loud-noise negatives, the
+  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c) and (e), and the world schema additions they and M3
+  need (`depends_on`, `priority`, task `entities`, claim `certainty` and `kind`,
+  channel `private`). v0.4 stretch: field-level verification, loud-noise negatives, the
   cost-derived triage threshold. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
   precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
-  plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the
-  must-see lane, and the visibility filter (a correctness rule, not new scope). v0.4
-  stretch: decision exposure, contradiction routing with the confirm action, the
-  feedback event log, history labels, resolved-since lines, per-role consequence
-  templates, the "last to know" term. Re-surfacing by age and diversity at render stay
+  plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the must-see lane, absence source (d)
+  (it reads the ledger), and the visibility filter (a correctness rule, not new scope).
+  v0.4 stretch: ledger values in the extraction prompt, decision exposure, contradiction
+  routing with the confirm action, the feedback event log, the per-subsystem phase
+  override, history labels, resolved-since lines, per-role consequence templates, the
+  "last to know" term. Re-surfacing by age and diversity at render stay
   stretch.
 - M4 (day 4): landing map; eval harness and report with the ablation table;
   faithfulness judge; degradation curve; web preview with the profile page (paste
@@ -467,8 +476,7 @@ later day.
   with a named milestone and a place in the cut order above. The M1 interface changes
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
-  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The
-  core additions are the absence sources (c) to (e) with the world schema fields they
+  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are the absence sources (c) to (e) with the world schema fields they
   need, `depends_on` edges with fan-out, the headline metrics and the regression gate,
   plus two correctness rules (visibility filter, exposure on acceptance); they come out
   of days 6 and 7.
