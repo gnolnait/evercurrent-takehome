@@ -42,8 +42,9 @@ Four consequences:
 
 The objective behind all four: minimise stale-belief person-days, the working days a
 reader holds a value the ledger has superseded, summed over readers and facts, under a
-length budget per digest. Every ranking term earns its place by moving that sum in the ablation, and section 7
-measures the sum directly. Cost follows the same shape: extraction runs once per thread
+length budget per digest. Every ranking term earns its place by moving that sum, or must-see recall for the facts
+the sum does not count (asks, blockers, absences), in the ablation; section 7 measures
+both. Cost follows the same shape: extraction runs once per thread
 revision and personalisation is code, so cost grows with thread revisions, not with
 messages times readers.
 
@@ -145,9 +146,9 @@ as current, and a scope that has ended with the old value still in use is an abs
 value is `pending`: the record resolves it by confirming the new value (supersession) or
 restating its own (a contradiction, routed to the owner of the key as work, never
 resolved in code), and silence past a cadence makes it an absence item for the owner
-(section 5 step 5 source d). An action claim is a `status` claim on an entity of type po,
-build, release or document (placed, started, released, sent) whose evidence names a part
-and a revision; the audit in step 6 reads those.
+(section 5 step 5 source d). An action claim is a `status` claim on an entity of type po, build, release or document
+(placed, started, released, sent; a tooling cut is the status of its tooling PO) whose
+evidence names a part and a revision; the audit in step 6 reads those.
 
 Entity: `{id, type, description, owner, vendor, subsystem, parent, depends_on[], aliases[],
 priority, state}`
@@ -177,8 +178,8 @@ delivery{time, weekdays[], quiet_hours, paused},
 style{description, length, section_order[], sections_off[], language},
 sources{field: configured | inferred | confirmed | pasted}}`
 - role: ME | EE | FW | supply_chain | EM | PM
-- exposed.how: authored | replied | reacted | shown_in_digest | linked (the reader received
-  a file or link naming a value, so they hold it)
+- exposed.how: authored | replied | reacted | shown_in_digest | linked (the reader posted, replied to or reacted on a message carrying a file or link
+  that names a value, so they hold it)
 - `sources` records where each field came from, so an inferred draft is
   distinguishable from a confirmed one.
 - `style.description` is the user's own words ("short, risks first, skip fyi, in
@@ -225,9 +226,10 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    URL itself (the quote rule above applies to model-written items), and `linked`
    exposure for the poster and every reader who replied or reacted; a reference older than the ledger's value as of the message's `asserted_ts` is a
    stale-reference item, suppressed when the thread also cites the current value. A
-   `ticket` reaction by a human on a message creates an `issue` item owned by the reactor
-   with `owner_stated` authority and cites the message; it is also a human label that a
-   thread carries project information, which the triage evaluation reads.
+   `ticket` reaction by a human on a message creates an `issue` entity and a `status =
+   open` claim on it with `owner_stated` authority, the reactor as owner and the message
+   as evidence; the thread's item links to it. On real data the reaction is also a human
+   label that the thread carries project information, which the triage evaluation reads.
 3. Link: candidate pairs by shared entity key, then lexical similarity (FTS5), then an
    LLM adjudicator returning one of {duplicate, update_of, supersedes, contradicts,
    related, distinct} with quoted evidence. Claims update the ledger. `status` moves to
@@ -259,7 +261,7 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    contradiction on an owned key, a stale value on an entity the reader's pending
    checklist task touches, a stale reference to a buildable document posted into an
    external channel for the document's owner, and an action taken against a superseded
-   value: a PO, tooling cut, release or build start whose claim names a value the ledger
+   value: a PO, tooling PO, release or build start whose claim names a value the ledger
    had already superseded at its `asserted_ts`, for the actor and the key's owner, with
    what the actor had last been told). Before either lane, a reader sees an item only through evidence from a channel they
    can see (public, or private with the reader a member); the check fails closed, and an
@@ -320,8 +322,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   record (PLM, schedule, document control) posting into a feed channel, and dated
   events (ECOs, slips, quotes, decisions, failures), each with claims, the checklist
   tasks it is evidence for, `must_see_for` and `known_by` per persona over time.
-- The world's bot personas include an issue tracker, and the script marks some threads
-  with a `ticket` reaction so ticketed threads exist as human-labelled positives.
+- The world's bot personas include an issue tracker, and the script marks some threads with a `ticket` reaction so the rule has input; in
+  replay those labels are script-derived like the golden ones.
 - `digest seed --world <name>`: posts the rendered corpus into a real Slack workspace
   through the bot with per-persona display names, threads, edits and deletes, at a
   configurable pace (one world day per N minutes). The world timestamp is written into
@@ -353,7 +355,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Extraction precision and recall by item type, with exact match on discriminating
   fields (rev, date, qty, owner).
-- Citation validity: 100% of delivered items carry a verified evidence quote. Release gate.
+- Citation validity: 100% of delivered items carry verified evidence: a quote found in the
+  cited message, or for a referenced claim a file name or URL present in it. Release gate.
 - Faithfulness: binary judge per claim from a different model family where a key is
   present, with judge agreement on a hand-checked sample of 50.
 - Ranking: must-see recall at 5 and nDCG at 5 per persona per day; role separation;
@@ -382,12 +385,13 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Access: no delivered item cites a channel its reader cannot see, checked on a world
   with at least one private channel and a reader outside it.
 - Documents and actions: stale-reference precision and recall against the script's
-  document revisions; stale-action count against the script's planted actions (the script does not react to
-  the digest, so this is recall, not on versus off).
+  document revisions; stale-action count: planted actions caught over planted actions, with n stated (the
+  script does not react to the digest, so there is no on-versus-off reading).
 - Duplicate rate among delivered items.
 - Mirror metrics: missed golden items and hallucinated items, both counted.
-- Triage recall against ticketed threads (human-marked positives), beside recall against
-  golden items; on real data this is the first label the system collects.
+- Triage recall against ticketed threads, beside recall against golden items;
+  script-planted in replay, human-marked on real data, where it is the one label a
+  workspace produces without the digest's own buttons.
 - Degradation curve: extraction and supersession recall as the renderer's noise knobs rise.
 - Extraction scoring splits objective fields (owner, due, status, claim values; a miss
   fails) from advisory ones (type disagreement between neighbours; reported), with
@@ -403,8 +407,7 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   commit, with the before and after in the report.
 - Cost and latency per stage, n beside every rate, and a "not run: reason" row for any
   configuration without its key.
-- Ranking ablation: each score term switched off in turn, with stale-belief person-days, must-see recall and nDCG per persona reported; a term
-  that does not move person-days is removed, whatever it does to the other two.
+- Ranking ablation: each score term switched off in turn, with stale-belief person-days, must-see recall and nDCG per persona reported; a term that moves neither person-days nor must-see recall is removed; nDCG is reported.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction

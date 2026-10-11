@@ -330,7 +330,8 @@ per-user tokens (docs/later.md).
 ## D21. The objective is stale-belief person-days
 
 Decision. The digest minimises the working days readers hold a value the ledger has
-superseded, summed over readers and facts, under a per-digest length budget. A ranking term earns its place by moving that sum in the ablation; the evaluation reports
+superseded, summed over readers and facts, under a per-digest length budget. A ranking term earns its place by moving that sum, or must-see recall for the facts the
+sum does not count, in the ablation; the evaluation reports
 the sum directly (digest on versus off), with time-to-told per role and the novelty rate
 beside it. The formulas read only
 world fields (`supersedes`, `must_see_for`, `known_by`, event days) and the store.
@@ -388,8 +389,7 @@ handled the Rev B pack holds Rev B. A reference
 older than the ledger's value is a stale-reference item; into a channel shared with a
 contract manufacturer it is must-see for the document's owner. A claim may carry a
 `scope` (a build id or expiry), so a deviation for one build neither supersedes nor
-contradicts the record. An action claim (PO placed, tooling cut, release sent, build
-started) is audited against the ledger and the actor's exposure as of its time; acting
+contradicts the record. An action claim (PO placed, tooling PO placed, release sent, build started) is audited against the ledger and the actor's exposure as of its time; acting
 on a superseded value is a blocker for the actor and the key's owner.
 
 Why. PLM tools flag a pinned document link that is out of date inside their own walls;
@@ -413,9 +413,9 @@ reports recall against ticketed threads beside recall against golden items. Live
 gets a mock tracker (create, assign, status) behind the function layer until a connector
 exists; the connector stays in later.md.
 
-Why. Every public submission tunes triage on self-written labels. Tickets people
-actually open from chat are the one label a real workspace produces for free, and the
-reaction is the smallest possible labelling interface. The tracker as a bot persona
+Why. The public submissions reviewed evaluate on labels their authors wrote. Tickets
+people open from chat are the one label a real workspace produces without the digest's
+own buttons, and the reaction is the smallest possible labelling interface. The tracker as a bot persona
 reuses the authority model; nothing new enters the ledger.
 
 Would change it. A workspace that tickets nothing from chat: the metric reports n = 0
