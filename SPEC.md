@@ -307,7 +307,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
    with nothing to say sends one line that says so. Rationale on demand.
 8. Feedback: button, web or CLI feedback updates the profile, records exposure, and is
-   logged with run_id, item_id and the profile version in force. Feedback is an event
+   logged with run_id, item_id and the profile version in force (a counter that every
+   profile edit increments). Feedback is an event
    log: each event carries a typed payload (a snooze date, a topic, the id of the event it
    undoes); an undo reverses exactly the referenced event's effect; profile weights are
    recomputed from the log, a vote moves the item most, its entity less and its item type least,
