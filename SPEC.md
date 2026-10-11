@@ -194,7 +194,7 @@ sources{field: configured | inferred | confirmed | pasted | imported}}`
 Digest: `{user_id, as_of, coverage{window_start, through, missing_channels[], partial}, sections{needs_you[],
 stale_beliefs[], not_happened[], decisions[], risks[], fyi[]}, items[],
 rationale{item_id: score_breakdown}}`
-- `coverage` states the data the digest was built from: the window it covers, the time
+- `coverage` (M4 stretch) states the data the digest was built from: the window it covers, the time
   the store reaches, any channel not ingested, and a partial marker when a stage failed.
   A digest never looks complete when it is not.
 
@@ -306,8 +306,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    ids, values and link are identical for every reader. An item the reader was shown
    while open and that has since resolved appears once more with its closing evidence.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
-   are links. Every digest carries its coverage line, and a delivery day with nothing to
-   say sends one line that says so. Rationale on demand.
+   are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
+   with nothing to say sends one line that says so. Rationale on demand.
 8. Feedback: button, web or CLI feedback updates the profile, records exposure, and is
    logged with run_id, item_id and the profile version in force. Feedback is an event
    log: each event carries a typed payload (a snooze date, a topic, the id of the event it
@@ -411,7 +411,7 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Pairwise judging for prose ablations: for a renderer or prompt-version change the
   judge sees two digests for the same persona-day, position-swapped, and picks; win rate
   reported.
-- Regression gate: `digest eval --gate` compares the report to a frozen baseline, with
+- Regression gate (M4 stretch): `digest eval --gate` compares the report to a frozen baseline, with
   golden labels and ranking config fingerprinted; CI fails on a drop beyond a stated
   tolerance per metric, on a metric present in the baseline and missing or "not run" in
   the report, on an abstention set with zero quiet days, and citation validity stays a
@@ -419,7 +419,8 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   commit, with the before and after in the report.
 - Cost and latency per stage, n beside every rate, and a "not run: reason" row for any
   configuration without its key.
-- Ranking ablation: each score term switched off in turn, with stale-belief person-days, must-see recall and nDCG per persona reported; a term that moves neither person-days nor must-see recall is removed; nDCG is reported.
+- Ranking ablation: each score term switched off in turn, with stale-belief person-days (M4 stretch), must-see recall and nDCG per persona
+  reported; a term that moves neither person-days nor must-see recall is removed; nDCG is reported.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction
@@ -471,7 +472,10 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
 Core items ship in the order below. A stretch item is listed with its day and is
 built on that day only after the day's core items are done, when time is left;
 otherwise it waits for days 6 to 7. A stretch item never displaces a core item of a
-later day.
+later day. Sections 2 to 7 describe the complete design; a requirement that reads a
+stretch item applies once that item is built. Until then the earlier rule holds: the
+ablation reports must-see recall and nDCG, a digest carries no coverage line, and CI
+runs the tests without the metric gate.
 
 v0.4 at a glance. The cut list for the v0.4 additions, by milestone; "core" here is
 what section 10 means by "section 9 names it core".
