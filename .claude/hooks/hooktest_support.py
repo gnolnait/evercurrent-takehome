@@ -81,3 +81,39 @@ def launch(path):
 
 
 PYTHON = sys.executable
+
+# The variables that tell git WHICH repository to act on, as `git rev-parse
+# --local-env-vars` lists them (git 2.55). Git exports GIT_DIR to its hooks when
+# the command runs in a linked worktree, and a pre-push hook runs this suite.
+# Inherited, GIT_DIR points every fixture's `git init`, `git config`, `git add`
+# and `git commit` at the real repository instead of its temp dir: on 2026-10-11
+# that reinitialised the project repo as bare and overwrote its committer
+# identity. GIT_EDITOR and GIT_EXEC_PATH stay; they do not select a repository.
+GIT_REPO_ENV_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+)
+
+
+def scrub_git_env(environ):
+    """Remove every repository-selecting git variable from `environ` in place.
+    Returns the names removed, so a caller can report what was inherited."""
+    removed = []
+    for name in GIT_REPO_ENV_VARS:
+        if name in environ:
+            del environ[name]
+            removed.append(name)
+    return removed
