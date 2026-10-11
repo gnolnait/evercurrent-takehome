@@ -212,9 +212,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    Mode events, event_id dedup and a nightly 26-hour reconciliation read. `digest import plm`
    (stretch) renders each CSV row as a `plm_bot` post into the feed channel named by
    `--channel`, which must already exist in the store with its visibility (else refused),
-   `ts` from the row's `asserted_ts` and row order, so it enters this step like any event and obeys the
-   replay clock. `digest import people` sets profile fields with source `imported`,
-   shown for confirmation beside inferred ones; it never overwrites a `confirmed` field.
+   `ts` from the row's `asserted_ts` and row order, so it enters this step like any event
+   and obeys the replay clock; in live mode the post goes through the bot, so its
+   permalink is real; a corrected row is a new post with a later `ts`, not an edit. `digest import people` sets profile fields with source `imported`,
+   shown for confirmation beside inferred ones; it replaces only `inferred` or `imported`
+   fields.
 2. Extract: a classifier first decides whether the thread delta contains project
    information (triage; a dropped golden item counts as a miss in the eval). The
    classifier returns a probability, through the structured-output path (`extract` with
