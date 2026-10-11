@@ -573,8 +573,8 @@ reads it is built.
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
   model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are three correctness rules (the visibility filter, the feedback
-  event log and exposure on Slack's acceptance) and the triage threshold derived from
-  the cost of a miss (section 5 step 2). Every other v0.4 addition is built only
+  event log and exposure on Slack's acceptance), the channel `private` field the first
+  one reads, and the triage threshold derived from the cost of a miss (section 5 step 2). Every other v0.4 addition is built only
   after its milestone's core items, and a world field is added only when the item that
   reads it is built.
 - Ranking factor sprawl: every term is stored per impression and the ablation table
