@@ -268,6 +268,11 @@ Would change it. A TypeSafe key appearing before M2: Jev becomes the core triage
 adapter and the LLM the baseline. Jev dropping golden items in triage above the miss
 budget: the LLM stays.
 
+Amended 2026-10-11 (SPEC v0.4): the triage classifier returns a probability, through the
+structured-output path (`extract` with a two-field schema) for the LLM adapter and
+natively for Jev; `judge` stays enum-only and serves adjudication. The keep threshold is
+derived from a stated cost of a miss.
+
 ## D18. Profile bootstrap and onboarding
 
 Decision. Onboarding is in scope for v1. The first-run profile is a draft inferred
@@ -385,9 +390,9 @@ or move it to report-only, and say so in the report.
 
 Decision. A revision token in a file name or a pinned-version URL is a `referenced` claim
 on the document entity, read by a deterministic pass before the model runs; posting, replying to or reacting on the message is `linked` exposure, so a reader who
-handled the Rev B pack holds Rev B. A reference
-older than the ledger's value is a stale-reference item; into a channel shared with a
-contract manufacturer it is must-see for the document's owner. A claim may carry a
+handled the Rev B pack holds Rev B. A reference older than the ledger's value as of the message's time is a stale-reference
+item (suppressed when the thread also cites the current value); into a channel shared
+with a contract manufacturer it is must-see for the document's owner. A claim may carry a
 `scope` (a build id or expiry), so a deviation for one build neither supersedes nor
 contradicts the record. An action claim (PO placed, tooling PO placed, release sent, build started) is audited against the ledger and the actor's exposure as of its time; acting
 on a superseded value is a blocker for the actor and the key's owner.

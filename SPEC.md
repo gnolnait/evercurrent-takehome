@@ -209,11 +209,13 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
    Mode events, event_id dedup and a nightly 26-hour reconciliation read.
 2. Extract: a classifier first decides whether the thread delta contains project
-   information (triage; a dropped golden item counts as a miss in the eval; a thread
-   is kept when its probability of carrying information is at least 1 / (1 + the
-   stated cost of a miss relative to a false keep, a constant in `config/priors.yaml`, default 10, a choice to revisit after the first twenty
-   golden threads), and the triage decision is stored per thread revision so the rationale
-   can read it back). Then, per thread delta, the LLM receives new
+   information (triage; a dropped golden item counts as a miss in the eval). The
+   classifier returns a probability, through the structured-output path (`extract` with
+   a two-field schema) for the LLM adapter and natively for Jev; `judge` stays enum-only
+   for adjudication. A thread is kept when that probability is at least 1 / (1 + the
+   stated cost of a miss relative to a false keep, a constant in `config/priors.yaml`,
+   default 10, a choice to revisit after the first twenty golden threads), and the triage
+   decision is stored per thread revision so the rationale can read it back. Then, per thread delta, the LLM receives new
    messages, the thread root, existing items for the thread, the current ledger values
    for the entities the thread names, and the project glossary, and returns items with
    evidence and claims. Code verifies each evidence quote is a whitespace-normalized substring of the
@@ -227,9 +229,10 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    exposure for the poster and every reader who replied or reacted; a reference older than the ledger's value as of the message's `asserted_ts` is a
    stale-reference item, suppressed when the thread also cites the current value. A
    `ticket` reaction by a human on a message creates an `issue` entity and a `status =
-   open` claim on it with `owner_stated` authority, the reactor as owner and the message
-   as evidence; the thread's item links to it. On real data the reaction is also a human
-   label that the thread carries project information, which the triage evaluation reads.
+   open` claim on it with `owner_stated` authority, the reactor as owner and the message as evidence; the thread's item links to it. Reactions do not change a
+   thread's revision, so this runs as its own pass over new reactions, idempotent on
+   (channel_id, ts, reactor). On real data the reaction is also a human label that the
+   thread carries project information, which the triage evaluation reads.
 3. Link: candidate pairs by shared entity key, then lexical similarity (FTS5), then an
    LLM adjudicator returning one of {duplicate, update_of, supersedes, contradicts,
    related, distinct} with quoted evidence. Claims update the ledger. `status` moves to
@@ -434,8 +437,10 @@ Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
   at or above 0.9 on the golden corpus.
 - A5 A stale-belief line shows the user's last-exposed value with how and when they were
   exposed, the current value, and the superseding item's permalink.
-- A6 A "Not happened" line names the gate, buffer consumed, the open task, and cites the
-  last evidence; absence false-alarm rate on the simulator is reported and below 20%.
+- A6 A "Not happened" line from a checklist source names the gate, buffer consumed and
+  the open task; from a promise, an unconfirmed change or an unowned blocker it names
+  the days silent and the audience; every line cites the last evidence. Absence
+  false-alarm rate on the simulator is reported and below 20%.
 - A7 The decision landing map marks a cell contradicted only with a citing item; the
   README shows one such cell with evidence on both sides.
 - A8 `just ci` is green: ruff (including the annotation rules), ty with warnings as
