@@ -504,7 +504,7 @@ reads it is built.
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
 - M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
-  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: channel `private`. v0.4 stretch: absence sources (c) and (e), the
+  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: channel `private`; the triage threshold derived from the cost of a miss (section 5 step 2). v0.4 stretch: absence sources (c) and (e), the
   reference pass (revision tokens in file names and links as `referenced` claims and
   `linked` exposure; the stale-reference item itself waits for the ledger in M3), the
   world schema fields the stretch items read (`depends_on`, task `entities`, claim
@@ -572,8 +572,8 @@ reads it is built.
   with a named milestone and a place in the cut order above. The M1 interface changes
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
-  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are three correctness rules, the visibility filter, the feedback
-  event log and exposure on Slack's acceptance, and the triage threshold derived from
+  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are three correctness rules (the visibility filter, the feedback
+  event log and exposure on Slack's acceptance) and the triage threshold derived from
   the cost of a miss (section 5 step 2). Every other v0.4 addition is built only
   after its milestone's core items, and a world field is added only when the item that
   reads it is built.

@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.2, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.3, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -38,16 +38,17 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 |---|---|---|---|
 | 1 Triage and extraction | `m2-extract` | `digest/extract/__init__.py`, `digest/extract/schema.py`, `digest/extract/prompts.py`, `digest/extract/normalize.py`, `digest/extract/verify.py`, `digest/extract/triage.py`, `digest/extract/stage.py`, `digest extract` | `tests/test_extract.py`, `tests/test_store.py` (new tests appended) |
 | 2 Absences and golden labels | `m2-absence-golden` | `digest/absence.py`, `digest/world/golden.py`, the ask validation rules in `digest/world/schema.py`, the working-day helpers in `digest/project.py`, `digest absences`, `digest world golden` | `tests/test_absence.py`, `tests/test_golden.py`, `tests/test_world.py` (new tests appended) |
-| 3 Corpus renderer | `m2-corpus` | `digest/corpus/__init__.py`, `digest/corpus/render.py`, `digest/corpus/prompts.py`, `digest/corpus/avoid.py`, `data/world/kestrel/anchor.jsonl`, `digest world render` | `tests/test_corpus.py` |
+| 3 Corpus renderer | `m2-corpus` | `digest/corpus/__init__.py`, `digest/corpus/render.py`, `digest/corpus/prompts.py`, `digest/corpus/avoid.py`, `data/world/kestrel/anchor.jsonl`, `data/world/kestrel/manifest.json` (anchor entries), `digest world render` | `tests/test_corpus.py` |
 | 4 Extraction eval | `m2-eval` | `digest/eval/__init__.py`, `digest/eval/extraction.py`, `Cassettes.recorded_models` in `digest/llm/cassette.py`, `digest eval` | `tests/test_eval.py`, `tests/test_llm.py` (one test appended) |
-| Data | `m2-corpus-data` | `data/cassettes/*.json`, `data/world/kestrel/events.jsonl`, `data/world/kestrel/manifest.json`, `data/world/kestrel/golden.jsonl`, `reports/eval-<date>.md`, README | none (the eval is the check) |
+| Data | `m2-corpus-data` | `data/cassettes/*.json`, `data/world/kestrel/events.jsonl`, `data/world/kestrel/manifest.json` (rendered entries added), `data/world/kestrel/golden.jsonl`, `reports/eval-<date>.md`, README | none (the eval is the check) |
 
 ## Shared conventions
 
 - Layers. The import-linter layers contract becomes, top to bottom: `digest.cli`;
-  `digest.eval`; `digest.replay | digest.extract | digest.absence | digest.corpus`;
+  `digest.eval`; `digest.corpus`; `digest.replay | digest.extract | digest.absence`;
   `digest.store | digest.llm | digest.world`; `digest.project | digest.priors`;
-  `digest.models | digest.settings`. A module imports only from its own layer's
+  `digest.models | digest.settings`. `digest.corpus` sits above `digest.replay` so the
+  renderer reads the anchor file with `read_events` instead of a second parser. A module imports only from its own layer's
   dependencies or a lower layer. The renderer lives in `digest/corpus/`, not in
   `digest/world/`, because `digest.world` and `digest.llm` are siblings and the
   renderer needs both. The forbidden contract on `anthropic` and `httpx2` is unchanged.
@@ -59,8 +60,9 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
   persists `Item`; extraction writes it; the absence detector reads and produces it;
   the eval compares it. `Glossary` is built by `World.glossary()` and consumed by
   extraction, so neither package imports the other.
-- Prompt versions. Each prompt module exports `PROMPT_VERSION` (a short string such as
-  `"m2.1"`). A change to prompt text bumps it. `stage_runs` keys on `EXTRACT_PROMPT_VERSION`,
+- Prompt versions. Each prompt module exports its version constants
+  (`EXTRACT_PROMPT_VERSION` and `TRIAGE_PROMPT_VERSION`, `RENDER_PROMPT_VERSION`), short
+  strings such as `"m2.1"`. A change to prompt text bumps it. `stage_runs` keys on `EXTRACT_PROMPT_VERSION`,
   so a bump of it makes every thread pending again (M1 B1.6); the `triage` table keys
   on `TRIAGE_PROMPT_VERSION`, which re-triages nothing on its own (B1.6). The cassette key already
   carries the prompt text (M1 B2.1), so a bump also records fresh cassettes.
@@ -108,7 +110,7 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 - `digest/world/manifest.py`, implemented; units 2 and 3 read it.
 - `digest/world/golden.py`, `digest/absence.py`, `digest/extract/*`, `digest/corpus/*`,
   `digest/eval/*`: interfaces that raise `NotImplementedError`; `prompts.py` modules hold
-  `PROMPT_VERSION` and empty strings.
+  the version constants and empty prompt strings.
 - `data/world/avoid-names.yaml`: the complete negative-name list (B3.6).
 - `digest/cli.py`: `extract`, `absences`, `world render`, `world golden` with their
   option declarations and `_not_yet` bodies; `eval` keeps its stub.
@@ -283,19 +285,15 @@ EXTRACT_PROMPT_VERSION = "m2.1"
 TRIAGE_PROMPT_VERSION = "m2.1"
 EXTRACT_SYSTEM: str                # static; rules, output instructions, abstention rule
 TRIAGE_SYSTEM: str
-def extract_request(delta: ThreadDelta, glossary: Glossary, tasks: Sequence[ChecklistTask], existing: Sequence[Item], citable: Sequence[Event]) -> LLMRequest
+def extract_request(delta: ThreadDelta, glossary: Glossary, project: ProjectConfig, as_of: date, existing: Sequence[Item], citable: Sequence[Event]) -> LLMRequest
 def triage_request(delta: ThreadDelta, channel_purpose: str | None, citable: Sequence[Event]) -> LLMRequest
 ```
 
 `digest/extract/normalize.py` (pure functions)
 
 ```python
-class EntityRef(Frozen):
-    id: str
-    rev: str | None
-
 def normalize_space(text: str) -> str                                   # collapse runs of whitespace, strip
-def resolve_entity(text: str, glossary: Glossary) -> EntityRef | None
+def resolve_entity(text: str, glossary: Glossary) -> str | None         # entity id; a revision suffix is split off, not matched (D24)
 def resolve_person(text: str, glossary: Glossary) -> str | None         # user id
 ```
 
@@ -427,26 +425,29 @@ the threshold used and `decided_at = now`.
 
 B1.3 `extract_request` has a static system prompt (`EXTRACT_SYSTEM`) and one user
 message with, in this order: the glossary (entity id, type, description, aliases; people
-with user id, name, role, aliases), the open checklist tasks (id, task text, owner role,
-gate id and date), the existing items of the thread (item_id, type, title, status,
+with user id, name, role, aliases), the checklist tasks of every gate whose date is on or after `as_of` (task id, task
+text, owner role, gate id and gate date), the existing items of the thread (item_id, type, title, status,
 owner, due, entities, claims, tasks), the thread root (ts, author, text, file names) when it
 exists, then the changed messages in `ts` order (ts, author, text, file names). Deleted
 rows are omitted. The system prompt states: return items for new information only;
 name an existing `item_id` to update or close an item; quote evidence verbatim from one
 listed message; use null, never a guess, for `owner`, `due` and `item_id`; `owner` of an
-ask is the person asked; `tasks` names, from the list only, the checklist tasks the messages are about, a
-question about a task included, with `effect: done` only when a message states the task
-is complete; the rationale comes first. The prompt never contains the words "golden", "scenario" or an event id.
+ask is the person asked and its first evidence entry is the message that asks; `tasks` names, from the list only, the checklist tasks a message reports progress on
+(a run, a result, a review held, a sign-off, a part received), with `effect: done` only
+when a message states the task is complete; a question about a task or a status
+roll-up that lists it as open is not evidence (the world's `TaskTouch` has the same
+meaning, M1 plan unit 3); the rationale comes first. The prompt never contains the words "golden", "scenario" or an event id.
 
 B1.4 `normalize_space` collapses every run of whitespace to one space and strips the
-ends. `resolve_entity` returns the entity whose id equals the text (case-insensitive)
-or whose alias equals the text (case-insensitive, whole string), with `rev=None`; a
+ends. `resolve_entity` returns the id of the entity whose id equals the text
+(case-insensitive) or whose alias equals the text (case-insensitive, whole string); a
 text of the form `<id>-<L>`, `<id> Rev <L>`, `<id> rev <L>` or `<id> Rev. <L>` where
-`<id>` resolves and `<L>` is one uppercase letter returns that id with `rev=<L>`. Any
-other text returns None. `resolve_person` accepts `<@U...>`, a bare user id, a persona
+`<id>` resolves and `<L>` is one uppercase letter returns that id, the suffix split off
+and discarded (a mention at a revision is not a claim about the current revision;
+revisions enter as `rev` claim values). Any other text returns None. `resolve_person` accepts `<@U...>`, a bare user id, a persona
 alias or a persona name (case-insensitive) and returns the user id, else None.
 Property tests: every entity id and alias resolves to its id; every `id-L` form resolves
-with the rev; a string that is neither resolves to None.
+to the id; a string that is neither resolves to None.
 
 B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per field:
 - An evidence entry whose `message_ts` is not a key of `citable` drops the item
@@ -457,8 +458,11 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
   `permalink` is the cited event's `permalink`.
 - An `item_id` that is not a key of `existing` drops the item (`item_id.unknown`). A
   null `item_id` makes a new item with id `f"{thread_id}#{last_ts}#{n}"`, `n` the
-  item's index in the output. An existing id keeps `item_id`; its `evidence` is the
-  union of the old and new entries, deduplicated by `message_ts` in ts order, and its
+  item's index in the output (unique because a store holds one extraction prompt
+  version, B1.6). An existing id keeps `item_id`; its `evidence` is the
+  old entries followed by the new ones not already present (deduplicated by
+  `message_ts`, output order kept, so `evidence[0]` stays the first message the item
+  cited), and its
   `claims` the union deduplicated by `(entity, attribute, value, message_ts)`; its
   `tasks` the union deduplicated by `(task, effect)`, so a `done` link is never erased
   by a later update that omits it; every scalar field, `entities` and `affected_roles`
@@ -480,8 +484,11 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
   largest evidence ts.
 `drops` has every `DROP_FIELDS` key, zero when nothing was dropped.
 
-B1.6 `run_extract` iterates `store.thread_deltas("extract", EXTRACT_PROMPT_VERSION,
-"extract", as_of)`. For each delta it builds `citable` (the root plus the changed rows,
+B1.6 `run_extract` first reads the meta key `extract_prompt_version`: absent, it is set
+to `EXTRACT_PROMPT_VERSION` with the first write; different, the run is refused with a
+`ValueError` naming both versions and the store (a bump starts from a fresh store, as
+`replay` does for an earlier day; the eval always uses one). It then iterates
+`store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of)`. For each delta it builds `citable` (the root plus the changed rows,
 deleted rows excluded, keyed by ts) and looks up
 `store.triage_decision(thread_id, last_ts, TRIAGE_PROMPT_VERSION, "classify")`; when
 none exists it calls `triage` and records the decision. A dropped thread records an
@@ -680,8 +687,8 @@ working_days_between(buffer start, as_of)` and `buffer_days`.
 
 B2.3 Ask absences (source b). For each item with `type="ask"`, `status="open"` and
 `owner` set: `thread_events(item)` returns the thread's events at or before `as_of`
-(`store.events_in_thread`). The ask message is the event whose `ts` equals the item's
-`first_seen`; its `user_id` is the asker. A non-deleted event by `owner` with `ts`
+(`store.events_in_thread`). The ask message is the event cited by `item.evidence[0]` (B1.3 and B1.5
+keep it first); its `user_id` is the asker. A non-deleted event by `owner` with `ts`
 greater than the ask message's `ts` is a reply and closes the question (nothing
 emitted); the comparison is against the ask message, not `last_updated`, so a reply the
 extractor folded into the item as evidence still counts. Otherwise `days_silent =
@@ -689,19 +696,19 @@ working_days_between(ask date, as_of)`, the ask date being the ask message's `ts
 `zone`; when it exceeds `cadence_days` the detector emits an absence item with
 `item_id=f"absence:ask:{ask item_id}"`, `owner` the person asked, `absence.asker` the
 asker, `source="ask"`, `evidence` the ask's evidence, `affected_roles` the ask's. An ask
-whose `first_seen` matches no event in the thread is skipped and logged
+whose first evidence matches no event in the thread is skipped and logged
 (`absence_ask_without_message`). `detect_absences` reads `store.items(as_of)` and
 `store.events_in_thread` and runs both sources with `as_of` converted to a date in the
 world's zone.
 
-B2.4 Both sources emit nothing for a gate whose date has passed and nothing before its
-buffer opens. Output is checklist absences in `(gate id, task id)` order, then ask absences
+B2.4 The checklist source emits nothing for a gate whose date has passed and nothing
+before its buffer opens; the ask source has no gate and runs on every day. Output is checklist absences in `(gate id, task id)` order, then ask absences
 in ask item id order, so a run is deterministic. On the Kestrel fixture with the
 scripted touches applied as items, the checklist absences by day are: thermal days 5 to
-9, EMC days 6 to 9, FAI days 8 and 9, clear-to-build days 6 to 9, battery day 9, safety
-days 7 to 9 (ASK-SAF is its evidence on day 3, cadence 3), and none for the texture
-task, which has no evidence (premise P5); the ask absence for ASK-SAF fires on days 6 to
-10 and none fires for ASK-PO. Unit 2's tests pin these from a hand-built item list, and
+9, EMC days 6 to 9, FAI days 8 and 9, clear-to-build days 6 to 9, battery day 9, and none for the
+safety and texture tasks, which have no evidence (premise P5; S3-BUFFER's roll-up and
+ASK-SAF's question are not progress); the ask absence for ASK-SAF fires on days 6 to 10
+and none fires for ASK-PO. Unit 2's tests pin these from a hand-built item list, and
 the eval measures them from extracted items.
 
 B2.5 `derive_golden`: one `GoldenItem` per event whose kind is not `distractor`, with
@@ -740,9 +747,8 @@ one event `LEADS-1` (day 4, PM to EM, kind `risk`: the pilot customer presses fo
 and the two agree to keep the PRD at 500 kg until after DVT-1; claim `PN-90001
 spec_param` `payload 500 kg`; `must_see_for` `U0EM01`; `known_by` PM and EM on day 4);
 two ask events: `ASK-SAF` (day 3, `C0ENGEF`, EM asks FW when TST-SAF-01 reruns on the
-DVT firmware, `answered_day` None, `tasks` one `evidence` touch on `G-DVT1.safety` (a
-question about a task is its last evidence, B1.3), `must_see_for` `U0FW01`, `known_by`
-EM and FW on day 3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
+DVT firmware, `answered_day` None, no task touch (a question is not progress, B1.3),
+`must_see_for` `U0FW01`, `known_by` EM and FW on day 3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
 `answered_day` 5, `known_by` EE and SC on day 4). Every other channel stays public.
 The private channel has at least one human persona outside it (five of seven). No
 existing event changes.
@@ -894,7 +900,8 @@ exist, `events.jsonl` and `golden.jsonl`, and asserts nothing is found.
 B3.7 `anchor.jsonl` holds the human-authored anchor slice: the nine lines M1 shipped in
 `events.jsonl` (N1-TORQUE, S1-AGREE and S1-CUT) plus the lines that complete the
 40-message slice (open item U3), each thread listed in `manifest.json` with `authored:
-human`. `events.jsonl` keeps the nine lines until the data pull request regenerates it.
+human`; unit 3 creates `manifest.json` with those entries and the data pull request
+adds the rendered ones. `events.jsonl` keeps the nine lines until the data pull request regenerates it.
 
 B3.8 `RenderReport` carries message counts per thread and the character length of every
 message, so the eval can report the realism note (B4.6).
@@ -924,11 +931,12 @@ unchanged).
 
 ```python
 class TypeScores(Frozen):
-    golden: int
-    matched: int                 # objective match (B4.2)
-    extracted: int               # items of this type in golden or distractor threads
-    precision: float | None      # None when extracted == 0
-    recall: float | None         # None when golden == 0
+    golden: int                  # golden items of this golden type
+    golden_matched: int          # of those, matched (B4.2)
+    extracted: int               # extracted items of this extracted type in golden or distractor threads
+    extracted_matched: int       # of those, paired with a golden item
+    precision: float | None      # extracted_matched / extracted; None when extracted == 0
+    recall: float | None         # golden_matched / golden; None when golden == 0
 
 class ExtractionReport(Frozen):
     world: str
@@ -980,9 +988,11 @@ B4.2 Matching: an extracted item belongs to the golden item whose manifest threa
 item. It is matched (objective fields, SPEC section 7) when one item in its thread
 carries every golden claim (same entity and attribute, `normalize_space(value).lower()`
 equal) and, when the golden item has an `owner`, the same `owner`; type is not part of
-the match. `by_type` groups golden items by golden type for recall and extracted items
-by extracted type for precision; `type_agreement` is the share of matched pairs whose
-types agree (advisory, SPEC section 7). A golden item whose thread's triage decisions
+the match. Pairing is deterministic: golden items in `(day, event_id)` order each take the
+first qualifying item in `first_seen` order that no earlier golden item took, so one
+extracted item pairs with at most one golden item. `by_type` groups golden items by
+golden type for recall and extracted items by extracted type for precision;
+`type_agreement` is the share of pairs whose types agree (advisory, SPEC section 7). A golden item whose thread's triage decisions
 (`store.triage_for_thread`) were `kept=False` at every revision counts in
 `triage_dropped_golden` and in `missed`. Items in a distractor thread, and items in a
 golden thread matched to no golden item, are `unmatched`.
@@ -1102,6 +1112,10 @@ The pull request holds data and the README change only. Both reviewers see it.
 | Shared code in the stubs commit | Store item and triage methods, priors loader, manifest reader and writer, `World.glossary()` are implemented there | Units 2 and 3 read them; as stubs they would force one merge order. M1's stubs commit implemented `load_world_header` on the same reasoning. |
 | Extraction match | Objective fields (claims, owner); type advisory | SPEC section 7 splits objective from advisory fields; a same-type item with the wrong revision is a miss, not a match. |
 | Ask reply detection | A reply is an event by the person asked after the ask message, not after `last_updated` | An update that folds the reply into the item as evidence moves `last_updated` past the reply. |
+| Revision suffix on an entity mention | Split off and discarded; the id is kept | A mention at a revision is not a claim about the current revision; revisions enter as `rev` claim values, and the stale-action audit that reads mentioned revisions is M3 stretch (D24). |
+| Extraction prompt version per store | One; a different version refuses the run | New item ids are `thread#last_ts#n`, so two versions in one store would overwrite each other's items; a fresh store is how a bump is run, as replay restarts for an earlier day. |
+| Which evidence entry is the ask message | `evidence[0]`, kept first through updates | `first_seen` moves when an update cites an earlier message, such as an unrelated root; the first-cited message does not. |
+| Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. U2 offers the mention rule as an alternative. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
 
@@ -1111,11 +1125,15 @@ U1. Put `OPENROUTER_API_KEY` in `.env` (never in chat). Needed for the spike and
 data pull request only; stubs, tests and code need no key. The `.env` line exists and is
 blank (checked 2026-10-11).
 
-U2. Checklist tasks with no evidence at all. SPEC-literal, this plan emits no absence for
-them, so on the Kestrel world the texture release task is silent (the safety task has
-ASK-SAF as evidence from day 3, B2.9) and A6's demo does not show it. Alternative: cite the latest message that
-names the gate (the schedule bot's post or the gate review) as the "last evidence".
-Default if no answer: SPEC-literal, and the eval lists the tasks.
+U2. Checklist tasks with no evidence at all. Evidence means progress (B1.3, the world's
+`TaskTouch`), and SPEC-literal this plan emits no absence for a task with none, so on
+the Kestrel world the safety validation and texture release tasks are silent and A6's
+demo shows neither. Two alternatives: (a) cite the latest message that names the gate
+(the schedule bot's post or the gate review) as the last evidence; (b) let any message
+about a task count as evidence, which makes ASK-SAF cite the safety task from day 3 but
+also lets the EM's day-6 roll-up (S3-BUFFER) reset the thermal clock, so the thermal
+absence fires on days 5 and 9 only. Default if no answer: SPEC-literal, and the eval
+lists the tasks.
 
 U3. The anchor slice. SPEC section 6 and D12 say one 40-message slice is human-authored.
 Nine lines exist. Who writes the remaining 31 lines: the user; or the orchestrator model
