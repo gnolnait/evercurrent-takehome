@@ -10,8 +10,8 @@ unanswered asks as absences, a classifier port (Jev, Laya) for triage and judgin
 profile bootstrap and onboarding, a two-tier delivery policy, and a live replay seeder. v0.4 adds, after a review of fifteen public submissions to the same brief:
 the stale-belief person-days objective, claim certainty and kind, entity dependency
 edges with decision exposure and routed contradictions, three more absence sources, a
-feedback event log, a reader access filter, coverage on every digest, and evaluation
-gates with baselines.
+feedback event log, a reader access filter, coverage on every digest, documents and
+actions as claims, and evaluation gates with baselines.
 
 ## 1. Problem
 
