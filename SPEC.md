@@ -478,14 +478,15 @@ runs the tests without the metric gate.
 
 v0.4 at a glance. The cut list for the v0.4 additions, by milestone; "core" here is
 what section 10 means by "section 9 names it core".
-Core is three correctness rules and the one world field they read; everything else v0.4
-is stretch, built after its milestone's core items, and a world field is added only when
-the item that reads it is built.
-- M2. Core: channel `private` (the M3 visibility filter reads it). Stretch: absence sources (c)
+Core is three correctness rules, the one world field they read and the triage threshold
+that the probability of section 5 step 2 needs; everything else v0.4 is stretch, built
+after its milestone's core items, and a world field is added only when the item that
+reads it is built.
+- M2. Core: channel `private` (the M3 visibility filter reads it); the triage threshold
+  derived from the cost of a miss (section 5 step 2). Stretch: absence sources (c)
   and (e); the reference pass; the other world schema fields (`depends_on`, task `entities`, claim `certainty`,
   `kind`, `conditions` and `scope`, channel `external`, document revision histories); field-level verification; loud-noise negatives; the `ticket`
-  reaction rule; the tracker bot persona. The triage threshold derived from the cost of a
-  miss is part of the core triage shape (section 5 step 2), not a stretch item.
+  reaction rule; the tracker bot persona.
 - M3. Core: the visibility filter; the feedback event log. Stretch: the certainty, kind
   and conditions rules; `depends_on` edges with fan-out; absence sources (d), (f) and (g); stale-reference items; the action-time
   audit; scoped claims; the external-channel stale-reference rule; ledger values in the
@@ -571,8 +572,9 @@ the item that reads it is built.
   with a named milestone and a place in the cut order above. The M1 interface changes
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
-  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are three correctness rules: the visibility filter, the feedback
-  event log and exposure on Slack's acceptance. Every other v0.4 addition is built only
+  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are three correctness rules, the visibility filter, the feedback
+  event log and exposure on Slack's acceptance, and the triage threshold derived from
+  the cost of a miss (section 5 step 2). Every other v0.4 addition is built only
   after its milestone's core items, and a world field is added only when the item that
   reads it is built.
 - Ranking factor sprawl: every term is stored per impression and the ablation table

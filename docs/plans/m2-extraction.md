@@ -1,13 +1,14 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.1, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.2, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
 evidence verified in code, the absence detector with its two core sources, golden labels
 derived from the world script, the rendered corpus and the extraction eval. v0.4 core for
-M2 is the channel `private` field. Every other v0.4 addition listed for M2 is stretch and
-is not in this plan; `docs/later.md` and SPEC section 9 hold them.
+M2 is the channel `private` field and the triage threshold derived from the cost of a miss
+(part of the section 5 step 2 probability shape). Every other v0.4 addition listed for M2
+is stretch and is not in this plan; SPEC section 9 holds the list.
 
 Everything in M2 runs offline in tests and CI. Two model families call the gateway once,
 in one recording session (the data pull request): the Haiku-class model triages and
@@ -25,14 +26,18 @@ is reviewed, and is merged by the user.
 
 Units 1, 2 and 3 share only the stubs and `digest/cli.py` (each fills its own command
 bodies), so their tests and code run in parallel and the three pull requests merge in
-any order; a unit branch rebases on `main` if `digest/cli.py` conflicts. Unit 4 runs the
+any order; a unit branch rebases on `main` if `digest/cli.py` conflicts. The stubs commit
+implements, not stubs, the small shared pieces more than one unit reads (the store's item
+and triage methods, the priors loader, the manifest reader and writer, `World.glossary()`),
+as M1's stubs commit implemented `load_world_header`; the unit that consumes each one
+tests it. Unit 4 runs the
 other three, so its tests are written in parallel against the stubs and its code lands
 after units 1 to 3 have merged. The data pull request comes last and holds no code.
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
-| 1 Triage and extraction | `m2-extract` | `digest/extract/__init__.py`, `digest/extract/schema.py`, `digest/extract/prompts.py`, `digest/extract/normalize.py`, `digest/extract/verify.py`, `digest/extract/triage.py`, `digest/extract/stage.py`, `digest/priors.py`, the item and triage methods of `digest/store.py`, `digest extract` | `tests/test_extract.py`, `tests/test_store.py` (new tests appended) |
-| 2 Absences and golden labels | `m2-absence-golden` | `digest/absence.py`, `digest/world/golden.py`, `digest/world/manifest.py`, the ask validation rules in `digest/world/schema.py`, the working-day helpers in `digest/project.py`, `digest absences`, `digest world golden` | `tests/test_absence.py`, `tests/test_golden.py`, `tests/test_world.py` (new tests appended) |
+| 1 Triage and extraction | `m2-extract` | `digest/extract/__init__.py`, `digest/extract/schema.py`, `digest/extract/prompts.py`, `digest/extract/normalize.py`, `digest/extract/verify.py`, `digest/extract/triage.py`, `digest/extract/stage.py`, `digest extract` | `tests/test_extract.py`, `tests/test_store.py` (new tests appended) |
+| 2 Absences and golden labels | `m2-absence-golden` | `digest/absence.py`, `digest/world/golden.py`, the ask validation rules in `digest/world/schema.py`, the working-day helpers in `digest/project.py`, `digest absences`, `digest world golden` | `tests/test_absence.py`, `tests/test_golden.py`, `tests/test_world.py` (new tests appended) |
 | 3 Corpus renderer | `m2-corpus` | `digest/corpus/__init__.py`, `digest/corpus/render.py`, `digest/corpus/prompts.py`, `digest/corpus/avoid.py`, `data/world/kestrel/anchor.jsonl`, `digest world render` | `tests/test_corpus.py` |
 | 4 Extraction eval | `m2-eval` | `digest/eval/__init__.py`, `digest/eval/extraction.py`, `Cassettes.recorded_models` in `digest/llm/cassette.py`, `digest eval` | `tests/test_eval.py`, `tests/test_llm.py` (one test appended) |
 | Data | `m2-corpus-data` | `data/cassettes/*.json`, `data/world/kestrel/events.jsonl`, `data/world/kestrel/manifest.json`, `data/world/kestrel/golden.jsonl`, `reports/eval-<date>.md`, README | none (the eval is the check) |
@@ -55,8 +60,9 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
   the eval compares it. `Glossary` is built by `World.glossary()` and consumed by
   extraction, so neither package imports the other.
 - Prompt versions. Each prompt module exports `PROMPT_VERSION` (a short string such as
-  `"m2.1"`). A change to prompt text bumps it; `stage_runs` and the `triage` table key
-  on it, so a bump makes every thread pending again (M1 B1.6). The cassette key already
+  `"m2.1"`). A change to prompt text bumps it. `stage_runs` keys on `EXTRACT_PROMPT_VERSION`,
+  so a bump of it makes every thread pending again (M1 B1.6); the `triage` table keys
+  on `TRIAGE_PROMPT_VERSION`, which re-triages nothing on its own (B1.6). The cassette key already
   carries the prompt text (M1 B2.1), so a bump also records fresh cassettes.
 - Stage-run model column. `stage_runs.model` and `triage.model` hold the logical model
   name (`extract`, `classify`), not the concrete id, so a store built from gateway
@@ -66,8 +72,9 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
   `date` or `datetime` field (strings, parsed in code), no `minItems` above 1, no
   numeric bounds in the schema (a `field_validator` checks them so the client's single
   retry fires). This is the intersection of Anthropic structured outputs and the
-  gateway's strict mode (premise P8). A stubs test asserts each output model's schema
-  survives `strict_schema` with every property in `required`.
+  gateway's strict mode (premise P8). Unit 1's tests assert this for `Extraction` and
+  `TriageOutput`, and unit 3's for a `thread_model` class: the schema survives
+  `strict_schema` with every property in `required` and no `minItems` above 1.
 - Working days. `digest/project.py` gains `add_working_days(day, n)` and
   `working_days_between(start, end)` (Monday to Friday, no holidays). Every cadence,
   buffer and age in M2 is in working days; the world's `day` index already is.
@@ -90,18 +97,18 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 ## Stubs commit
 
 - `digest/models.py`: the shared types below.
-- `digest/schema.sql`: the `items` and `triage` tables. `digest/store.py`: the four new
-  methods as stubs.
+- `digest/schema.sql`: the `items` and `triage` tables. `digest/store.py`: the six new
+  methods (B1.8), implemented; units 1 and 2 read them.
 - `digest/project.py`: `add_working_days` and `working_days_between` as stubs.
-- `digest/priors.py` and `config/priors.yaml` (the file is complete; the loader is a
-  stub).
+- `digest/priors.py` and `config/priors.yaml`, implemented; units 1 and 2 read them.
 - `digest/world/schema.py`: `Channel.private`, `Ask`, `WorldEvent.ask` (fields only; the
   validation rules of B2.8 are unit 2 code) and `World.glossary()`, implemented.
 - `data/world/kestrel/world.yaml`: the private channel `kestrel-leads` with its one
   event, and two ask events (B2.9). `config/project.yaml` is unchanged.
-- `digest/world/manifest.py`, `digest/world/golden.py`, `digest/absence.py`,
-  `digest/extract/*`, `digest/corpus/*`, `digest/eval/*`: interfaces that raise
-  `NotImplementedError`; `prompts.py` modules hold `PROMPT_VERSION` and empty strings.
+- `digest/world/manifest.py`, implemented; units 2 and 3 read it.
+- `digest/world/golden.py`, `digest/absence.py`, `digest/extract/*`, `digest/corpus/*`,
+  `digest/eval/*`: interfaces that raise `NotImplementedError`; `prompts.py` modules hold
+  `PROMPT_VERSION` and empty strings.
 - `data/world/avoid-names.yaml`: the complete negative-name list (B3.6).
 - `digest/cli.py`: `extract`, `absences`, `world render`, `world golden` with their
   option declarations and `_not_yet` bodies; `eval` keeps its stub.
@@ -333,7 +340,7 @@ def run_extract(store: Store, llm: LLM, glossary: Glossary, project: ProjectConf
 `digest/store.py` (additions)
 
 ```python
-def upsert_items(self, items: Iterable[Item]) -> int
+def upsert_items(self, items: Iterable[Item], *, prompt_version: str, model: str) -> int   # provenance columns, not on Item
 def items_for_thread(self, thread_id: str) -> list[Item]
 def items(self, as_of: datetime) -> list[Item]           # last_updated at or before as_of, first_seen order
 def record_triage(self, decision: TriageDecision) -> None
@@ -372,7 +379,7 @@ CREATE TABLE IF NOT EXISTS items (
   severity       TEXT NOT NULL,
   confidence     TEXT NOT NULL,
   evidence       TEXT NOT NULL,   -- JSON array of {message_ts, quote, permalink}
-  claims         TEXT NOT NULL,   -- JSON array of {entity, attribute, value, authority}
+  claims         TEXT NOT NULL,   -- JSON array of {entity, attribute, value, message_ts, authority}
   tasks          TEXT NOT NULL,   -- JSON array of {task, effect}
   status         TEXT NOT NULL,
   resolved_by    TEXT,
@@ -413,21 +420,23 @@ TriageOutput)`. The request carries the channel purpose when known, the thread r
 and the changed messages (ts, author user id, text), and asks for a probability that the delta carries project information (a decision,
 blocker, risk, schedule, spec or BOM change, or an ask about the program). `kept` is
 `probability >= priors.triage.keep_threshold`. A probability outside `[0, 1]` fails
-validation and the client retries once (M1 B2.5); a second failure raises
-`LLMOutputError`. The decision carries `TRIAGE_PROMPT_VERSION`, `model="classify"`,
+validation; in record or live mode the client retries once and a second failure raises
+`LLMOutputError`, in replay mode it raises at once (M1 B2.5, tested there; unit 1 tests
+the replay case). The decision carries `TRIAGE_PROMPT_VERSION`, `model="classify"`,
 the threshold used and `decided_at = now`.
 
 B1.3 `extract_request` has a static system prompt (`EXTRACT_SYSTEM`) and one user
 message with, in this order: the glossary (entity id, type, description, aliases; people
 with user id, name, role, aliases), the open checklist tasks (id, task text, owner role,
 gate id and date), the existing items of the thread (item_id, type, title, status,
-owner, due, entities, claims), the thread root (ts, author, text, file names) when it
+owner, due, entities, claims, tasks), the thread root (ts, author, text, file names) when it
 exists, then the changed messages in `ts` order (ts, author, text, file names). Deleted
 rows are omitted. The system prompt states: return items for new information only;
 name an existing `item_id` to update or close an item; quote evidence verbatim from one
 listed message; use null, never a guess, for `owner`, `due` and `item_id`; `owner` of an
-ask is the person asked; `tasks` names checklist ids from the list only; the rationale
-comes first. The prompt never contains the words "golden", "scenario" or an event id.
+ask is the person asked; `tasks` names, from the list only, the checklist tasks the messages are about, a
+question about a task included, with `effect: done` only when a message states the task
+is complete; the rationale comes first. The prompt never contains the words "golden", "scenario" or an event id.
 
 B1.4 `normalize_space` collapses every run of whitespace to one space and strips the
 ends. `resolve_entity` returns the entity whose id equals the text (case-insensitive)
@@ -441,17 +450,19 @@ with the rev; a string that is neither resolves to None.
 
 B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per field:
 - An evidence entry whose `message_ts` is not a key of `citable` drops the item
-  (`evidence.unknown_message`). An entry whose `normalize_space(quote)` is not a
-  substring of `normalize_space(event.text)` drops the item (`evidence.quote`). An item
+  (`evidence.unknown_message`). An entry whose `normalize_space(quote)` is empty or is not a
+  substring of `normalize_space(event.text)` drops the item (`evidence.quote`); the
+  empty case matters because an empty string is a substring of every text. An item
   with no evidence entry fails schema validation before `verify` (`minItems: 1`).
   `permalink` is the cited event's `permalink`.
 - An `item_id` that is not a key of `existing` drops the item (`item_id.unknown`). A
   null `item_id` makes a new item with id `f"{thread_id}#{last_ts}#{n}"`, `n` the
   item's index in the output. An existing id keeps `item_id`; its `evidence` is the
   union of the old and new entries, deduplicated by `message_ts` in ts order, and its
-  `claims` the union deduplicated by `(entity, attribute, value, message_ts)`; every
-  scalar field, `entities`, `affected_roles` and `tasks` are replaced by the new
-  values. The old quotes stay, so a reader shown the item while open can later be shown
+  `claims` the union deduplicated by `(entity, attribute, value, message_ts)`; its
+  `tasks` the union deduplicated by `(task, effect)`, so a `done` link is never erased
+  by a later update that omits it; every scalar field, `entities` and `affected_roles`
+  are replaced by the new values. The old quotes stay, so a reader shown the item while open can later be shown
   the closing evidence beside it (SPEC section 4).
 - An entity string that `resolve_entity` cannot resolve is dropped from `entities`
   (`entities.unresolved`); the item survives. Resolved entities are the ids,
@@ -476,11 +487,11 @@ deleted rows excluded, keyed by ts) and looks up
 none exists it calls `triage` and records the decision. A dropped thread records an
 `ok` stage run for `extract` at `last_ts` and writes nothing, so it is not revisited
 until the thread changes. A kept thread calls `llm.extract(extract_request(...),
-Extraction)`, verifies, upserts the items with the extraction prompt version and
+Extraction)`, verifies, upserts the items with `prompt_version=EXTRACT_PROMPT_VERSION` and
 `model="extract"`, and records an `ok` run. An `LLMOutputError` from either call
 records a `failed` run, logs `extract_failed` with the thread id and the error class,
-counts `failed`, and continues with the next thread. A `CassetteMiss` propagates: strict
-replay is the contract (SPEC section 6). Running twice on an unchanged store writes
+counts `failed`, and continues with the next thread. A `CassetteMiss` is logged as `extract_cassette_miss`
+with the thread id and re-raised unchanged: strict replay is the contract (SPEC section 6). Running twice on an unchanged store writes
 nothing the second time and the report shows `threads == 0`. Because dropped threads
 record an extract run, a change to `TRIAGE_PROMPT_VERSION` alone re-triages nothing:
 bump `EXTRACT_PROMPT_VERSION` with it.
@@ -490,7 +501,8 @@ returned: since the last `ok` extract run, root included. A thread dropped at re
 1 and kept at revision 2 therefore sees only revision 2's new messages plus the root;
 revision 1 was judged to carry no project information.
 
-B1.8 Store: `upsert_items` is idempotent on `item_id` and replaces every other column.
+B1.8 Store: `upsert_items` is idempotent on `item_id` and replaces every other column,
+`prompt_version` and `model` included.
 `items_for_thread` returns the thread's items in `first_seen` order. `items(as_of)`
 returns items whose `last_updated` is at or before `as_of`, in `first_seen` order.
 `record_triage` upserts on the four-column key; `triage_decision` returns the row or
@@ -498,8 +510,9 @@ None; `triage_for_thread` returns the thread's decisions in `last_ts` order. Col
 
 B1.9 `digest extract` on a store replayed to a day, in replay mode with the matching
 cassettes, exits 0 and prints the report. Without `meta.until` it prints the reason and
-exits 1. In replay mode with no cassette for a pending thread it exits 1 naming the
-thread (the `CassetteMiss` message).
+exits 1. In replay mode with no cassette for a pending thread it exits 1 with the
+`CassetteMiss` message (key and model); the thread id is in the `extract_cassette_miss`
+log record.
 
 B1.10 Logging: `triage_decided` (thread id, probability, threshold, kept),
 `extract_thread` (thread id, items written, drops), `extract_failed`. Never text.
@@ -543,7 +556,7 @@ def working_days_between(start: date, end: date) -> int    # working days strict
 
 ```python
 def checklist_absences(project: ProjectConfig, items: Sequence[Item], as_of: date, zone: ZoneInfo) -> list[Item]
-def ask_absences(items: Sequence[Item], replies: Callable[[Item], Sequence[Event]], as_of: date, cadence_days: int, zone: ZoneInfo) -> list[Item]
+def ask_absences(items: Sequence[Item], thread_events: Callable[[Item], Sequence[Event]], as_of: date, cadence_days: int, zone: ZoneInfo) -> list[Item]
 def detect_absences(store: Store, project: ProjectConfig, priors: Priors, as_of: datetime, zone: ZoneInfo) -> list[Item]
 ```
 
@@ -666,22 +679,30 @@ gate id plus the cited item's entities, `owner=None`, `affected_roles=(task.owne
 working_days_between(buffer start, as_of)` and `buffer_days`.
 
 B2.3 Ask absences (source b). For each item with `type="ask"`, `status="open"` and
-`owner` set: `replies(item)` returns the thread's events after the ask's
-`last_updated`; a reply authored by `owner` closes the question (nothing emitted).
-Otherwise `days_silent = working_days_between(ask date, as_of)`; when it exceeds
-`cadence_days` the detector emits an absence item with `item_id=f"absence:ask:{ask
-item_id}"`, `owner` the person asked, `absence.asker` the author of the ask's first
-evidence message, `source="ask"`, `evidence` the ask's evidence, `affected_roles` the
-ask's. `detect_absences` reads `store.items(as_of)` and `store.events_in_thread` and
-runs both sources with `as_of` converted to a date in the world's zone.
+`owner` set: `thread_events(item)` returns the thread's events at or before `as_of`
+(`store.events_in_thread`). The ask message is the event whose `ts` equals the item's
+`first_seen`; its `user_id` is the asker. A non-deleted event by `owner` with `ts`
+greater than the ask message's `ts` is a reply and closes the question (nothing
+emitted); the comparison is against the ask message, not `last_updated`, so a reply the
+extractor folded into the item as evidence still counts. Otherwise `days_silent =
+working_days_between(ask date, as_of)`, the ask date being the ask message's `ts` in
+`zone`; when it exceeds `cadence_days` the detector emits an absence item with
+`item_id=f"absence:ask:{ask item_id}"`, `owner` the person asked, `absence.asker` the
+asker, `source="ask"`, `evidence` the ask's evidence, `affected_roles` the ask's. An ask
+whose `first_seen` matches no event in the thread is skipped and logged
+(`absence_ask_without_message`). `detect_absences` reads `store.items(as_of)` and
+`store.events_in_thread` and runs both sources with `as_of` converted to a date in the
+world's zone.
 
 B2.4 Both sources emit nothing for a gate whose date has passed and nothing before its
-buffer opens. Output is sorted by `(gate id, task id)` then ask item id, so a run is
-deterministic. On the Kestrel fixture with the scripted touches applied as items, the
-checklist absences by day are: thermal days 5 to 9, EMC days 6 to 9, FAI days 8 and 9,
-clear-to-build days 6 to 9, battery day 9, and none for the two tasks with no evidence
-(premise P5); unit 2's tests pin these from a hand-built item list, and the eval
-measures them from extracted items.
+buffer opens. Output is checklist absences in `(gate id, task id)` order, then ask absences
+in ask item id order, so a run is deterministic. On the Kestrel fixture with the
+scripted touches applied as items, the checklist absences by day are: thermal days 5 to
+9, EMC days 6 to 9, FAI days 8 and 9, clear-to-build days 6 to 9, battery day 9, safety
+days 7 to 9 (ASK-SAF is its evidence on day 3, cadence 3), and none for the texture
+task, which has no evidence (premise P5); the ask absence for ASK-SAF fires on days 6 to
+10 and none fires for ASK-PO. Unit 2's tests pin these from a hand-built item list, and
+the eval measures them from extracted items.
 
 B2.5 `derive_golden`: one `GoldenItem` per event whose kind is not `distractor`, with
 `type` the kind, `claims` resolved (authority the claim's own or the poster's),
@@ -699,7 +720,8 @@ to a date with `World.date_of`.
 
 B2.6 `write_golden` writes one JSON object per line with `"kind"` set to `item`,
 `absence` or `distractor`, items first in `(day, event_id)` order, then absences in
-`(day, gate, task, cites)` order, then distractors; `read_golden` reads it back equal.
+`(day, source, gate or "", task or "", cites)` order (`gate` and `task` are None for
+the ask source), then distractors; `read_golden` reads it back equal.
 Dates are ISO strings.
 
 B2.7 `digest world golden` on the Kestrel world with a complete manifest writes the file
@@ -718,8 +740,9 @@ one event `LEADS-1` (day 4, PM to EM, kind `risk`: the pilot customer presses fo
 and the two agree to keep the PRD at 500 kg until after DVT-1; claim `PN-90001
 spec_param` `payload 500 kg`; `must_see_for` `U0EM01`; `known_by` PM and EM on day 4);
 two ask events: `ASK-SAF` (day 3, `C0ENGEF`, EM asks FW when TST-SAF-01 reruns on the
-DVT firmware, `answered_day` None, `must_see_for` `U0FW01`, `known_by` EM and FW on day
-3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
+DVT firmware, `answered_day` None, `tasks` one `evidence` touch on `G-DVT1.safety` (a
+question about a task is its last evidence, B1.3), `must_see_for` `U0FW01`, `known_by`
+EM and FW on day 3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
 `answered_day` 5, `known_by` EE and SC on day 4). Every other channel stays public.
 The private channel has at least one human persona outside it (five of seven). No
 existing event changes.
@@ -815,8 +838,9 @@ rendered once, in `(day, position in the file)` order, through `llm.extract(requ
 thread_model(world, event))` with `model="render"`. The request's user message carries:
 the program and its one-line description, the channel (name, purpose, members with user
 id, name, role and aliases), the poster, the event's kind and summary, each claim as
-entity id, the entity's aliases and the value, the `noise` knobs, the summaries of
-earlier events with the same scenario id, the day of week, and the target message
+entity id, the entity's aliases and the value, the `noise` knobs, for an ask the
+persona asked (`ask.of`) and the day of the reply or that it is never answered, the
+summaries of earlier events with the same scenario id, the day of week, and the target message
 count by kind (fyi and bom_change 1 to 3; decision, risk, schedule_change and
 spec_change 3 to 8; blocker 3 to 6; ask 1 plus the reply when `answered_day` is set;
 distractor as the summary says, else 2 to 6). The system prompt states the style guide
@@ -842,12 +866,14 @@ B3.3 Code checks each rendered thread: every claim entity's id or one of its ali
 appears in the thread text (case-insensitive) unless the event sets `noise.indirection`
 (the knob asks for the value to be implied, and the extractor missing it under noise is
 what the degradation measurement reads), the thread text contains no entry of the
-negative-name list, the message count is at least one, and a reply never precedes the
-root. A failed check raises `RenderError` naming the event and the rule; nothing is
+negative-name list, the message count is at least one, a reply never precedes the
+root, and for an ask the last message is by `ask.of` when `answered_day` is set and no
+message is by `ask.of` when it is None. A failed check raises `RenderError` naming the event and the rule; nothing is
 written. The schema enforces posters and reactors through the per-event Literals, so
 an unknown poster cannot occur.
 
-B3.4 `render_world` reads `anchor.jsonl` (human-authored lines, B1.8 format), merges
+B3.4 `render_world` reads `anchor.jsonl` (human-authored lines in the `read_events`
+line format, M1 plan B1.8), merges
 them with the rendered lines, sorts by `event_ts`, writes `events.jsonl`, and writes
 `manifest.json` with the anchor entries kept and one `authored: render` entry per
 rendered event. Rendering the same world twice in replay mode writes identical files.
@@ -899,7 +925,7 @@ unchanged).
 ```python
 class TypeScores(Frozen):
     golden: int
-    matched: int                 # same thread and same type
+    matched: int                 # objective match (B4.2)
     extracted: int               # items of this type in golden or distractor threads
     precision: float | None      # None when extracted == 0
     recall: float | None         # None when golden == 0
@@ -910,7 +936,8 @@ class ExtractionReport(Frozen):
     models: dict[str, str]       # logical name -> concrete id seen in the cassettes
     by_type: dict[str, TypeScores]
     thread_recall: float | None  # golden items whose thread yielded any item
-    type_agreement: float | None # among thread-matched golden items, share with the same type (advisory)
+    type_agreement: float | None # among matched golden items, share whose item has the same type (advisory)
+    objective_misses: dict[str, int]   # thread-matched golden items with a wrong or missing objective field, per field
     claim_recall: float | None   # golden claims found on an item in the thread with equal normalized value
     claim_precision: float | None
     entity_jaccard: float | None # mean over matched items with golden entities; n reported
@@ -919,6 +946,7 @@ class ExtractionReport(Frozen):
     drops: dict[str, int]
     triage_golden_kept: int
     triage_golden_total: int
+    triage_by_event: dict[str, float]  # max probability over the thread's revisions, per golden and distractor event
     triage_dropped_golden: tuple[str, ...]
     triage_distractors_kept: tuple[str, ...]
     missed: tuple[str, ...]      # golden event ids with no matched item
@@ -949,15 +977,23 @@ and `manifest.json` from the world directory.
 
 B4.2 Matching: an extracted item belongs to the golden item whose manifest thread equals
 `item.thread_id`. A golden item is thread-matched when its thread has at least one
-item; type-matched when one of them has the same type. `by_type` counts type matches.
-A golden item whose thread's triage decisions (`store.triage_for_thread`) were
-`kept=False` at every revision counts in `triage_dropped_golden` and in `missed`. Items in a distractor thread, and items in a
-golden thread with no golden item of their type, are `unmatched`.
+item. It is matched (objective fields, SPEC section 7) when one item in its thread
+carries every golden claim (same entity and attribute, `normalize_space(value).lower()`
+equal) and, when the golden item has an `owner`, the same `owner`; type is not part of
+the match. `by_type` groups golden items by golden type for recall and extracted items
+by extracted type for precision; `type_agreement` is the share of matched pairs whose
+types agree (advisory, SPEC section 7). A golden item whose thread's triage decisions
+(`store.triage_for_thread`) were `kept=False` at every revision counts in
+`triage_dropped_golden` and in `missed`. Items in a distractor thread, and items in a
+golden thread matched to no golden item, are `unmatched`.
 
 B4.3 Claims: a golden claim is found when an item in its thread carries a claim with
-the same entity and attribute and `normalize_space(value).lower()` equal. Precision is
-over extracted claims in golden threads. Entity Jaccard is computed for type-matched
-items whose golden item has at least one entity; `entity_jaccard_n` is that count.
+the same entity and attribute and `normalize_space(value).lower()` equal;
+`claim_recall` is found golden claims over golden claims and `claim_precision` is
+extracted claims in golden threads equal to some golden claim over those extracted
+claims. A thread-matched golden item that is not matched is listed in `objective_misses`
+per field (`claims.value`, `owner`). Entity Jaccard is computed for matched items whose
+golden item has at least one entity; `entity_jaccard_n` is that count.
 
 B4.4 Absences: detected and golden absences are keyed `(day, task)` for the checklist
 source and `(day, ask event id)` for the ask source (the ask item's thread maps to the
@@ -982,7 +1018,7 @@ claims, triage, absences, drops, realism, models, not run) and `n` beside every 
 The report is deterministic for a given store and cassettes.
 
 B4.8 `digest eval` in replay mode with complete cassettes exits 0 and writes the file;
-with a missing cassette it exits 1 naming the thread.
+with a missing cassette it exits 1 with the `CassetteMiss` message.
 
 B4.9 `Cassettes.recorded_models()` on an empty or missing root returns an empty
 mapping; on a root with two cassettes for `extract` with different concrete ids it
@@ -1023,7 +1059,10 @@ Runs after units 1 to 4 have merged and the user has put `OPENROUTER_API_KEY` in
 3. `uv run digest world golden` writes `golden.jsonl`.
 4. `DIGEST_MODE=record uv run digest eval` records the triage and extraction cassettes
    and writes `reports/eval-<date>.md`.
-5. `DIGEST_MODE=replay uv run digest eval` reproduces the report byte for byte.
+5. `DIGEST_MODE=replay uv run digest eval` reproduces the report byte for byte. The
+   report's `triage_by_event` table is the input SPEC section 5 step 2 names for
+   revisiting `miss_cost_ratio` after the first twenty golden threads; a change to the
+   ratio is its own commit with the before and after in the report.
 6. README: which backend and models recorded each cassette set, the report link, the
    corpus sources (B3.1 style guide sources: public hardware engineering forums and
    open-source hardware issue threads, paraphrased, never copied; HERB's artifact shape
@@ -1059,6 +1098,10 @@ The pull request holds data and the README change only. Both reviewers see it.
 | Deleted messages | Omitted from prompts and the citable set | The corpus has no deletes in M2; retraction is M3's rule. |
 | Claim provenance | Each claim names its evidence `message_ts`; authority and asserted time derive from that message | One item can carry claims by different authors (a CM root, an EE reply); M3's bi-temporal ledger needs the asserted time per claim, and adding it later is a schema change. |
 | Item update | Evidence and claims merge; scalars replace | Dropping the earlier quotes would lose the evidence a reader was shown while the item was open. |
+| Priority-scaled absence window and rank growth with age | Not in M2; the window is `buffer_days` for every task | Both sentences entered SPEC in the v0.4 commit (4737852) and section 9 does not name them core, so section 10's rule makes them stretch. |
+| Shared code in the stubs commit | Store item and triage methods, priors loader, manifest reader and writer, `World.glossary()` are implemented there | Units 2 and 3 read them; as stubs they would force one merge order. M1's stubs commit implemented `load_world_header` on the same reasoning. |
+| Extraction match | Objective fields (claims, owner); type advisory | SPEC section 7 splits objective from advisory fields; a same-type item with the wrong revision is a miss, not a match. |
+| Ask reply detection | A reply is an event by the person asked after the ask message, not after `last_updated` | An update that folds the reply into the item as evidence moves `last_updated` past the reply. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
 
@@ -1069,16 +1112,17 @@ data pull request only; stubs, tests and code need no key. The `.env` line exist
 blank (checked 2026-10-11).
 
 U2. Checklist tasks with no evidence at all. SPEC-literal, this plan emits no absence for
-them, so on the Kestrel world the safety validation task and the texture release task
-are silent, and A6's demo shows neither. Alternative: cite the latest message that
+them, so on the Kestrel world the texture release task is silent (the safety task has
+ASK-SAF as evidence from day 3, B2.9) and A6's demo does not show it. Alternative: cite the latest message that
 names the gate (the schedule bot's post or the gate review) as the "last evidence".
 Default if no answer: SPEC-literal, and the eval lists the tasks.
 
 U3. The anchor slice. SPEC section 6 and D12 say one 40-message slice is human-authored.
 Nine lines exist. Who writes the remaining 31 lines: the user; or the orchestrator model
 drafts them and the user edits and approves, with the README saying "author-reviewed";
-or the slice stays at nine lines and the README says so. Default if no answer: the nine
-lines, stated honestly.
+or the slice stays at nine lines, which changes SPEC section 6 and D12. No default: the
+data pull request waits for the answer, and options two and three are contract changes
+that land in SPEC and D12 first.
 
 U4. Confirm the two ask events and the private channel event (B2.9) as world content.
 
@@ -1093,7 +1137,7 @@ U4. Confirm the two ask events and the private channel event (B2.9) as world con
 | P5 | Only `G-DVT1.safety` and `G-TR1.texture` never receive a `TaskTouch` | the same script over `events[].tasks` | verified |
 | P6 | Making any existing channel private blocks a scripted `must_see_for` entry, except `dvt1-build` (no one outside) and `plm-feed` | membership script over personas and events | verified |
 | P7 | The gateway honours a JSON schema for the `extract` (Claude Haiku) and `render` (GPT) models | needs the key; step 1 of the data pull request | TBD |
-| P8 | Anthropic structured outputs reject `minimum`/`maximum` and `minItems > 1`; the gateway's strict mode requires every property in `required` | `notes/research/retrieval-dedup-eval.md` section 3 and M1 plan U1; the spike re-checks | accepted, re-checked in the spike |
+| P8 | Anthropic structured outputs reject `minimum`/`maximum` and `minItems > 1`; the gateway's strict mode requires every property in `required` | `notes/research/retrieval-dedup-eval.md` section 3 (from the Anthropic structured-outputs documentation) and M1 plan U1; the spike shows the constructs the plan uses are accepted and cannot show the rejections | accepted |
 | P9 | Pydantic models with no defaults produce schemas with every property required, nullable fields as `anyOf` with `null`, nested models under `$defs`, and `create_model` with a `Literal` gives an `enum` | probe on pydantic 2.13.5 | verified |
 | P10 | `add_working_days(2026-10-22, -7)` is 2026-10-13, so G-DVT1's buffer opens on world day 2 and S3-BUFFER's "4 days into the 7-day buffer" on day 6 is consistent | arithmetic probe | verified |
 | P11 | The nine anchor lines fall on world days 2 and 4 with fractional ts `000100` to `000900` | timestamp conversion in `America/Los_Angeles` | verified |
@@ -1112,8 +1156,9 @@ U4. Confirm the two ask events and the private channel event (B2.9) as world con
   recorded against the implementation before the code commit, as M1 did.
 - Test author brief (Codex, execution lane, fresh session, `-C` its worktree under
   `C:\Users\disim\Documents\evercurrent-wt\`, stdin from `/dev/null`): this plan,
-  `SPEC.md` sections 4 to 7, the stubs, `.claude/rules/testing.md`. It writes only its
-  `tests/test_<unit>.py` files and hands back unstaged. No network.
+  `SPEC.md` sections 4 to 7, the stubs, `.claude/rules/testing.md`. It writes only the test
+  files the unit table names for its unit (new files, and the named appended files)
+  and hands back unstaged. No network.
 - Implementer brief (Opus subagent, own worktree): this plan, the stubs, the tests, the
   rules under `.claude/rules/`. It may not edit `tests/`. Done when the five gates pass.
   Unit 1's and unit 3's implementers write prompt text; the briefs name B1.3 and B3.1 as
