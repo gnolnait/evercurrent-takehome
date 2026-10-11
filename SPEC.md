@@ -475,20 +475,23 @@ later day.
 
 v0.4 at a glance. The cut list for the v0.4 additions, by milestone; "core" here is
 what section 10 means by "section 9 names it core".
-- M2. Core: absence sources (c) and (e); the reference pass; the world schema fields
-  (`depends_on`, `priority`, task `entities`, claim `certainty`, `kind` and `scope`,
-  channel `private` and `external`, document revision histories). Stretch: field-level
-  verification; loud-noise negatives; the cost-derived triage threshold; the `ticket`
-  reaction rule; the tracker bot persona.
-- M3. Core: `depends_on` edges with fan-out; absence source (d); stale-reference items;
-  the action-time audit; the visibility filter. Stretch: scoped claims; the
-  external-channel stale-reference rule; absence sources (f) and (g); ledger values in
-  the extraction prompt; decision exposure; contradiction routing with the confirm
-  action; the feedback event log; the per-subsystem phase override; history labels;
-  resolved-since lines; per-role consequence templates; the "last to know" term.
-- M4. Core: the headline metrics; the regression gate; the coverage line. Stretch:
-  baselines beside every rate; abstention precision; pairwise judging; `digest diff`;
-  `why_ranked` on an undelivered item.
+Core is three correctness rules; everything else v0.4 is stretch, built after its
+milestone's core items, and a world field is added only when the item that reads it is
+built.
+- M2. Core: channel `private` (the access filter reads it). Stretch: absence sources (c)
+  and (e); the reference pass; the other world schema fields (`depends_on`, `priority`,
+  task `entities`, claim `certainty`, `kind` and `scope`, channel `external`, document
+  revision histories); field-level verification; loud-noise negatives; the cost-derived
+  triage threshold; the `ticket` reaction rule; the tracker bot persona.
+- M3. Core: the visibility filter; the feedback event log. Stretch: `depends_on` edges
+  with fan-out; absence sources (d), (f) and (g); stale-reference items; the action-time
+  audit; scoped claims; the external-channel stale-reference rule; ledger values in the
+  extraction prompt; decision exposure; contradiction routing with the confirm action;
+  the per-subsystem phase override; history labels; resolved-since lines; per-role
+  consequence templates; the "last to know" term.
+- M4. Stretch: the headline metrics; the regression gate; the coverage line; baselines
+  beside every rate; abstention precision; pairwise judging; `digest diff`; `why_ranked`
+  on an undelivered item.
 - M5. Core: exposure recorded on Slack's acceptance. Stretch: send idempotency;
   dead-credential handling; the admin alert; the "nothing today" line; the mock issue
   tracker; the CSV import.
@@ -497,31 +500,34 @@ what section 10 means by "section 9 names it core".
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
 - M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
-  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c) and (e), the reference pass (revision tokens in file
-  names and links as `referenced` claims and `linked` exposure; the stale-reference item
-  itself waits for the ledger in M3), and the world schema additions they and M3 need (`depends_on`, `priority`,
-  task `entities`, claim `certainty`, `kind` and `scope`, channel `private` and
-  `external`, documents with revision histories). v0.4 stretch: field-level verification, loud-noise negatives, the cost-derived triage
+  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: channel `private`. v0.4 stretch: absence sources (c) and (e), the
+  reference pass (revision tokens in file names and links as `referenced` claims and
+  `linked` exposure; the stale-reference item itself waits for the ledger in M3), the
+  world schema fields the stretch items read (`depends_on`, `priority`, task `entities`,
+  claim `certainty`, `kind` and `scope`, channel `external`, documents with revision
+  histories), each added when its reader is built, field-level verification,
+  loud-noise negatives, the cost-derived triage
   threshold, the `ticket` reaction rule and the tracker bot persona. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
   precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
-  plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the must-see lane, absence source (d) (it
-  reads the ledger), stale-reference items, the action-time staleness audit (an as-of read of the ledger
-  and the actor's exposure), and the visibility filter (a correctness rule, not new
-  scope). v0.4 stretch also: scoped claims, the external-channel stale-reference rule,
-  suspect evidence (source f), ended scope (source g).
+  plus absences and the README says so. v0.4 core: the visibility filter and the feedback event log (correctness rules, not
+  new scope). v0.4 stretch also: `depends_on` edges with fan-out to the must-see lane,
+  absence source (d) (it reads the ledger), stale-reference items, the action-time
+  staleness audit (an as-of read of the ledger and the actor's exposure), scoped claims,
+  the external-channel stale-reference rule, suspect evidence (source f), ended scope
+  (source g).
   v0.4 stretch: ledger values in the extraction prompt, decision exposure, contradiction
-  routing with the confirm action, the feedback event log, the per-subsystem phase
+  routing with the confirm action, the per-subsystem phase
   override, history labels, resolved-since lines, per-role consequence templates, the
   "last to know" term. Re-surfacing by age and diversity at render stay
   stretch.
 - M4 (day 4): landing map; eval harness and report with the ablation table;
   faithfulness judge; degradation curve; web preview with the profile page (paste
   supported, the single settings surface) and the open-items page; the MCP server's
-  read tools and usage skill. A1 to A8, A10. v0.4 core: the headline metrics, the regression gate and the coverage line (section 4
-  makes it an invariant). v0.4 stretch: baselines beside every rate, abstention
+  read tools and usage skill. A1 to A8, A10. v0.4 stretch: the headline metrics, the regression gate, the coverage line,
+  baselines beside every rate, abstention
   precision, pairwise judging, `digest diff`, `why_ranked` accepting an undelivered
   item. The scrutability check (A12), the classifier comparison (Laya on Linux) and MCP
   write tools stay stretch.
@@ -562,9 +568,9 @@ what section 10 means by "section 9 names it core".
   with a named milestone and a place in the cut order above. The M1 interface changes
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
-  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are the absence sources (c) to (e) with the world schema fields they
-  need, the reference pass, `depends_on` edges with fan-out, the action-time audit, the
-  headline metrics, the regression gate and the coverage line, plus two correctness rules (visibility filter, exposure on acceptance); they come out
-  of days 6 and 7.
+  model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are three correctness rules: the visibility filter, the feedback
+  event log and exposure on Slack's acceptance. Every other v0.4 addition is built only
+  after its milestone's core items, and a world field is added only when the item that
+  reads it is built.
 - Ranking factor sprawl: every term is stored per impression and the ablation table
   reports its effect; a term without measured effect on the golden corpus is removed.
