@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from hooktest_support import PYTHON, launch
+from git_commit_events import msys_to_windows
+from hooktest_support import IS_WINDOWS, PYTHON, launch
 
 HOOK = str(Path(__file__).parent / "no-commit-to-main")
 HOOK_PY = str(Path(__file__).parent / "no-commit-to-main.py")
@@ -57,6 +58,19 @@ def repos(tmp_path):
         subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True)
 
     return {"project": project, "sibling": sibling, "missing": missing}
+
+
+@pytest.fixture
+def worktree(repos):
+    """A linked worktree of the project repo, on branch `feat/wt`. It shares
+    the project's git dir but has its own HEAD."""
+    path = repos["project"].parent / "project-wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "feat/wt", str(path)],
+        cwd=repos["project"],
+        check=True,
+    )
+    return path
 
 
 def _verdict(cmd, project, cwd=None, payload_cwd=None):
@@ -808,3 +822,77 @@ def test_ambiguous_heredoc_git_still_blocks(repos):
                 "g''it %s -m x <<%s" % (C, V),
                 "bash <<%s" % V):
         assert _verdict(cmd, repos["project"]) == "BLOCK", cmd
+
+
+# --------------------------------------------------------------------------------------
+# Linked worktrees share the project's git dir but carry their own HEAD. The branch
+# that decides a commit is the one of the checkout the commit runs in, not the one
+# of the main checkout. Found while investigating the 2026-10-09 false block, whose
+# own cause was the Git Bash drive path covered by the msys tests below.
+# --------------------------------------------------------------------------------------
+
+
+def test_allows_cd_into_feature_worktree_commit(repos, worktree):
+    """Setup: the main checkout is on `main`, the worktree on `feat/wt`.
+    Action: cd into the worktree and commit. Assert: the worktree's branch
+    decides, so the commit is allowed."""
+    cmd = f"cd {worktree} && git add README.md && git commit -m update"
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+def test_blocks_cd_into_worktree_on_main(repos, worktree):
+    """Setup: the main checkout moves to a feature branch and the worktree
+    takes `main`. Action: cd into the worktree and commit. Assert: the commit
+    runs on `main`, so it is blocked."""
+    subprocess.run(
+        ["git", "switch", "-c", "feature/hook-test"],
+        cwd=repos["project"],
+        check=True,
+    )
+    subprocess.run(["git", "switch", "main"], cwd=worktree, check=True)
+    cmd = f"cd {worktree} && git commit -m update"
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param('W={wt}; cd "$W" && git commit -m update', id="shell-variable"),
+        pytest.param("cd {missing} && git commit -m update", id="missing-dir"),
+    ],
+)
+def test_untrusted_cd_prefix_fails_closed(repos, worktree, shape):
+    """A cd target the hook cannot resolve (`$W` is unknowable here, `missing`
+    is not a repo) is not trusted: the commit stays attributed to the main
+    checkout on `main` even though the real target may be a feature worktree."""
+    cmd = shape.format(wt=worktree, missing=repos["missing"])
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/c/Users/x/repo", "C:/Users/x/repo"),
+        ("/d", "D:"),
+        ("/usr/bin", "/usr/bin"),
+        ("C:/Users/x/repo", "C:/Users/x/repo"),
+        ("relative/dir", "relative/dir"),
+    ],
+)
+def test_msys_to_windows_maps_only_drive_paths(path, expected):
+    assert msys_to_windows(path) == expected
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="Git Bash drive paths exist only on Windows")
+def test_allows_cd_to_sibling_via_msys_drive_path(repos):
+    """Git Bash writes `/c/Users/...`, and the hook runs git.exe directly,
+    which cannot `-C` into that form. Map it, or the sibling is unresolvable
+    and its commit fails closed (the false block of 2026-10-09)."""
+    sibling = str(repos["sibling"])
+    msys = "/" + sibling[0].lower() + sibling[2:]
+    cmd = f"cd {msys} && git commit -m update"
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"

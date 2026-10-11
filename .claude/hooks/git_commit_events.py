@@ -277,6 +277,20 @@ def segment_bodies(toks):
     return out
 
 
+_MSYS_DRIVE = re.compile(r"^/([A-Za-z])(?=/|$)")
+
+
+def msys_to_windows(path):
+    """Map a Git Bash drive path (`/c/Users/x`) to its Windows form (`C:/Users/x`).
+
+    The command was written for Git Bash, but the hook runs git.exe directly,
+    and git.exe cannot change into `/c/...`. Left as is, the directory is
+    unresolvable and a commit there fails closed (the false block of
+    2026-10-09). Any other path is returned unchanged.
+    """
+    return _MSYS_DRIVE.sub(lambda m: m.group(1).upper() + ":", path)
+
+
 def norm(base, path):
     """Resolve a cd/-C path against the current effective dir.
 
@@ -288,6 +302,8 @@ def norm(base, path):
     """
     if path is None or "$" in path:
         return None
+    if os.name == "nt":
+        path = msys_to_windows(path)
     path = os.path.expanduser(path)
     if os.path.isabs(path):
         return os.path.normpath(path)
