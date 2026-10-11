@@ -104,8 +104,10 @@ reactions[{name, user_id, ts}], files[], permalink, edited, deleted}`
   observed (equal to `ts` for the original post, later for an edit or a delete).
 - A system of record (PLM, schedule tool, document control) appears as a bot user
   posting into a feed channel; its claims carry `plm_bot` authority.
-- Channels carry `private: bool`. A public channel is visible to every reader; a private
-  one only to its members. Visibility, not membership, decides what a reader may be told.
+- Channels carry `private: bool` and `external: bool`. A public channel is visible to
+  every reader; a private one only to its members. Visibility, not membership, decides
+  what a reader may be told. An external channel is shared with a contract manufacturer
+  or supplier, who builds from the files sent into it.
 
 Item: one extracted unit of information.
 `{item_id, type, title, summary, entities[], owner, due, affected_roles[], phase_tags[],
@@ -122,8 +124,9 @@ certainty, kind, conditions}`
 where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
 rev, lead_time, gate_date, owner, status, qty, spec_param, priority. authority is a
 small enum (owner_stated, plm_bot, cm_stated, hearsay). `certainty` is decided |
-reported | hedged | question; `kind` is stated (default: a fact such as a rev, owner,
-status or date) | target | measured; `conditions` is optional free text naming the test,
+reported | hedged | question; `kind` is stated (default: a fact such as a rev, owner, status or date) | target |
+measured | referenced (a value carried by a file name or link, which never supersedes);
+`scope` is an optional build id or expiry date; `conditions` is optional free text naming the test,
 rig, load or rev a measurement was taken under.
 - The ledger is bi-temporal: `asserted_ts` is when the claim was made, `observed_ts`
   when the pipeline saw it, `invalid_ts` when a later claim superseded it (null while
@@ -135,7 +138,9 @@ disagree and neither is superseded. A `plm_bot` claim is the system of record: a
 lower-authority claim never supersedes it. A hedged or question claim never supersedes
 anything; a target never supersedes a stated or measured value, and a target and a measured value
 on one key coexist (the gap between them is the finding); two measurements with
-different `conditions` never contradict. A lower-authority claim that disagrees with a recorded
+different `conditions` never contradict; a `scope`d claim (a deviation for one build)
+neither supersedes nor contradicts the unscoped value, readers who own that build read it
+as current, and a scope that has ended with the old value still in use is an absence. A lower-authority claim that disagrees with a recorded
 value is `pending`: the record resolves it by confirming the new value (supersession) or
 restating its own (a contradiction, routed to the owner of the key as work, never
 resolved in code), and silence past a cadence makes it an absence item for the owner
@@ -169,7 +174,8 @@ delivery{time, weekdays[], quiet_hours, paused},
 style{description, length, section_order[], sections_off[], language},
 sources{field: configured | inferred | confirmed | pasted}}`
 - role: ME | EE | FW | supply_chain | EM | PM
-- exposed.how: authored | replied | reacted | shown_in_digest
+- exposed.how: authored | replied | reacted | shown_in_digest | linked (the reader received
+  a file or link naming a value, so they hold it)
 - `sources` records where each field came from, so an inferred draft is
   distinguishable from a confirmed one.
 - `style.description` is the user's own words ("short, risks first, skip fyi, in
@@ -209,8 +215,13 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    evidence and claims. Code verifies each evidence quote is a whitespace-normalized substring of the
    cited message and builds the permalink from channel and ts. Code also verifies that
    `owner`, `due` and every claim value appear in the cited text, matching numbers with
-   their units and people by user id. Entity ids must match the normalizers. Items
-   failing verification are dropped and counted per field.
+   their units and people by user id. Entity ids must match the normalizers. Items failing verification are dropped and
+   counted per field. Before the model runs, a deterministic pass reads file names in
+   `files[]` and URLs in the text: a revision token in a file name or a pinned-version
+   URL yields a `referenced` claim on the document entity and `linked` exposure for the
+   poster and every reader who replied or reacted; a reference older than the ledger's
+   current value is a stale-reference item, suppressed when the thread also cites the
+   current value.
 3. Link: candidate pairs by shared entity key, then lexical similarity (FTS5), then an
    LLM adjudicator returning one of {duplicate, update_of, supersedes, contradicts,
    related, distinct} with quoted evidence. Claims update the ledger. `status` moves to
@@ -229,15 +240,21 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    claim on the same key after a cadence, including workaround language with no ECO or
    deviation after it, is an absence for the owner of the key, citing the claim.
    (e) A blocker with no owner and no reply after a cadence is an absence for the owners
-   of the entities it names, else for the EM, citing the blocker. The window before a gate in which an
-   absence can fire scales with the task's priority, and an absence that persists
+   of the entities it names, else for the EM, citing the blocker. (f, stretch) Evidence for a checklist task that predates a revision change of the
+   task's own entity makes the task an absence again ("passed on Rev B; Rev C since day
+   9; no evidence on Rev C"). The window before a gate in which an absence can fire
+   scales with the task's priority, and an absence that persists
    across days rises in rank and states how many days it has been silent. Never emit an
    absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
    owned entities, a change on an entity an owned entity depends on, an open
    contradiction on an owned key, a stale value on an entity the reader's pending
-   checklist task touches). Before either lane, a reader sees an item only through evidence from a channel they
+   checklist task touches, a stale reference to a buildable document posted into an
+   external channel for the document's owner, and an action taken against a superseded
+   value: a PO, tooling cut, release or build start whose claim names a value the ledger
+   had already superseded at its `asserted_ts`, for the actor and the key's owner, with
+   what the actor had last been told). Before either lane, a reader sees an item only through evidence from a channel they
    can see (public, or private with the reader a member); the check fails closed, and an
    access drop is recorded per impression so "why not shown" can name it. Must-see
    lines are never cut by a section cap; the caps bound the ranked lane. Ranked lane:
@@ -257,8 +274,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    hard filters are mute and the visibility check, and both win over every term. Every term is a row in the ablation
    table (section 7) or it is removed.
 7. Render: sections capped (needs_you 5, stale_beliefs 3, not_happened 3, decisions 5,
-   risks 5, fyi 5); caps are maximums, and a section with nothing above threshold
-   renders empty. Items are diversified at render (maximal marginal relevance) so one
+   risks 5, fyi 5); the caps bound the ranked lane and must-see lines sit above them, so a
+   section holds its must-see lines plus up to its cap of ranked ones, and a section with
+   nothing above threshold renders empty. Items are diversified at render (maximal marginal relevance) so one
    entity does not fill a section; items that differ in a discriminating field (rev,
    qty, date) are exempt from the penalty. Each line: fact, specific id and rev, buffer
    or deadline math, consequence, owner, source link, and a history label when the item
@@ -307,8 +325,10 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   instruction aimed at the extractor, and loud threads with urgent words, many replies
   and no state change. The script holds more candidate items per persona-day than the affected section caps
   around the EVT to DVT change, so the caps bite and re-weighting changes the cut, quiet days with no planted change and no outstanding golden absence or contradiction,
-  for abstention, and at least one private channel
-  with a persona outside it, so the visibility check is tested. The renderer's prompt carries a negative list of the
+  for abstention, at least one private channel with a persona outside it, so the
+  visibility check is tested, one external channel, and documents with a revision
+  history whose file names carry revision tokens, including one stale pack sent to the
+  CM and one PO placed against a superseded rev. The renderer's prompt carries a negative list of the
   names and storylines used by public submissions to the same brief. One 40-message
   slice is human-authored as an anchor.
 - `data/world/<name>/golden.jsonl`: labels derived from the script, not hand-written:
@@ -331,9 +351,10 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   phase sensitivity.
 - Headline, on simulated personas and labelled as such: stale-belief person-days. For
   each golden claim E that supersedes E0 and each persona P in E's `must_see_for` who
-  held E0's value (P is in E0's `known_by` or was shown E0), `told_day` is the earliest
-  of P's `known_by` day for E and the first digest day that delivers an item citing E,
-  else the world's last day plus one; the metric sums `told_day - E.day` over all (P, E),
+  held E0's value (P is in E0's `known_by` or was shown E0), the interval starts at the
+  later of E.day and the day P acquired E0's value, and `told_day` is the earliest of
+  P's `known_by` day for E and the first digest day that delivers an item citing E, else
+  the world's last day plus one; the metric sums `told_day - start` over all (P, E),
   with the digest on and with it off (digest days removed); when a later claim supersedes
   E before P is told, P's interval for E ends there and a new interval starts for the
   later claim. Beside it: time-to-told per
@@ -351,6 +372,8 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   late or missed event and its first delivery.
 - Access: no delivered item cites a channel its reader cannot see, checked on a world
   with at least one private channel and a reader outside it.
+- Documents and actions: stale-reference precision and recall against the script's
+  document revisions; stale-action count with the digest on and off.
 - Duplicate rate among delivered items.
 - Mirror metrics: missed golden items and hallucinated items, both counted.
 - Degradation curve: extraction and supersession recall as the renderer's noise knobs rise.
@@ -425,16 +448,21 @@ later day.
   Anthropic API and gateway backends, world schema (bot personas, team, manager,
   priority) and generator scaffold, gate checklist config. Tests for store and replay.
 - M2 (day 2): triage classifier (Haiku-class through the gateway) and extraction
-  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c) and (e), and the world schema additions they and M3
-  need (`depends_on`, `priority`, task `entities`, claim `certainty` and `kind`,
-  channel `private`). v0.4 stretch: field-level verification, loud-noise negatives, the
+  prompt and schema with evidence verification; absence detector ("Not happened" ships first, it does not depend on the ledger); golden labels from the world script; extraction eval. v0.4 core: absence sources (c) and (e), the reference pass (revision tokens in file
+  names and links as `referenced` claims and `linked` exposure, with stale-reference
+  items), and the world schema additions they and M3 need (`depends_on`, `priority`,
+  task `entities`, claim `certainty`, `kind` and `scope`, channel `private` and
+  `external`, documents with revision histories). v0.4 stretch: field-level verification, loud-noise negatives, the
   cost-derived triage threshold. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
   precision on the noisy corpus is below 0.8, the ledger is cut to the baseline ranker
   plus absences and the README says so. v0.4 core: `depends_on` edges with fan-out to the must-see lane, absence source (d)
-  (it reads the ledger), and the visibility filter (a correctness rule, not new scope).
+  (it reads the ledger), the action-time staleness audit (an as-of read of the ledger
+  and the actor's exposure), and the visibility filter (a correctness rule, not new
+  scope). v0.4 stretch also: scoped claims, the external-channel stale-reference rule,
+  suspect evidence (source f).
   v0.4 stretch: ledger values in the extraction prompt, decision exposure, contradiction
   routing with the confirm action, the feedback event log, the per-subsystem phase
   override, history labels, resolved-since lines, per-role consequence templates, the
@@ -479,8 +507,8 @@ later day.
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
   model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are the absence sources (c) to (e) with the world schema fields they
-  need, `depends_on` edges with fan-out, the headline metrics, the regression gate and the
-  coverage line, plus two correctness rules (visibility filter, exposure on acceptance); they come out
+  need, the reference pass, `depends_on` edges with fan-out, the action-time audit, the
+  headline metrics, the regression gate and the coverage line, plus two correctness rules (visibility filter, exposure on acceptance); they come out
   of days 6 and 7.
 - Ranking factor sprawl: every term is stored per impression and the ablation table
   reports its effect; a term without measured effect on the golden corpus is removed.

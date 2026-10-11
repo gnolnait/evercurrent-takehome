@@ -299,8 +299,9 @@ same rows.
 
 Amended 2026-10-11 (SPEC v0.4): claims carry `certainty`, `kind` (stated, target or measured) and `conditions`; a hedged
 or question claim never supersedes, a target never supersedes a stated or measured value
-(the two coexist), and measurements under different conditions never contradict; a lower-authority change to a
-recorded key is `pending` until the system of record confirms it.
+(the two coexist), and measurements under different conditions never contradict; a lower-authority claim that disagrees with a recorded value is `pending`, and the record
+resolves it: confirmation supersedes, restatement makes a contradiction routed to the key's
+owner, and silence past a cadence makes an absence.
 
 ## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
 
@@ -378,6 +379,28 @@ pairwise judging is more reliable than a 1 to 10 score for text.
 
 Would change it. A metric that gates noisily under cassette replay: raise its tolerance
 or move it to report-only, and say so in the report.
+
+## D24. Documents and actions are claims too
+
+Decision. A revision token in a file name or a pinned-version URL is a `referenced` claim
+on the document entity, read by a deterministic pass before the model runs; receiving the
+file is `linked` exposure, so a reader who got the Rev B pack holds Rev B. A reference
+older than the ledger's value is a stale-reference item; into a channel shared with a
+contract manufacturer it is must-see for the document's owner. A claim may carry a
+`scope` (a build id or expiry), so a deviation for one build neither supersedes nor
+contradicts the record. An action claim (PO placed, tooling cut, release sent, build
+started) is audited against the ledger and the actor's exposure as of its time; acting
+on a superseded value is a blocker for the actor and the key's owner.
+
+Why. PLM tools flag a pinned document link that is out of date inside their own walls;
+nothing does it in chat, where the CM receives the file. The audit needs a bi-temporal
+ledger and a record of what each reader was told, which the memory systems reviewed
+(Graphiti and Zep, GraphRAG, Mem0, LlamaIndex graphs) do not keep. Both reuse D19 and the
+exposure record and add no infrastructure. Fuzzy matching stays out: a revision suffix
+is split by a normalizer, not matched (PN-31010-C versus PN-31010).
+
+Would change it. A corpus where PO and release messages never name a revision: the audit
+then fires only on attachments, and the stretch items wait for a PLM connector.
 
 ## Validation against EverCurrent's published experience
 
