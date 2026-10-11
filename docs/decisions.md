@@ -110,10 +110,11 @@ Why. No public URL during development, Tier 3 history limits for an internal app
 the simplest thing that is honest about failure modes. Detailed facts in
 `notes/research/slack-platform.md`.
 
-Amended 2026-10-11 (SPEC v0.4): exposure is recorded only after Slack accepts the message;
-each sent part carries the run id in message metadata so retries post only missing parts;
-revoked or invalid tokens stop retries and mark the install inactive; auth failures and an
-empty run raise an admin alert.
+Amended 2026-10-11 (SPEC v0.4): exposure is recorded when the digest is delivered, on
+Slack's acceptance for Slack and on render for the other surfaces and replay; each sent
+part carries the run id in message metadata so retries post only missing parts; revoked or
+invalid tokens stop retries and mark the install inactive; auth failures, and a run with
+scheduled recipients that delivered nothing, raise an admin alert.
 
 ## D8. Web preview: server-rendered, no frontend build
 
@@ -328,9 +329,9 @@ per-user tokens (docs/later.md).
 ## D21. The objective is stale-belief person-days
 
 Decision. The digest minimises the working days readers hold a value the ledger has
-superseded, summed over readers and facts, under a per-digest length budget. Ranking
-terms are derivatives of that sum; the evaluation reports it directly (digest on versus
-off), with time-to-told per role and the novelty rate beside it. The formulas read only
+superseded, summed over readers and facts, under a per-digest length budget. A ranking term earns its place by moving that sum in the ablation; the evaluation reports
+the sum directly (digest on versus off), with time-to-told per role and the novelty rate
+beside it. The formulas read only
 world fields (`supersedes`, `must_see_for`, `known_by`, event days) and the store.
 
 Why. One scalar that ranking and evaluation share stops the two from drifting apart,
@@ -345,16 +346,15 @@ what mattered; then the weight by decision exposure becomes the headline instead
 
 Decision. Entities carry `depends_on` edges; a change on an entity an owned entity
 depends on reaches the owner through the must-see lane with the edge in the reason.
-Decision exposure comes from the gate checklists: a stale value on an entity the
-reader's pending task touches is urgent; stale beliefs on owned entities stay must-see
-either way, and decision exposure orders them. An open contradiction is routed to the owner of the key as a `needs_you`
+Decision exposure is a ranked-lane term read from the gate checklists (a task's
+`entities`): a stale value on an entity the reader's pending task touches ranks higher;
+must-see stays rule-based and unaffected. An open contradiction is routed to the owner of the key as a `needs_you`
 line with both claims and their authority; code never picks a winner. No graph
 database: edges are a list on the entity, read by the ranker and the golden-label
 derivation.
 
 Why. Four public submissions model cross-team reach; the one that measured it derived its
-gold from the same fan-out rules, so its 12 of 12 is construction, not evidence, but the
-mechanism is the only one that reaches owners who were never in the thread. The
+gold from the same fan-out rules, so its 12 of 12 is construction, not evidence, but edges are what reach the owners of dependent entities who were never in the thread. The
 checklist already states what each reader is about to do, so decision exposure costs
 one lookup. Contradictions routed to a person stay honest states in the ledger.
 

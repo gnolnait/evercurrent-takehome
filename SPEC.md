@@ -60,7 +60,7 @@ In scope
   stale beliefs and absences.
 - Decision landing map across roles.
 - Feedback loop: thumbs up/down, "more like this", mute topic, and the `needs_you`
-  actions done, snooze, not mine; profile updates.
+  actions done, snooze, not mine, and confirm on a contradiction line; profile updates.
 - World-first simulator: scripted ground truth, including bot personas for the systems
   of record, rendered into noisy Slack by a different model family; golden labels
   derived from the script.
@@ -201,8 +201,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 2. Extract: a classifier first decides whether the thread delta contains project
    information (triage; a dropped golden item counts as a miss in the eval; a thread
    is kept when its probability of carrying information is at least 1 / (1 + the
-   stated cost of a miss relative to a false keep, a constant in `config/priors.yaml`,
-   default 10), and the triage decision is stored per thread revision so the rationale
+   stated cost of a miss relative to a false keep, a constant in `config/priors.yaml`, default 10, a choice to revisit after the first twenty
+   golden threads), and the triage decision is stored per thread revision so the rationale
    can read it back). Then, per thread delta, the LLM receives new
    messages, the thread root, existing items for the thread, the current ledger values
    for the entities the thread names, and the project glossary, and returns items with
@@ -245,7 +245,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
    impression. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
-   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner. `importance`
+   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner. Stretch term
+   `last_to_know`: rises when every other reader in the fact's audience has been exposed
+   to it and this reader has not. `importance`
    includes type, severity, authority, affected-role count and engagement (replies and
    reactions on the source thread). `sender_affinity` is highest for the reader's
    manager and reports, then the same team, then frequent collaborators (counted from
@@ -366,8 +368,8 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   commit, with the before and after in the report.
 - Cost and latency per stage, n beside every rate, and a "not run: reason" row for any
   configuration without its key.
-- Ranking ablation: each score term switched off in turn, with must-see recall and nDCG
-  per persona reported; a term that does not move the numbers is removed.
+- Ranking ablation: each score term switched off in turn, with stale-belief person-days,
+  must-see recall and nDCG per persona reported; a term that moves none of them is removed.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction
@@ -441,9 +443,9 @@ later day.
 - M4 (day 4): landing map; eval harness and report with the ablation table;
   faithfulness judge; degradation curve; web preview with the profile page (paste
   supported, the single settings surface) and the open-items page; the MCP server's
-  read tools and usage skill. A1 to A8, A10. v0.4 core: the headline metrics and the
-  regression gate. v0.4 stretch: baselines beside every rate, abstention precision, the
-  coverage line, pairwise judging, `digest diff`, `why_ranked` accepting an undelivered
+  read tools and usage skill. A1 to A8, A10. v0.4 core: the headline metrics, the regression gate and the coverage line (section 4
+  makes it an invariant). v0.4 stretch: baselines beside every rate, abstention
+  precision, pairwise judging, `digest diff`, `why_ranked` accepting an undelivered
   item. The scrutability check (A12), the classifier comparison (Laya on Linux) and MCP
   write tools stay stretch.
 - M5 (day 5): live Slack mode, Block Kit, failure handling, profile bootstrap from
@@ -477,8 +479,8 @@ later day.
   are the world schema and project configuration (bot personas, team, manager,
   priority), the attribute vocabulary, and the gateway backend with its logical
   model names (D15). Every v0.4 addition is stretch in its milestone unless section 9 names it core. The core additions are the absence sources (c) to (e) with the world schema fields they
-  need, `depends_on` edges with fan-out, the headline metrics and the regression gate,
-  plus two correctness rules (visibility filter, exposure on acceptance); they come out
+  need, `depends_on` edges with fan-out, the headline metrics, the regression gate and the
+  coverage line, plus two correctness rules (visibility filter, exposure on acceptance); they come out
   of days 6 and 7.
 - Ranking factor sprawl: every term is stored per impression and the ablation table
   reports its effect; a term without measured effect on the golden corpus is removed.
