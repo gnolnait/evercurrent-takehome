@@ -102,8 +102,9 @@ Event: one normalized message from any source.
 reactions[{name, user_id, ts}], files[], permalink, edited, deleted}`
 - `ts` is the message time and the identity; `event_ts` is when this version was
   observed (equal to `ts` for the original post, later for an edit or a delete).
-- A system of record (PLM, schedule tool, document control) appears as a bot user
-  posting into a feed channel; its claims carry `plm_bot` authority.
+- A system of record (PLM, schedule tool, document control, issue tracker) appears as a
+  bot user posting into a feed channel; its claims carry `plm_bot` authority. The issue
+  tracker's claims are `status`, `owner` and `priority` on `issue` entities.
 - Channels carry `private: bool` and `external: bool`. A public channel is visible to
   every reader; a private one only to its members. Visibility, not membership, decides
   what a reader may be told. An external channel is shared with a contract manufacturer
@@ -120,7 +121,7 @@ status, resolved_by, links[{kind, item_id}]}`
 - links.kind: duplicate | update_of | supersedes | contradicts | related
 
 Claim: `{key, value, asserted_ts, observed_ts, invalid_ts, author, channel, authority,
-certainty, kind, conditions}`
+certainty, kind, conditions, scope}`
 where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
 rev, lead_time, gate_date, owner, status, qty, spec_param, priority. authority is a
 small enum (owner_stated, plm_bot, cm_stated, hearsay). `certainty` is decided |
@@ -144,13 +145,15 @@ as current, and a scope that has ended with the old value still in use is an abs
 value is `pending`: the record resolves it by confirming the new value (supersession) or
 restating its own (a contradiction, routed to the owner of the key as work, never
 resolved in code), and silence past a cadence makes it an absence item for the owner
-(section 5 step 5 source d).
+(section 5 step 5 source d). An action claim is a `status` claim on an entity of type po,
+build, release or document (placed, started, released, sent) whose evidence names a part
+and a revision; the audit in step 6 reads those.
 
 Entity: `{id, type, description, owner, vendor, subsystem, parent, depends_on[], aliases[],
 priority, state}`
 - type: part | assembly | pcba | harness | molded | battery | purchased | component |
   subsystem | document | eco | ecr | deviation | fa | po | gate | build | test |
-  release | vendor
+  release | vendor | issue
 - `aliases` is the extractor's glossary; `subsystem` and `parent` give the ranker
   ownership and containment; `depends_on` names the entities whose change forces a
   re-check of this one, so a change reaches owners who were never in the thread;
@@ -219,9 +222,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    counted per field. Before the model runs, a deterministic pass reads file names in
    `files[]` and URLs in the text: a revision token in a file name or a pinned-version
    URL yields a `referenced` claim on the document entity and `linked` exposure for the
-   poster and every reader who replied or reacted; a reference older than the ledger's
-   current value is a stale-reference item, suppressed when the thread also cites the
-   current value.
+   poster and every reader who replied or reacted; a reference older than the ledger's value as of the message's `asserted_ts` is a
+   stale-reference item, suppressed when the thread also cites the current value. A
+   `ticket` reaction by a human on a message creates an `issue` item owned by the reactor
+   with `owner_stated` authority and cites the message; it is also a human label that a
+   thread carries project information, which the triage evaluation reads.
 3. Link: candidate pairs by shared entity key, then lexical similarity (FTS5), then an
    LLM adjudicator returning one of {duplicate, update_of, supersedes, contradicts,
    related, distinct} with quoted evidence. Claims update the ledger. `status` moves to
@@ -242,8 +247,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    (e) A blocker with no owner and no reply after a cadence is an absence for the owners
    of the entities it names, else for the EM, citing the blocker. (f, stretch) Evidence for a checklist task that predates a revision change of the
    task's own entity makes the task an absence again ("passed on Rev B; Rev C since day
-   9; no evidence on Rev C"). The window before a gate in which an absence can fire
-   scales with the task's priority, and an absence that persists
+   9; no evidence on Rev C"). (g, stretch) A scoped claim whose scope has ended while the old value is still in use is
+   an absence for the key's owner, citing the deviation. The window before a gate in which
+   an absence can fire scales with the task's priority, and an absence that persists
    across days rises in rank and states how many days it has been silent. Never emit an
    absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
@@ -313,6 +319,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   record (PLM, schedule, document control) posting into a feed channel, and dated
   events (ECOs, slips, quotes, decisions, failures), each with claims, the checklist
   tasks it is evidence for, `must_see_for` and `known_by` per persona over time.
+- The world's bot personas include an issue tracker, and the script marks some threads
+  with a `ticket` reaction so ticketed threads exist as human-labelled positives.
 - `digest seed --world <name>`: posts the rendered corpus into a real Slack workspace
   through the bot with per-persona display names, threads, edits and deletes, at a
   configurable pace (one world day per N minutes). The world timestamp is written into
@@ -323,7 +331,7 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   knobs: indirection, wrong claims by agents, revision typos, delayed cross-posting,
   distractor threads, late delivery and missed events (for reconciliation), a planted
   instruction aimed at the extractor, and loud threads with urgent words, many replies
-  and no state change. The script holds more candidate items per persona-day than the affected section caps
+  and no state change. The script holds more ranked candidates per persona-day than the affected section caps
   around the EVT to DVT change, so the caps bite and re-weighting changes the cut, quiet days with no planted change and no outstanding golden absence or contradiction,
   for abstention, at least one private channel with a persona outside it, so the
   visibility check is tested, one external channel, and documents with a revision
@@ -354,7 +362,7 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   held E0's value (P is in E0's `known_by` or was shown E0), the interval starts at the
   later of E.day and the day P acquired E0's value, and `told_day` is the earliest of
   P's `known_by` day for E and the first digest day that delivers an item citing E, else
-  the world's last day plus one; the metric sums `told_day - start` over all (P, E),
+  the world's last day plus one; the metric sums `max(0, told_day - start)` over all (P, E),
   with the digest on and with it off (digest days removed); when a later claim supersedes
   E before P is told, P's interval for E ends there and a new interval starts for the
   later claim. Beside it: time-to-told per
@@ -373,9 +381,12 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
 - Access: no delivered item cites a channel its reader cannot see, checked on a world
   with at least one private channel and a reader outside it.
 - Documents and actions: stale-reference precision and recall against the script's
-  document revisions; stale-action count with the digest on and off.
+  document revisions; stale-action count against the script's planted actions (the script does not react to
+  the digest, so this is recall, not on versus off).
 - Duplicate rate among delivered items.
 - Mirror metrics: missed golden items and hallucinated items, both counted.
+- Triage recall against ticketed threads (human-marked positives), beside recall against
+  golden items; on real data this is the first label the system collects.
 - Degradation curve: extraction and supersession recall as the renderer's noise knobs rise.
 - Extraction scoring splits objective fields (owner, due, status, claim values; a miss
   fails) from advisory ones (type disagreement between neighbours; reported), with
@@ -391,8 +402,8 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   commit, with the before and after in the report.
 - Cost and latency per stage, n beside every rate, and a "not run: reason" row for any
   configuration without its key.
-- Ranking ablation: each score term switched off in turn, with stale-belief person-days,
-  must-see recall and nDCG per persona reported; a term that moves none of them is removed.
+- Ranking ablation: each score term switched off in turn, with stale-belief person-days, must-see recall and nDCG per persona reported; a term
+  that does not move person-days is removed, whatever it does to the other two.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction
@@ -452,8 +463,8 @@ later day.
   names and links as `referenced` claims and `linked` exposure, with stale-reference
   items), and the world schema additions they and M3 need (`depends_on`, `priority`,
   task `entities`, claim `certainty`, `kind` and `scope`, channel `private` and
-  `external`, documents with revision histories). v0.4 stretch: field-level verification, loud-noise negatives, the
-  cost-derived triage threshold. Jev triage when a TypeSafe key exists stays stretch.
+  `external`, documents with revision histories). v0.4 stretch: field-level verification, loud-noise negatives, the cost-derived triage
+  threshold, the `ticket` reaction rule and the tracker bot persona. Jev triage when a TypeSafe key exists stays stretch.
 - M3 (day 3): claims, linking and the bi-temporal ledger; stale-belief computation;
   ranking with priors, sender affinity, engagement, profiles, feedback and the
   `needs_you` actions; renderer with quiet days. Day-3 kill criterion: if claim keying
@@ -481,9 +492,10 @@ later day.
   Docker, devcontainer check, README design doc, ANSWERS.md, demo screenshots.
   Stretch: two-tier delivery; seeder pacing; App Home settings and `/digest`
   commands; natural-language style parsing (structured style fields are core); A11.
-  v0.4 core: exposure recorded on Slack's acceptance (a correctness rule). v0.4 stretch:
-  send idempotency through message metadata, dead-credential handling, the admin alert,
-  the "nothing today" line.
+  v0.4 core: exposure recorded on Slack's acceptance (a correctness rule). v0.4 stretch: send idempotency through message metadata, dead-credential handling, the
+  admin alert, the "nothing today" line, and a mock issue tracker (an in-process
+  stand-in with create, assign and status behind the function layer) so a `ticket`
+  reaction creates an issue live until a tracker connector exists (later.md).
 - Days 6 to 7: adversarial validation, second-model review, retro, polish, then
   stretch items in the order they are listed above. If a core day slips, the web
   preview is the first core item deferred, as in v0.2.

@@ -347,9 +347,9 @@ what mattered; then the weight by decision exposure becomes the headline instead
 
 Decision. Entities carry `depends_on` edges; a change on an entity an owned entity
 depends on reaches the owner through the must-see lane with the edge in the reason.
-Decision exposure is a ranked-lane term read from the gate checklists (a task's
-`entities`): a stale value on an entity the reader's pending task touches ranks higher;
-must-see stays rule-based and unaffected. An open contradiction is routed to the owner of the key as a `needs_you`
+A stale value on an entity the reader's pending checklist task touches is must-see
+(SPEC section 5 step 6). Decision exposure is the ranked-lane term read from the same
+checklist data (a task's `entities`) that orders everything below the must-see lane. An open contradiction is routed to the owner of the key as a `needs_you`
 line with both claims and their authority; code never picks a winner. No graph
 database: edges are a list on the entity, read by the ranker and the golden-label
 derivation.
@@ -383,8 +383,8 @@ or move it to report-only, and say so in the report.
 ## D24. Documents and actions are claims too
 
 Decision. A revision token in a file name or a pinned-version URL is a `referenced` claim
-on the document entity, read by a deterministic pass before the model runs; receiving the
-file is `linked` exposure, so a reader who got the Rev B pack holds Rev B. A reference
+on the document entity, read by a deterministic pass before the model runs; posting, replying to or reacting on the message is `linked` exposure, so a reader who
+handled the Rev B pack holds Rev B. A reference
 older than the ledger's value is a stale-reference item; into a channel shared with a
 contract manufacturer it is must-see for the document's owner. A claim may carry a
 `scope` (a build id or expiry), so a deviation for one build neither supersedes nor
@@ -393,14 +393,33 @@ started) is audited against the ledger and the actor's exposure as of its time; 
 on a superseded value is a blocker for the actor and the key's owner.
 
 Why. PLM tools flag a pinned document link that is out of date inside their own walls;
-nothing does it in chat, where the CM receives the file. The audit needs a bi-temporal
-ledger and a record of what each reader was told, which the memory systems reviewed
-(Graphiti and Zep, GraphRAG, Mem0, LlamaIndex graphs) do not keep. Both reuse D19 and the
+none of the chat digest tools or submissions reviewed does it in chat, where the CM
+receives the file. The audit needs a record of what each reader was told, which none of the memory systems
+reviewed (Graphiti and Zep, GraphRAG, Mem0, LlamaIndex graphs) keeps; Graphiti's validity
+intervals are the nearest design and D19 follows them. Both reuse D19 and the
 exposure record and add no infrastructure. Fuzzy matching stays out: a revision suffix
 is split by a normalizer, not matched (PN-31010-C versus PN-31010).
 
 Would change it. A corpus where PO and release messages never name a revision: the audit
 then fires only on attachments, and the stretch items wait for a PLM connector.
+
+## D25. Tickets are labels and claims
+
+Decision. An issue tracker is one more system of record: a bot persona whose `status`,
+`owner` and `priority` claims land on `issue` entities. A `ticket` reaction by a human on
+a message creates an issue item owned by the reactor, cites the message, and records a
+human judgement that the thread carries project information. The triage evaluation
+reports recall against ticketed threads beside recall against golden items. Live mode
+gets a mock tracker (create, assign, status) behind the function layer until a connector
+exists; the connector stays in later.md.
+
+Why. Every public submission tunes triage on self-written labels. Tickets people
+actually open from chat are the one label a real workspace produces for free, and the
+reaction is the smallest possible labelling interface. The tracker as a bot persona
+reuses the authority model; nothing new enters the ledger.
+
+Would change it. A workspace that tickets nothing from chat: the metric reports n = 0
+and the golden labels carry the eval alone.
 
 ## Validation against EverCurrent's published experience
 
