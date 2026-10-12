@@ -13,7 +13,8 @@ exists under the main checkout:
 <root> is the first worktree that `git worktree list --porcelain` prints, the
 same root /review-local writes to. <sha> is HEAD of the directory the creation
 runs in, or the `--head` branch of `gh pr create`. That directory is the hook
-cwd, or the target of a top-level `cd <literal path>` before the creation. A later commit changes <sha>, so a review
+cwd, or <path> when the command starts with `cd <path> &&` and <path> is
+absolute or starts with ".". A later commit changes <sha>, so a review
 goes stale by construction.
 
 Override, for a trivial PR only: an assignment on the same command segment,
@@ -41,9 +42,8 @@ requests (--help, and -h for gh, curl and wget) do not match.
 An API creation names a remote branch, not a local commit, so no review marker
 can match it. Only the override allows it.
 
-Fail closed: a command blocks when it changes directory in a way the guard
-cannot follow (cd to a variable, ~ or -, pushd, popd, a cd in a subshell or a
-shell string), or when it moves HEAD (git checkout/switch/commit/reset/rebase/
+Fail closed: a command blocks when it changes directory anywhere except that
+leading `cd <path> &&` (any other cd, pushd or popd), or when it moves HEAD (git checkout/switch/commit/reset/rebase/
 merge/pull/cherry-pick/am/revert/update-ref, or a symbolic-ref write), because
 the guard reads HEAD before the command runs. An unresolvable HEAD, `--head`
 branch or main checkout also blocks.
@@ -79,9 +79,11 @@ PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
 MAY_CREATE = ("gh", "pulls", "PullRequest")
 DIR_CHANGERS = {"cd", "pushd", "popd"}
-# A cd that may run in a subshell, (cd x) or $(cd x), moves nothing for the
-# commands after it, so no cd in such a command can be followed.
-SUBSHELL_CD = re.compile(r"[(`]\s*cd\b")
+# The one cd the guard follows: the command starts with `cd <path> &&`. Bash
+# then runs the rest in <path>, or not at all. The path is one quoted or bare
+# word with no expansion.
+LEADING_CD = re.compile(
+    r"""^\s*cd\s+("[^"$`\\]+"|'[^']+'|[^\s;&|<>()$`\\"'{}~*?\[]+)\s*&&""")
 MSYS_DRIVE = re.compile(r"^/([A-Za-z])(/|$)")
 HEAD_MOVERS = {"checkout", "switch", "commit", "reset", "rebase", "merge",
                "pull", "cherry-pick", "am", "revert", "update-ref"}
@@ -219,26 +221,28 @@ def _writes_symbolic_ref(rest):
     return len([a for a in args if not a.startswith("-")]) >= 2
 
 
-def _cd_target(rest, base):
-    """The directory `cd <literal path>` moves to, or None when it is unreadable."""
-    if len(rest) != 1:
-        return None
-    path = rest[0]
-    if not path or path == "-" or path.startswith("~") or any(c in path for c in "$`*?["):
-        return None
+def _leading_cd(cmd, base):
+    """Split off a leading `cd <path> &&`: return (directory, rest of command).
+
+    Returns (base, cmd) when there is none. Only an absolute path, or one that
+    starts with "." counts: bash looks a bare name up in CDPATH.
+    """
+    m = LEADING_CD.match(cmd)
+    if not m:
+        return base, cmd
+    path = m.group(1)
+    if path[0] in "\"'":
+        path = path[1:-1]
     if os.name == "nt":
         # Git Bash spells C:/x as /c/x.
-        path = MSYS_DRIVE.sub(lambda m: m.group(1).upper() + ":/", path)
-    return os.path.normpath(os.path.join(base, path))
+        path = MSYS_DRIVE.sub(lambda d: d.group(1).upper() + ":/", path)
+    if not (os.path.isabs(path) or path.startswith(".")):
+        return base, cmd
+    return os.path.normpath(os.path.join(base, path)), cmd[m.end():]
 
 
-def _scan(cmd, found, movers, state, depth=0):
-    """Collect each PR-creation segment and each dir change or HEAD move.
-
-    A top-level `cd <literal path>` sets state["cwd"] for the segments after
-    it; each creation records the directory it runs in. Any other change of
-    directory is a mover.
-    """
+def _scan(cmd, found, movers, depth=0):
+    """Collect each PR-creation segment and each dir change or HEAD move."""
     if depth > 3:
         raise _Ambiguous("shell strings nest too deep to read")
     for seg in split_segments(cmd):
@@ -247,20 +251,14 @@ def _scan(cmd, found, movers, state, depth=0):
             continue
         rest = toks[1:]
         if cmdword == "eval":
-            _scan(" ".join(rest), found, movers, state, depth + 1)
+            _scan(" ".join(rest), found, movers, depth + 1)
             continue
         if cmdword in SHELLS:
             for string in _shell_strings(rest):
-                _scan(string, found, movers, state, depth + 1)
+                _scan(string, found, movers, depth + 1)
             continue
         if cmdword in DIR_CHANGERS:
-            target = None
-            if cmdword == "cd" and depth == 0 and not state["subshell_cd"]:
-                target = _cd_target(rest, state["cwd"])
-            if target is None:
-                movers.append(seg)
-            else:
-                state["cwd"] = target
+            movers.append(seg)
             continue
         if cmdword == "git" and (any(t in HEAD_MOVERS for t in rest)
                                  or _writes_symbolic_ref(rest)):
@@ -268,7 +266,7 @@ def _scan(cmd, found, movers, state, depth=0):
             continue
         kind, through_api = _create_kind(cmdword, rest)
         if kind:
-            found.append((kind, through_api, seg, prefix, cmdword, rest, state["cwd"]))
+            found.append((kind, through_api, seg, prefix, cmdword, rest))
 
 
 def _git(cwd, *args):
@@ -406,9 +404,9 @@ def _ambiguous_message(reason, detail):
 
 def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
     found, movers = [], []
-    state = {"cwd": hook_cwd, "subshell_cd": bool(SUBSHELL_CD.search(cmd))}
+    cwd, body = _leading_cd(cmd, hook_cwd)
     try:
-        _scan(cmd, found, movers, state)
+        _scan(body, found, movers)
     except _Ambiguous as exc:
         # Only a command that could create a PR may fail closed here.
         if any(word in cmd for word in MAY_CREATE):
@@ -422,8 +420,8 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
                                         movers[0])
     try:
         entries = []
-        for kind, through_api, seg, prefix, cmdword, rest, cwd in found:
-            root = _main_checkout(cwd)
+        root = _main_checkout(cwd)
+        for kind, through_api, seg, prefix, cmdword, rest in found:
             if not root:
                 raise _Ambiguous("cannot find the main checkout from %s" % cwd)
             # For an API creation this is HEAD, which only the log records.
