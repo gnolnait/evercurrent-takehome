@@ -1,6 +1,6 @@
 # Plan: M3 demo slice, a daily digest per reader
 
-Status: v0.2, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
+Status: v0.3, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
 with the user for the 2026-10-14 deadline: Codex writes the tests, an Opus subagent
 writes the code, every test is RED-GREEN proven, one review lane per commit
 (alternating Codex and the Claude lenses), at most one fix round per commit; findings
@@ -101,10 +101,12 @@ B5.1 `profile_for` builds the profile from the persona; `can_see` is true for a 
 channel and for a private channel the reader belongs to, false otherwise (fail closed:
 an unknown channel id is not visible).
 
-B5.2 Visibility filter (SPEC 5.6, a v0.4 core rule): an item reaches the reader only
-when at least one of its evidence messages is in a channel the reader can see; the
-evidence entries in other channels are removed from the line's item before rendering,
-so no quote or link from a channel the reader cannot see is shown. An item with no
+B5.2 Visibility filter (SPEC 5.6, a v0.4 core rule): an item's channel is the channel of
+its `thread_id` (`<channel>:<thread_ts>`); every evidence entry comes from that thread.
+An item reaches the reader only when that channel is one the reader can see. An evidence
+entry whose permalink names any other channel is removed from the line's item before
+rendering (fail closed), so no quote or link from another channel is shown; an item left
+with no evidence entry is dropped. An item with no
 visible evidence is dropped and counted in `hidden`. An absence item follows the same
 rule through its cited evidence.
 
@@ -119,16 +121,17 @@ B5.4 Ranked lane: every other visible open item gets
 - `importance`: by type (blocker 1.0, decision 0.9, schedule_change 0.9, spec_change 0.8,
   bom_change 0.8, risk 0.7, ask 0.6, absence 0.9, fyi 0.3), times severity (high 1.0, medium 0.7,
   low 0.4).
-- `role_prior`: `priors.daily.role_priors[role][type]`, default 0.5 when the table has no
-  entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
+- `role_prior`: `priors.daily.role_priors[role][type]` (each value between 0 and 1, checked
+  when the priors load), default 0.5 when the table has no entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
   phase re-weighting is M3 proper).
 - `personal_relevance`: 1.0 when an item entity is owned by the reader, 0.8 when the
   item's `affected_roles` include the reader's role, else 0.4.
 An item below the threshold `priors.daily.min_score` (default 0.15) is left out. `reason`
 names the three terms with their values.
 
-B5.5 Sections: `ask` and must-see lines that ask something of the reader go to
-`needs_you`; absences to `not_happened`; `decision`, `schedule_change`, `spec_change`,
+B5.5 Sections: `ask` items go to `needs_you`; an ask absence where the reader is the
+person asked also goes to `needs_you` and replaces the line of the ask item it cites
+(same thread), so one ask never shows twice; every other absence goes to `not_happened`; `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
 section holds its must-see lines plus up to its cap of ranked lines. Resolved items are
 left out. Items are those with `last_updated` at or before the end of `day` in the
@@ -147,7 +150,9 @@ visibility filter hid, when that is above zero.
 
 B6.2 `build_digest` reads items with `store.items(as_of)` and absences with
 `detect_absences`, selects and renders. It refuses (ValueError naming the reason) a
-store without `meta.until`, with pending extract deltas, or replayed to before `day`.
+store without `meta.until`, with pending extract deltas, or whose `meta.until` is not the
+end of `day` in the world's zone: the store keeps only each item's latest version, so a
+digest for an earlier day needs a store replayed exactly to that day.
 
 B6.3 `digest run` prints `build_digest` and exits 0; it exits 1 with the reason on a
 refused store, an unknown user or a bot. `digest demo` exits 0, prints three digests,
