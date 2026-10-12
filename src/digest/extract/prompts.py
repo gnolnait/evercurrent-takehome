@@ -19,7 +19,9 @@ EXTRACT_SYSTEM = "\n".join(
         "The user message lists, in this order: the glossary of entities and people, the checklist"
         " tasks of gates on or after today, the existing items of this thread, the thread root"
         " and the changed messages.",
-        "A thread root that is new in this delta is listed with the changed messages.",
+        "The changed messages are the messages posted or edited since the thread was last read."
+        " This delta is the set of changed messages.",
+        "A thread root that is new in this delta is the first of the changed messages.",
         "Return items for new information only: a decision, a blocker, a risk, a schedule change,"
         " a spec change, a BOM change, an ask, or an fyi that a program member needs to know.",
         "Do not return an item again when a changed message adds nothing to an existing item.",
@@ -52,7 +54,9 @@ TRIAGE_SYSTEM = "\n".join(
         "You read one Slack thread of a hardware engineering program.",
         "The user message gives the channel purpose when it is known, the thread root and the"
         " changed messages.",
-        "A thread root that is new in this delta is listed with the changed messages.",
+        "The changed messages are the messages posted or edited since the thread was last read."
+        " This delta is the set of changed messages.",
+        "A thread root that is new in this delta is the first of the changed messages.",
         "Give the probability, from 0 to 1, that the changed messages carry project information:"
         " a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask"
         " about the program, or an fyi that a program member needs to know.",
@@ -148,7 +152,7 @@ def _existing_section(existing: Sequence[Item]) -> str:
 def _thread_section(delta: ThreadDelta, citable: Sequence[Event], *, with_files: bool) -> str:
     """The root section, then the changed messages in ts order (plan Q1).
 
-    A root among the delta's changed rows is listed once, under the changed messages, and the
+    A root among the delta's changed rows is listed once, as the first changed message, and the
     root section says that it is new in this delta. Any other root is context in the root
     section. A deleted row never enters a prompt.
     """
@@ -159,7 +163,7 @@ def _thread_section(delta: ThreadDelta, citable: Sequence[Event], *, with_files:
     changed = [row for row in rows if new_root or row.ts != delta.thread_ts]
     lines = ["Thread root:"]
     if new_root:
-        lines.append("new in this delta, listed under the changed messages")
+        lines.append("new in this delta: it is the first changed message below")
     else:
         lines += [_message(row, with_files=with_files) for row in root] or ["not available"]
     lines.append("Changed messages, oldest first:")

@@ -44,9 +44,10 @@ DROP_FIELDS = (
     "tasks.stale",
 )
 
-# Plan Q5: a rev value without its "Rev" word; a qty value that starts with a whole number.
-_REV = re.compile(r"\s*(?:(?:Rev|rev)\s+|Rev\.\s*)?(\S.*?)\s*")
-_LEADING_QTY = re.compile(r"\s*(\d+)(?![.,]?\d)")
+# Plan Q5: a revision token with an optional "rev" prefix; a first word that is a whole number,
+# with optional thousands commas and an optional "/" count.
+_REV = re.compile(r"(?:(?i:rev)\.?\s*)?([A-Za-z0-9]+)")
+_QTY = re.compile(r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:/(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+))?")
 
 
 class Verified(Frozen):
@@ -170,11 +171,15 @@ def _claims(
 
 
 def _claim_value(attribute: str, value: str) -> str:
-    """The value in its compared form (plan Q5). Only rev and qty change."""
-    if attribute == "rev" and (match := _REV.fullmatch(value)):
+    """The value in its compared form (plan Q5). Only rev and qty change.
+
+    A value that does not match its form is kept as given.
+    """
+    if attribute == "rev" and (match := _REV.fullmatch(value.strip())):
         return match.group(1).upper()
-    if attribute == "qty" and (match := _LEADING_QTY.match(value)):
-        return match.group(1)
+    words = value.split()
+    if attribute == "qty" and words and (match := _QTY.fullmatch(words[0])):
+        return match.group(1).replace(",", "")
     return value
 
 
