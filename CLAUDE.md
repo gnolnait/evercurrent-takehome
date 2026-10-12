@@ -79,6 +79,8 @@ the case for it. This applies to chat as well as to the repo.
 - Keep the issue number out of the PR title; link it from the body with `Closes #NNNN`.
 - No GitHub posts (comments, reviews, PR bodies) without per-message approval from the
   user. Prior approval does not extend to follow-ups.
+- PR bodies follow `.github/PULL_REQUEST_TEMPLATE.md`: the `yaml release` header
+  (category, risk, rollback, issue), then Summary, Test Plan and an optional Appendix.
 - PR descriptions are user-facing: the destination, not the journey. No internal tooling
   names, no reviewer-round breadcrumbs. Anchor claims to numbers.
 - Reviewer fixes ship as new commits, never amendments.
