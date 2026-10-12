@@ -54,7 +54,16 @@ class EvalCase:
         return LLM(None, Cassettes(cassette_root or self.cassettes.root), "replay")
 
 
-def _world(*, include_distractor: bool, absences: bool) -> dict[str, Any]:
+def _world(
+    *,
+    include_distractor: bool,
+    absences: bool,
+    scored_attribute: str = "status",
+    scored_entity: str = "G-CITE",
+    golden_value: str = "open",
+    scored_claim_only: bool = False,
+    ask_claim_value: str | None = None,
+) -> dict[str, Any]:
     ask_day = 2 if absences else 1
     events: list[dict[str, Any]] = [
         {
@@ -63,8 +72,8 @@ def _world(*, include_distractor: bool, absences: bool) -> dict[str, Any]:
             "channel": "CENG",
             "poster": "UASKER",
             "kind": "risk",
-            "summary": "The drive revision is B.",
-            "claims": [{"entity": "PN-1", "attribute": "rev", "value": "B"}],
+            "summary": "The drive revision is C.",
+            "claims": [{"entity": "PN-1", "attribute": "rev", "value": "C"}],
         },
         {
             "id": "B-QTY",
@@ -74,9 +83,19 @@ def _world(*, include_distractor: bool, absences: bool) -> dict[str, Any]:
             "kind": "spec_change",
             "summary": "The drive quantity is four and the gate is open.",
             "claims": [
-                {"entity": "PN-1", "attribute": "rev", "value": "B"},
-                {"entity": "PN-1", "attribute": "qty", "value": "4"},
-                {"entity": "G-CITE", "attribute": "status", "value": "open"},
+                *(
+                    []
+                    if scored_claim_only
+                    else [
+                        {"entity": "PN-1", "attribute": "rev", "value": "B"},
+                        {"entity": "PN-1", "attribute": "qty", "value": "4"},
+                    ]
+                ),
+                {
+                    "entity": scored_entity,
+                    "attribute": scored_attribute,
+                    "value": golden_value,
+                },
             ],
         },
         {
@@ -90,6 +109,11 @@ def _world(*, include_distractor: bool, absences: bool) -> dict[str, Any]:
                 "of": "UOWNER",
                 "answered_day": None if absences else 1,
             },
+            "claims": (
+                []
+                if ask_claim_value is None
+                else [{"entity": "G-CITE", "attribute": "status", "value": ask_claim_value}]
+            ),
         },
     ]
     if include_distractor:
@@ -310,7 +334,15 @@ def _claim(entity: str, attribute: str, value: str, message_ts: str) -> dict[str
     }
 
 
-def _outputs(*, wrong_objectives: bool) -> dict[str, list[dict[str, Any]]]:
+def _outputs(
+    *,
+    wrong_objectives: bool,
+    scored_attribute: str = "status",
+    scored_entity: str = "G-CITE",
+    extracted_value: str = "closed",
+    scored_claim_only: bool = False,
+    ask_claim_value: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     quantity = "5" if wrong_objectives else "4"
     ask_owner = "UASKER" if wrong_objectives else "UOWNER"
     later = _extracted_item(
@@ -318,17 +350,23 @@ def _outputs(*, wrong_objectives: bool) -> dict[str, list[dict[str, Any]]]:
         SHARED_REPLY,
         "abcdefghij",
         entities=["PN-1"],
-        claims=[_claim("PN-1", "rev", "B", SHARED_REPLY)],
+        claims=[_claim("PN-1", "rev", "C", SHARED_REPLY)],
     )
     earlier = _extracted_item(
         "decision",
         SHARED_ROOT,
         "12345",
-        entities=["PN-1", "G-CITE", "CONTEXT"],
+        entities=list(dict.fromkeys(["PN-1", "G-CITE", "CONTEXT", scored_entity])),
         claims=[
-            _claim("PN-1", "rev", " B ", SHARED_ROOT),
-            _claim("PN-1", "qty", quantity, SHARED_ROOT),
-            _claim("G-CITE", "status", "open", SHARED_ROOT),
+            *(
+                []
+                if scored_claim_only
+                else [
+                    _claim("PN-1", "rev", " B ", SHARED_ROOT),
+                    _claim("PN-1", "qty", quantity, SHARED_ROOT),
+                ]
+            ),
+            _claim(scored_entity, scored_attribute, extracted_value, SHARED_ROOT),
         ],
     )
     noise = _extracted_item(
@@ -344,6 +382,11 @@ def _outputs(*, wrong_objectives: bool) -> dict[str, list[dict[str, Any]]]:
         ASK_ROOT,
         "When review?",
         owner=ask_owner,
+        claims=(
+            []
+            if ask_claim_value is None
+            else [_claim("G-CITE", "status", ask_claim_value, ASK_ROOT)]
+        ),
     )
     distractor = _extracted_item("fyi", DISTRACTOR_ROOT, "A" * 15, entities=["CONTEXT"])
     outside = _extracted_item(
@@ -386,10 +429,22 @@ def _script_cassettes(
     include_distractor: bool,
     drop_shared: bool,
     wrong_objectives: bool,
+    scored_attribute: str,
+    scored_entity: str,
+    extracted_value: str,
+    scored_claim_only: bool,
+    extracted_ask_claim_value: str | None,
 ) -> None:
     world = load_world(case.world_dir / "world.yaml")
     purposes = {channel.id: channel.purpose for channel in world.channels}
-    outputs = _outputs(wrong_objectives=wrong_objectives)
+    outputs = _outputs(
+        wrong_objectives=wrong_objectives,
+        scored_attribute=scored_attribute,
+        scored_entity=scored_entity,
+        extracted_value=extracted_value,
+        scored_claim_only=scored_claim_only,
+        ask_claim_value=extracted_ask_claim_value,
+    )
     request_store = case.root / "request.sqlite"
     with Store.open(request_store) as store:
         replay_world(store, case.world_dir, world.date_of(world.days))
@@ -450,10 +505,25 @@ def _build_case(
     drop_shared: bool = False,
     wrong_objectives: bool = False,
     absent_golden_thread: bool = False,
+    scored_attribute: str = "status",
+    scored_entity: str = "G-CITE",
+    golden_value: str = "open",
+    extracted_value: str = "closed",
+    scored_claim_only: bool = False,
+    golden_ask_claim_value: str | None = None,
+    extracted_ask_claim_value: str | None = None,
 ) -> EvalCase:
     world_dir = root / "data" / "world" / "tiny"
     world_dir.mkdir(parents=True)
-    raw_world = _world(include_distractor=include_distractor, absences=absences)
+    raw_world = _world(
+        include_distractor=include_distractor,
+        absences=absences,
+        scored_attribute=scored_attribute,
+        scored_entity=scored_entity,
+        golden_value=golden_value,
+        scored_claim_only=scored_claim_only,
+        ask_claim_value=golden_ask_claim_value,
+    )
     (world_dir / "world.yaml").write_text(yaml.safe_dump(raw_world), encoding="utf-8")
     rows = _events(include_distractor, absences)
     (world_dir / "events.jsonl").write_text(
@@ -485,6 +555,11 @@ def _build_case(
         include_distractor=include_distractor,
         drop_shared=drop_shared,
         wrong_objectives=wrong_objectives,
+        scored_attribute=scored_attribute,
+        scored_entity=scored_entity,
+        extracted_value=extracted_value,
+        scored_claim_only=scored_claim_only,
+        extracted_ask_claim_value=extracted_ask_claim_value,
     )
     return case
 
@@ -505,7 +580,7 @@ def test_eval_rejects_stale_golden_file(eval_case: EvalCase, stale_part: str) ->
     else:
         items = list(eval_case.golden.items)
         claims = list(items[0].claims)
-        claims[0] = claims[0].model_copy(update={"value": "C"})
+        claims[0] = claims[0].model_copy(update={"value": "D"})
         items[0] = items[0].model_copy(update={"claims": tuple(claims)})
         stale = eval_case.golden.model_copy(update={"items": tuple(items)})
     write_golden(stale, eval_case.world_dir / "golden.jsonl")
@@ -542,11 +617,11 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     }
     assert report.by_type["spec_change"].model_dump() == {
         "golden": 1,
-        "golden_matched": 0,
+        "golden_matched": 1,
         "extracted": 1,
-        "extracted_matched": 0,
-        "precision": 0.0,
-        "recall": 0.0,
+        "extracted_matched": 1,
+        "precision": 1.0,
+        "recall": 1.0,
     }
     assert report.by_type["ask"].golden_matched == 1
     assert report.by_type["ask"].extracted == 1
@@ -559,7 +634,7 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
         "recall": None,
     }
     assert report.thread_recall == 1.0
-    assert report.type_agreement == 0.5
+    assert report.type_agreement == pytest.approx(1 / 3)
     assert report.objective_misses == {"claims.value": 0, "owner": 0}
     assert (
         report.claims_golden,
@@ -569,9 +644,9 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     ) == (4, 4, 5, 4)
     assert report.claim_recall == 1.0
     assert report.claim_precision == 0.8
-    assert report.entity_jaccard == pytest.approx(1 / 3)
-    assert report.entity_jaccard_n == 1
-    assert (report.entities_golden, report.entities_found, report.entity_recall) == (1, 1, 1.0)
+    assert report.entity_jaccard == pytest.approx(5 / 6)
+    assert report.entity_jaccard_n == 2
+    assert (report.entities_golden, report.entities_found, report.entity_recall) == (3, 3, 1.0)
     assert report.evidence_entries == 6
     assert report.citation_validity == 1.0
     assert report.drops == {
@@ -588,9 +663,8 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     }
     assert report.triage_dropped_golden == ()
     assert report.triage_distractors_kept == ("DIST-NOISE",)
-    assert report.missed == ("B-QTY",)
-    assert len(report.unmatched) == 3
-    assert any("golden" in item and "#2" in item for item in report.unmatched)
+    assert report.missed == ()
+    assert len(report.unmatched) == 2
     assert any(
         "distractor" in item and f"CNOISE:{DISTRACTOR_ROOT}" in item for item in report.unmatched
     )
@@ -627,6 +701,88 @@ def test_eval_reports_each_objective_field_miss(tmp_path: Path) -> None:
     assert report.by_type["risk"].golden_matched == 1
     assert report.by_type["spec_change"].golden_matched == 0
     assert report.by_type["ask"].golden_matched == 0
+
+
+@pytest.mark.parametrize("attribute", ["status", "spec_param"])
+def test_eval_matches_non_discriminating_claims_without_equal_values(
+    tmp_path: Path, attribute: str
+) -> None:
+    case = _build_case(
+        tmp_path,
+        scored_attribute=attribute,
+        golden_value="expected",
+        extracted_value="observed",
+        scored_claim_only=True,
+    )
+
+    report = _run(case)
+
+    assert report.by_type["spec_change"].golden_matched == 1
+    assert report.claims_found == 2
+    assert report.claims_extracted_matched == 2
+    assert report.claim_precision == pytest.approx(2 / 3)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "entity", "golden_value", "equal_value", "different_value"),
+    [
+        ("rev", "PN-1", "B", " b ", "C"),
+        ("gate_date", "G-CITE", "2026-10-15", " 2026-10-15 ", "2026-10-16"),
+        ("qty", "PN-1", "4", " 4 ", "5"),
+        ("owner", "PN-1", "UOWNER", " uowner ", "UASKER"),
+    ],
+)
+def test_eval_matches_discriminating_claims_only_with_equal_normalized_values(
+    tmp_path: Path,
+    attribute: str,
+    entity: str,
+    golden_value: str,
+    equal_value: str,
+    different_value: str,
+) -> None:
+    equal_case = _build_case(
+        tmp_path / "equal",
+        scored_attribute=attribute,
+        scored_entity=entity,
+        golden_value=golden_value,
+        extracted_value=equal_value,
+        scored_claim_only=True,
+        golden_ask_claim_value="expected",
+        extracted_ask_claim_value="observed",
+    )
+    different_case = _build_case(
+        tmp_path / "different",
+        scored_attribute=attribute,
+        scored_entity=entity,
+        golden_value=golden_value,
+        extracted_value=different_value,
+        scored_claim_only=True,
+        golden_ask_claim_value="expected",
+        extracted_ask_claim_value="observed",
+    )
+
+    equal_report = _run(equal_case)
+    different_report = _run(different_case)
+
+    assert equal_report.by_type["spec_change"].golden_matched == 1
+    assert equal_report.by_type["ask"].golden_matched == 1
+    assert equal_report.claims_found == 3
+    assert different_report.by_type["spec_change"].golden_matched == 0
+    assert different_report.by_type["ask"].golden_matched == 1
+    assert different_report.claims_found == 2
+
+
+def test_eval_objective_claim_misses_ignore_non_discriminating_values(tmp_path: Path) -> None:
+    case = _build_case(
+        tmp_path,
+        wrong_objectives=True,
+        golden_ask_claim_value="expected",
+        extracted_ask_claim_value="observed",
+    )
+
+    report = _run(case)
+
+    assert report.objective_misses == {"claims.value": 1, "owner": 1}
 
 
 def test_eval_counts_fully_dropped_golden_threads_as_missed(tmp_path: Path) -> None:
@@ -742,12 +898,12 @@ def test_write_report_has_deterministic_tables_and_rate_counts(eval_case: EvalCa
         assert len(re.findall(r"^\|\s*:?-+", section, re.MULTILINE)) == 1
     for labels, n in [
         (("thread recall",), 3),
-        (("type agreement",), 2),
+        (("type agreement",), 3),
         (("claim recall",), 4),
         (("claim precision",), 5),
         (("citation validity",), 6),
-        (("entity jaccard",), 1),
-        (("entity recall",), 1),
+        (("entity jaccard",), 2),
+        (("entity recall",), 3),
         (("triage recall",), 3),
         (("false-alarm rate",), 4),
         (("absence recall",), 5),
@@ -926,7 +1082,7 @@ def test_cli_eval_reports_no_rendered_threads(
 def test_stale_golden_message_distinguishes_labels_from_cadence(eval_case: EvalCase) -> None:
     items = list(eval_case.golden.items)
     claims = list(items[0].claims)
-    claims[0] = claims[0].model_copy(update={"value": "C"})
+    claims[0] = claims[0].model_copy(update={"value": "D"})
     items[0] = items[0].model_copy(update={"claims": tuple(claims)})
     stale = eval_case.golden.model_copy(update={"items": tuple(items)})
     write_golden(stale, eval_case.world_dir / "golden.jsonl")
