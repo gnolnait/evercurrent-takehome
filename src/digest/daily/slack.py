@@ -96,7 +96,13 @@ def _line(
 
 
 def _section(text: str) -> dict[str, Any]:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": _cut(text, MAX_SECTION_TEXT)}}
+    """A section block with one mrkdwn text object.
+
+    `verbatim` stops Slack from turning a bare URL, `@here` or `#channel` into a link or a
+    mention. The explicit `<url|text>` links still work.
+    """
+    text_object = {"type": "mrkdwn", "text": _cut(text, MAX_SECTION_TEXT), "verbatim": True}
+    return {"type": "section", "text": text_object}
 
 
 def _escape(text: str) -> str:

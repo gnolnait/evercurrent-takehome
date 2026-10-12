@@ -48,6 +48,7 @@ _DEMO_WORLD = "kestrel"
 _DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")
 _DEMO_ROLES = ("ME", "supply_chain", "EM")  # the roles of _DEMO_READERS, in the same order
 _RULE = "-" * 40
+_WEBHOOK_PREFIX = "https://hooks.slack.com/"
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -88,15 +89,20 @@ def post(
 ) -> None:
     """Post the three demo digests to the Slack incoming webhook in SLACK_WEBHOOK_URL.
 
-    The command reads SLACK_WEBHOOK_URL from the environment, then from `.env`. It builds
-    the three digests as `digest demo` does and posts nothing until all three are built.
-    It posts one message per reader, in reader order. It stops at the first message that
-    Slack refuses. The command never constructs the settings object, so it reads no API
-    key. No output contains the webhook URL.
+    The command reads SLACK_WEBHOOK_URL from the environment, then from `.env`. The URL
+    must start with https://hooks.slack.com/ and hold no whitespace, else the command
+    exits 1 before it builds a digest. It builds the three digests as `digest demo` does
+    and posts nothing until all three are built. It posts one message per reader, in
+    reader order. It stops at the first message that Slack refuses or that fails to send.
+    A send failure shows the reader and the exception type only. The command never
+    constructs the settings object, so it reads no API key. No output contains the
+    webhook URL.
     """
     url = _webhook_url()
     if url is None:
         _refuse("SLACK_WEBHOOK_URL is not set in the environment or in .env")
+    if not url.startswith(_WEBHOOK_PREFIX) or any(char.isspace() for char in url):
+        _refuse(f"SLACK_WEBHOOK_URL must start with {_WEBHOOK_PREFIX} and hold no whitespace")
     loaded, selections = _demo_selections(day)
     messages = [slack_message(loaded, selection) for selection in selections]
     client = _webhook_client(url)
@@ -104,9 +110,9 @@ def post(
         reader = selection.profile.name
         try:
             response = client.send(text=message["text"], blocks=message["blocks"])
-        # OSError: urllib.error.URLError and socket errors. ValueError: a malformed URL.
-        except (OSError, ValueError) as error:
-            _refuse(f"cannot post the digest for {reader}: {error}".replace(url, "<webhook>"))
+        # The message of an exception can hold the URL, so the refusal shows the type only.
+        except Exception as error:
+            _refuse(f"cannot post the digest for {reader}: {type(error).__name__}")
         if response.status_code != 200:
             _refuse(
                 f"Slack refused the digest for {reader}: status {response.status_code}, "
@@ -494,24 +500,35 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
 def _webhook_url() -> str | None:
     """SLACK_WEBHOOK_URL from the environment, else from a `KEY=VALUE` line in `.env`.
 
-    The `.env` parser skips lines without `=`, accepts an `export ` prefix and removes one
-    pair of matching quotes. The last line for the key wins. An empty value is no value.
+    A `.env` that starts with a UTF-16 byte-order mark is read as UTF-16 (the PowerShell
+    5.1 default). Any other `.env` is read as UTF-8, with or without a byte-order mark. A
+    file that does not decode exits 1 and names `.env`. The parser skips lines without
+    `=` and accepts an `export ` prefix. It removes one pair of matching quotes. An
+    unquoted value ends at ` #`, which starts an inline comment. The last line for the
+    key wins. An empty value is no value.
     """
     value = os.environ.get("SLACK_WEBHOOK_URL")
     if value:
         return value
     try:
-        text = Path(".env").read_text(encoding="utf-8")
+        data = Path(".env").read_bytes()
     except FileNotFoundError:
         return None
     except OSError as error:
         _refuse(f".env: {error.strerror or error}")
+    encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+    try:
+        text = data.decode(encoding)
+    except UnicodeDecodeError as error:
+        _refuse(f".env: cannot decode as {encoding}: {error.reason}")
     for raw in text.splitlines():
         key, sep, rest = raw.strip().removeprefix("export ").partition("=")
         if sep and key.strip() == "SLACK_WEBHOOK_URL":
             rest = rest.strip()
             if len(rest) >= 2 and rest[0] == rest[-1] and rest[0] in "\"'":
                 rest = rest[1:-1]
+            else:
+                rest = rest.partition(" #")[0].rstrip()
             value = rest
     return value or None
 
@@ -524,10 +541,11 @@ def _webhook_client(url: str) -> WebhookClient:
         from slack_sdk.webhook import WebhookClient
     except ImportError:
         _refuse("digest post needs the slack extra; run uv sync --extra slack")
-    # The client logs the URL at DEBUG level and on a retry. A disabled logger drops both.
+    # The client logs the URL at DEBUG level, on a send error and on a retry. A disabled
+    # logger drops all three. The SDK default retry handlers retry a connection error.
     quiet = logging.getLogger("digest.slack_webhook")
     quiet.disabled = True
-    return WebhookClient(url, logger=quiet, retry_handlers=[])
+    return WebhookClient(url, logger=quiet)
 
 
 def _extract_days(
