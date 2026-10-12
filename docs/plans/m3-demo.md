@@ -136,7 +136,9 @@ entries, newest first, then on `item_id` ascending (SPEC 5.6). Must-see lines ar
 `item_id` order, above the ranked lines. `reason`
 names the three terms with their values.
 
-B5.5 Sections: `ask` items go to `needs_you`. When a reader's digest shows an ask absence
+B5.5 Sections: an `ask` item goes to `needs_you` only when the reader is the person
+asked (its `owner`); any other ask goes to `fyi`, so "Needs you" never lists a request
+made of someone else. When a reader's digest shows an ask absence
 line, after the caps and the threshold, the line of the ask item it cites is left out, so
 one ask never shows twice. The absence names that item in its id
 (`absence:ask:<ask item_id>`, as `digest.absence` builds it). Every other ask keeps its
@@ -168,8 +170,8 @@ default day 6:
 
 B6.1 `render_digest` writes, in order: a header line with the reader's name, role and
 the date; then each non-empty section with a title ("Needs you", "Not happened",
-"Decisions", "Risks", "FYI"); each line as `- <title> (<entity ids>) - owner <name or
-"none">` and, indented below it, the summary, then `source: <permalink>` for each
+"Decisions", "Risks", "FYI"); each line as `- <title> (<entity ids>) - owner <name>`,
+without the owner part when the item has no owner, and, indented below it, the summary, then `source: <permalink>` for each
 visible evidence entry; an absence line reads `- Not happened: <task> for <gate> - <N>
 working days silent, <consumed>/<buffer> buffer days used` or, for an ask,
 `- Not happened: <asker> asked <owner>, no reply for <N> working days`, each with its
