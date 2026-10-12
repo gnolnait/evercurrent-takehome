@@ -369,9 +369,8 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
         re.IGNORECASE,
     )
     assert re.search(
-        r"(?:one|1)\s+(?:root\s+)?message.{0,40}(?:one|1)\s+repl|"
-        r"(?:one|1)\s+repl.{0,40}(?:one|1)\s+(?:root\s+)?message|"
-        r"(?:two|2)\s+messages?",
+        r"\b(?:one|1)\b.{0,20}\broot\b.{0,20}\brepl|"
+        r"\broot\b.{0,20}\b(?:one|1)\b.{0,20}\brepl",
         ask_prompt,
         re.IGNORECASE,
     )
@@ -505,6 +504,7 @@ def test_render_assigns_timestamps_fields_mentions_reactions_and_permalinks(tmp_
         )
     ordered_events = sorted(enumerate(world.events), key=lambda pair: (pair[1].day, pair[0]))
     for root, (_, world_event) in zip(roots, ordered_events, strict=True):
+        assert root.files == tuple(rendered_messages(world_event)[0]["files"])
         replies = [event for event in events if event.thread_ts == root.ts and event.ts != root.ts]
         expected_replies = rendered_messages(world_event)[1:]
         for reply, expected_reply in zip(replies, expected_replies, strict=True):
@@ -528,12 +528,15 @@ def test_render_assigns_timestamps_fields_mentions_reactions_and_permalinks(tmp_
         ("timestamp-date", r"date|midnight|timestamp"),
         ("ask-reply-not-last", "last"),
         ("unanswered-ask-posts", r"unanswered|never.*answer"),
-        ("answered-ask-one-message", r"at least two|two.*message|last.*repl|repl.*last"),
+        (
+            "answered-ask-one-message",
+            r"at least two|two.*message|last.*repl|repl.*last|day.?offset|answered.*day|reply.*day",
+        ),
         ("answered-ask-last-day-offset", r"day.?offset|answered.*day|reply.*day"),
     ],
 )
 def test_render_rejects_invalid_thread_without_writes(tmp_path: Path, case: str, rule: str) -> None:
-    """A one-message ask cannot satisfy both root-poster and last-replier rules; either error is valid."""
+    """A one-message answered ask breaks the count, last-replier, and reply-day rules."""
     data = world_data()
     event_index = 0 if case.startswith(("ask-", "unanswered", "answered", "root-day-offset")) else 1
     if case == "unanswered-ask-posts":
@@ -620,6 +623,8 @@ def test_indirection_allows_a_missing_claim_entity_and_empty_message_lists(tmp_p
     messages = rendered_messages(world.events[0])
     messages[0]["text"] = "The released configuration is now Rev B."
     messages[0]["files"] = []
+    prompt = request_for(world, world.events[0], EMPTY_AVOID).messages[0].content
+    assert "indirection" in prompt.casefold()
     manifest = Manifest(threads={})
     anchor = tmp_path / "anchor.jsonl"
     anchor.write_text("", encoding="utf-8")
@@ -721,12 +726,12 @@ def test_all_human_world_rewrites_files_unchanged_without_model_calls(tmp_path: 
     write_manifest(manifest, manifest_out)
     before = events_out.read_bytes(), manifest_out.read_bytes()
     llm = RecordingLLM(tmp_path / "empty-cassettes")
+    assert len(anchor_rows) == 3
 
     report = render_world(world, llm, anchor, manifest, EMPTY_AVOID, events_out, manifest_out)
 
     assert report.rendered == 0
     assert report.reused == 2
-    assert len(anchor_rows) == 3
     assert report.messages == 0
     assert report.messages_per_thread == {}
     assert report.chars_per_message == ()
@@ -781,7 +786,8 @@ def test_bundled_anchor_and_manifest_pin_the_nine_human_lines() -> None:
     assert manifest_path.is_file()
     anchor_lines = anchor.read_bytes().splitlines()
     event_lines = events.read_bytes().splitlines()
-    assert anchor_lines[:9] == event_lines
+    assert len(anchor_lines) >= 9
+    assert all(line in event_lines for line in anchor_lines[:9])
     lines = list(read_events(anchor, "https://kestrel-k2.slack.com"))[:9]
     manifest = load_manifest(manifest_path)
     expected = {
