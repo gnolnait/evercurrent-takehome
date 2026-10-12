@@ -320,6 +320,15 @@ def test_leading_literal_cd_without_review_names_the_missing_marker(repo, tmp_pa
     assert "needs a second-model review of %s" % _head(repo) in err
 
 
+def test_leading_cd_with_a_redirect_is_followed(repo, tmp_path):
+    """2>&1 is a redirection, not a background `&`."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _verdict(repo, _head(repo))
+    rc, err = _run(_cd(repo) + CREATE + " 2>&1", elsewhere)
+    assert rc == 0, err
+
+
 def test_cd_after_the_creation_blocks(repo):
     """Only a leading cd is read; any later cd blocks (fail closed)."""
     _verdict(repo, _head(repo))
@@ -339,6 +348,8 @@ def test_cd_after_the_creation_blocks(repo):
     pytest.param('(pwd; cd "{d}"); ' + CREATE, id="subshell-later-cd"),
     pytest.param('CDPATH="{d}" cd . && ' + CREATE, id="cdpath-prefix"),
     pytest.param("cd {d}/$X && " + CREATE, id="unquoted-expansion-in-path"),
+    # `&` backgrounds the whole `cd ... && true` list.
+    pytest.param('cd "{d}" && true & ' + CREATE, id="backgrounded-cd-list"),
 ])
 def test_unreadable_dir_change_blocks(template, repo):
     _verdict(repo, _head(repo))
