@@ -44,7 +44,13 @@ def world() -> World:
                                 "expected_cadence_days": 1,
                             }
                         ],
-                    }
+                    },
+                    {
+                        "id": "G-OTHER",
+                        "name": "Unowned gate",
+                        "date": "2026-10-23",
+                        "buffer_days": 3,
+                    },
                 ],
             },
             "channels": [
@@ -215,7 +221,8 @@ def test_profile_for_builds_profile_from_human_persona() -> None:
     ids=["bot", "unknown"],
 )
 def test_profile_for_refuses_invalid_reader(user_id: str, error: type[Exception]) -> None:
-    with pytest.raises(error):
+    match = "bot" if user_id == "BBOT" else None
+    with pytest.raises(error, match=match):
         profile_for(world(), user_id)
 
 
@@ -245,34 +252,54 @@ def test_visibility_keeps_public_channel_for_non_member() -> None:
     assert selection.hidden == 0
 
 
-@pytest.mark.parametrize("channel_id", ["CHIDDEN", "UNKNOWN"], ids=["private", "unknown"])
-def test_visibility_drops_item_without_visible_evidence(channel_id: str) -> None:
-    selection = choose([item("hidden", channel_ids=(channel_id,))])
+def test_visibility_drops_item_in_hidden_thread() -> None:
+    row = item("hidden", channel_ids=("CHIDDEN",))
+
+    selection = choose([row])
 
     assert selection.lines == ()
     assert selection.hidden == 1
 
 
-def test_visibility_trims_hidden_evidence_from_kept_item() -> None:
-    original = item("mixed", channel_ids=("CHIDDEN", "CPUBLIC"))
+def test_visibility_keeps_only_evidence_from_visible_thread_channel() -> None:
+    original = item("mixed", channel_ids=("CPUBLIC", "CPRIVATE"))
 
     selection = choose([original])
 
     assert len(selection.lines) == 1
-    assert selection.lines[0].item.evidence == (original.evidence[1],)
+    assert selection.lines[0].item.evidence == (original.evidence[0],)
     assert selection.lines[0].item is not original
     assert len(original.evidence) == 2
     assert selection.hidden == 0
 
 
-def test_visibility_applies_to_absences() -> None:
+@pytest.mark.parametrize(
+    "permalink",
+    [
+        "https://kestrel.slack.com/archives/CPRIVATE/p1791993600000001",
+        "not a Slack permalink",
+    ],
+    ids=["another-channel", "unparseable"],
+)
+def test_visibility_drops_item_with_no_evidence_from_thread_channel(permalink: str) -> None:
+    row = item("no-thread-evidence").model_copy(
+        update={"evidence": (evidence("CPUBLIC").model_copy(update={"permalink": permalink}),)}
+    )
+
+    selection = choose([row])
+
+    assert selection.lines == ()
+    assert selection.hidden == 1
+
+
+def test_visibility_applies_thread_channel_to_absences() -> None:
     hidden = absence("absence-hidden", channel_ids=("CHIDDEN",))
-    mixed = absence("absence-mixed", channel_ids=("CHIDDEN", "CPUBLIC"))
+    visible = absence("absence-visible", channel_ids=("CPUBLIC", "CHIDDEN"))
 
-    selection = choose(absences=[hidden, mixed])
+    selection = choose(absences=[hidden, visible])
 
-    assert [line.item.item_id for line in selection.lines] == ["absence-mixed"]
-    assert selection.lines[0].item.evidence == (mixed.evidence[1],)
+    assert [line.item.item_id for line in selection.lines] == ["absence-visible"]
+    assert selection.lines[0].item.evidence == (visible.evidence[0],)
     assert selection.hidden == 1
 
 
@@ -301,7 +328,7 @@ def test_each_must_see_rule_is_kept(row: Item, reason_terms: tuple[str, ...]) ->
     selection = choose(
         absences=[row] if row.type == "absence" else [],
         items=[] if row.type == "absence" else [row],
-        table=load_priors(Path("config/priors.yaml")),
+        table=priors(min_score=1.1),
     )
 
     assert len(selection.lines) == 1
@@ -470,6 +497,40 @@ def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section:
     )
 
     assert selection.lines[0].section == section
+
+
+def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
+    ask = item("ask", type="ask", owner="UREADER")
+    missing = absence(
+        "ask-absence",
+        source="ask",
+        asker="UASKER",
+        owner="UREADER",
+        affected_roles=(),
+    ).model_copy(update={"thread_id": ask.thread_id})
+
+    selection = choose([ask], [missing])
+
+    assert [(line.item.item_id, line.section) for line in selection.lines] == [
+        ("ask-absence", "needs_you")
+    ]
+
+
+def test_ask_absence_for_asker_goes_to_not_happened() -> None:
+    ask = item("ask", type="ask", owner="UEMPTY")
+    missing = absence(
+        "ask-absence",
+        source="ask",
+        asker="UREADER",
+        owner="UEMPTY",
+        affected_roles=(),
+    ).model_copy(update={"thread_id": ask.thread_id})
+
+    selection = choose([ask], [missing])
+
+    assert [(line.item.item_id, line.section) for line in selection.lines] == [
+        ("ask-absence", "not_happened")
+    ]
 
 
 def test_each_section_caps_only_ranked_lines() -> None:
