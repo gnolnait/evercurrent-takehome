@@ -1,7 +1,8 @@
 import json
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
+from functools import partialmethod
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -13,8 +14,9 @@ from digest.cli import app
 from digest.daily.profile import Profile
 from digest.daily.render import build_digest, render_digest
 from digest.daily.select import Line, Section, Selection
-from digest.models import AbsenceDetail, Event, Evidence, Item
+from digest.models import AbsenceDetail, Claim, Event, Evidence, Item
 from digest.priors import load_priors
+from digest.settings import Settings
 from digest.store import Store
 from digest.world.load import load_world
 from digest.world.schema import World
@@ -181,7 +183,7 @@ def test_render_digest_orders_only_nonempty_sections_and_absences(
         "- Not happened: Nadia Brenner asked Tobias Lindqvist, no reply for 4 working days"
         in rendered
     )
-    assert "[must see]" in rendered
+    assert rendered.count("[must see]") == 1
     assert f"source: {evidence(7).permalink}" in rendered
     assert f"source: {evidence(8).permalink}" in rendered
 
@@ -280,13 +282,35 @@ def test_build_digest_refuses_pending_extract_deltas(tmp_path: Path, world: Worl
             build_digest(store, world, load_priors(), "U0ME01", DAY)
 
 
-def test_build_digest_refuses_store_replayed_before_day(tmp_path: Path, world: World) -> None:
+@pytest.mark.parametrize(
+    "until",
+    [
+        pytest.param("2026-10-13T06:59:59.999999-07:00", id="earlier-local-date"),
+        pytest.param("2026-10-15T06:59:58+00:00", id="utc-before-local-day-end"),
+    ],
+)
+def test_build_digest_refuses_store_replayed_before_day(
+    tmp_path: Path, world: World, until: str
+) -> None:
     with Store.open(tmp_path / "early.sqlite") as store:
-        set_replay_meta(store, until="2026-10-13T06:59:59.999999-07:00")
+        set_replay_meta(store, until=until)
         store.upsert_items([item()], prompt_version="m2.1", model="extract")
 
         with pytest.raises(ValueError, match=r"(?i)(before|replay|until).*(day|2026-10-14)"):
             build_digest(store, world, load_priors(), "U0ME01", DAY)
+
+
+def test_build_digest_omits_items_updated_after_day(tmp_path: Path, world: World) -> None:
+    after_day = f"{int(datetime(2026, 10, 15, 7, tzinfo=UTC).timestamp())}.000000"
+    future = item(item_id="FUTURE", title="Tomorrow's decision", last_updated=after_day)
+    with Store.open(tmp_path / "future.sqlite") as store:
+        set_replay_meta(store, until="2026-10-16T06:59:59.999999+00:00")
+        store.upsert_items([future], prompt_version="m2.1", model="extract")
+
+        rendered = build_digest(store, world, load_priors(), "U0ME01", DAY)
+
+    assert "Tomorrow's decision" not in rendered
+    assert "Nothing new for Nadia Brenner." in rendered
 
 
 def make_cli_store(path: Path, *, include_until: bool = True, include_item: bool = False) -> None:
@@ -301,7 +325,18 @@ def make_cli_store(path: Path, *, include_until: bool = True, include_item: bool
             }.items():
                 store.set_meta(key, value)
         if include_item:
-            store.upsert_items([item()], prompt_version="m2.1", model="extract")
+            gate_anchor = item(
+                claims=(
+                    Claim(
+                        entity="G-DVT1",
+                        attribute="status",
+                        value="open",
+                        message_ts=TS,
+                        authority="owner_stated",
+                    ),
+                )
+            )
+            store.upsert_items([gate_anchor], prompt_version="m2.1", model="extract")
 
 
 def invoke_run(db_path: Path, user_id: str) -> Any:
@@ -330,6 +365,7 @@ def test_cli_run_prints_digest_and_exits_zero(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Daily digest for Nadia Brenner (ME) - 2026-10-14" in result.stdout
     assert "Drawing released (PN-51010, G-TR1)" in result.stdout
+    assert "- Not happened:" in result.stdout
     assert evidence().permalink in result.stdout
 
 
@@ -372,6 +408,24 @@ def has_extract_cassette(root: Path) -> bool:
     return False
 
 
+def test_cli_demo_reports_cassette_miss_without_api_key_or_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty_cassettes = tmp_path / "empty-cassettes"
+    empty_cassettes.mkdir()
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setenv("DIGEST_MODE", "replay")
+    monkeypatch.setenv("DIGEST_CASSETTES", str(empty_cassettes))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Settings, "__init__", partialmethod(Settings.__init__, _env_file=None))
+
+    result = runner.invoke(app, ["demo"])
+
+    assert result.exit_code == 1, result.output
+    assert re.search(r"no cassette for key", result.output, re.IGNORECASE), result.output
+
+
 @pytest.mark.skipif(
     not has_extract_cassette(CASSETTES),
     reason="data/cassettes holds no extract cassette",
@@ -383,6 +437,7 @@ def test_cli_demo_prints_three_offline_digests_under_sixty_seconds(
     monkeypatch.setenv("DIGEST_MODE", "replay")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Settings, "__init__", partialmethod(Settings.__init__, _env_file=None))
 
     started = perf_counter()
     result = runner.invoke(app, ["demo"])
