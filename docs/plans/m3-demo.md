@@ -209,6 +209,27 @@ cassette exits 1 with the `CassetteMiss` message; an extract run with a failed t
 exits 1 naming the failed-thread count, before any digest is built. The golden-implied
 overlap target of SPEC A1 is M3 proper.
 
+B6.4 `digest post` (added 2026-10-12 so the demo can be seen in Slack): it builds the
+same three digests as `digest demo`, from the same day (`--day`, default 6), and posts one
+Slack message per reader, in reader order, to the incoming webhook in the environment
+variable `SLACK_WEBHOOK_URL` (also read from `.env`). It is the only command that sends
+anything over the network in replay mode, and it reads no model API key.
+- Message: Block Kit. A header block with the reader's name, role and date; then for each
+  non-empty section a section block with the bold section title, and one section block
+  per line holding the same text as the terminal line in Slack mrkdwn (the title in
+  bold, `[must see]` in bold, each source as `<permalink|source>`). Text from the model
+  and from Slack is escaped for mrkdwn (`&`, `<`, `>`), so it cannot form a link or a
+  mention. A section block's text stays under 3000 characters (cut with an ellipsis), and
+  a message holds at most 50 blocks: lines past the limit are left out and a last block
+  says how many. The plain-text `text` field holds the header line, for notifications.
+- It posts nothing until all three digests are built; a refusal or cassette miss exits 1
+  as `digest demo` does.
+- No `SLACK_WEBHOOK_URL`: exit 1 naming the variable. A post that Slack refuses (status
+  other than 200): exit 1 with the reader, the status and Slack's response body, and no
+  further posts. No output, log line or error ever contains the webhook URL.
+- The source links point to the synthetic workspace `kestrel-k2.slack.com`, which does
+  not exist; the README says so.
+
 ## Tests
 
 `tests/test_select.py`: B5.1 to B5.5 on a small synthetic world (one private channel,
