@@ -472,12 +472,20 @@ def test_extract_request_orders_sections_filters_rows_and_states_rules() -> None
         assert word in system
     assert "For an ask, the owner is the person asked, not the person who asks." in EXTRACT_SYSTEM
     assert re.search(r"done.*complete|complete.*done", system, re.DOTALL)
-    assert (
-        "A question about a task is not evidence, and a status roll-up that lists a task as open "
-        "is not evidence." in EXTRACT_SYSTEM
-    )
     assert re.search(r"tasks?.*list", system, re.DOTALL)
     assert any(word in system for word in ("run", "result", "review", "sign-off", "received"))
+
+
+def test_extract_system_requires_progress_for_task_links() -> None:
+    assert (
+        "A task link needs a progress report: a question about a task, or a status roll-up that "
+        "lists a task as open, is not a task link. A question can still be an ask item."
+        in EXTRACT_SYSTEM
+    )
+
+
+def test_extract_system_omits_old_task_question_rule() -> None:
+    assert "A question about a task is not evidence" not in EXTRACT_SYSTEM
 
 
 def test_extract_system_names_tasks_by_gate_date_without_calling_them_open() -> None:
@@ -486,8 +494,8 @@ def test_extract_system_names_tasks_by_gate_date_without_calling_them_open() -> 
     assert "open checklist tasks" not in system
 
 
-def test_extract_prompt_version_is_m2_2() -> None:
-    assert EXTRACT_PROMPT_VERSION == "m2.2"
+def test_extract_prompt_version_is_m2_3() -> None:
+    assert EXTRACT_PROMPT_VERSION == "m2.3"
 
 
 def test_extract_request_handles_missing_root_and_omits_world_event_ids() -> None:
