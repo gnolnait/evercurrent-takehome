@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.9, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.10, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -43,7 +43,8 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
-| 1 Triage and extraction | `m2-extract` | `digest/extract/__init__.py`, `digest/extract/schema.py`, `digest/extract/prompts.py`, `digest/extract/normalize.py`, `digest/extract/verify.py`, `digest/extract/triage.py`, `digest/extract/stage.py`, `digest extract` | `tests/test_extract.py`, `tests/test_store.py` (new tests appended) |
+| 0 Stubs and shared pieces | `m2-stubs` | interfaces and fixture content (orchestrator); `digest/store.py` item and triage methods, `digest/priors.py`, `digest/world/manifest.py`, `World.glossary()` (Opus implementer) | `tests/test_priors.py`, `tests/test_store.py` (appended), `tests/test_world.py` (appended, with the channel-count and corpus-bound edits) |
+| 1 Triage and extraction | `m2-extract` | `digest/extract/__init__.py`, `digest/extract/schema.py`, `digest/extract/prompts.py`, `digest/extract/normalize.py`, `digest/extract/verify.py`, `digest/extract/triage.py`, `digest/extract/stage.py`, `digest extract` | `tests/test_extract.py` |
 | 2 Absences and golden labels | `m2-absence-golden` | `digest/absence.py`, `digest/world/golden.py`, the ask validation rules in `digest/world/schema.py`, the working-day helpers in `digest/project.py`, `digest absences`, `digest world golden` | `tests/test_absence.py`, `tests/test_golden.py`, `tests/test_world.py` (new tests appended) |
 | 3 Corpus renderer | `m2-corpus` | `digest/corpus/__init__.py`, `digest/corpus/render.py`, `digest/corpus/prompts.py`, `digest/corpus/avoid.py`, `data/world/kestrel/anchor.jsonl`, `data/world/kestrel/manifest.json` (anchor entries), `digest world render` | `tests/test_corpus.py` |
 | 4 Extraction eval | `m2-eval` | `digest/eval/__init__.py`, `digest/eval/extraction.py`, `Cassettes.recorded_models` in `digest/llm/cassette.py`, `digest eval` | `tests/test_eval.py`, `tests/test_llm.py` (one test appended) |
@@ -103,18 +104,27 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
   file and the line. Model output is not ours: it is verified and dropped field by
   field with counts, never trusted and never repaired.
 
-## Stubs commit
+## Stubs pull request
+
+Three commits on `m2-stubs`, forked from `m2-plan`: interfaces, shared types, fixture
+content and configuration, by the orchestrator; the tests below, by the Codex test author,
+RED against the stubs; the implementation of the shared pieces, by an Opus implementer,
+with the proofs recorded before it. The pull request opens as a draft and rebases onto
+`main` after the plan pull request merges.
 
 - `digest/models.py`: the shared types below.
 - `digest/schema.sql`: the `items` and `triage` tables. `digest/store.py`: the six new
-  methods (B1.8), implemented; units 1 and 2 read them.
+  methods (B0.2), implemented in this pull request; units 1 and 2 read them.
 - `digest/project.py`: `add_working_days` and `working_days_between` as stubs.
-- `digest/priors.py` and `config/priors.yaml`, implemented; units 1 and 2 read them.
+- `digest/priors.py` and `config/priors.yaml`, implemented in this pull request (B0.1);
+  units 1 and 2 read them.
 - `digest/world/schema.py`: `Channel.private`, `Ask`, `WorldEvent.ask` (fields only; the
-  validation rules of B2.8 are unit 2 code) and `World.glossary()`, implemented.
+  validation rules of B2.8 are unit 2 code) and `World.glossary()`, implemented in this
+  pull request (B0.3).
 - `data/world/kestrel/world.yaml`: the private channel `kestrel-leads` with its one
   event, and two ask events (B2.9). `config/project.yaml` is unchanged.
-- `digest/world/manifest.py`, implemented; units 2 and 3 read it.
+- `digest/world/manifest.py`, implemented in this pull request (B0.4); units 2 and 3
+  read it.
 - `digest/world/golden.py`, `digest/absence.py`, `digest/extract/*`, `digest/corpus/*`,
   `digest/eval/*`: interfaces that raise `NotImplementedError`; `prompts.py` modules hold
   the version constants and empty prompt strings.
@@ -127,8 +137,42 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 - `tests/test_world.py`: the bundled-world test that pins seven channels and their
   names gains the eighth, and the corpus test's `8 <= len(events) <= 14` becomes a lower
   bound of 8 (the data pull request regenerates `events.jsonl` with every scripted
-  thread, and B5.1 then asserts the manifest covers every event). This is the one test edit in the stubs pull request; it gets its own
-  RED-GREEN proof like any other.
+  thread, and B5.1 then asserts the manifest covers every event). These edits ride in the
+  test commit with the B0 tests and get their own proofs.
+
+### Behaviours
+
+B0.1 `load_priors` reads `config/priors.yaml` and validates: `miss_cost_ratio > 0`,
+`ask_reply_cadence_days >= 1`, unknown keys are errors. `keep_threshold` is
+`1 / (1 + miss_cost_ratio)`; with the default 10 it is `1/11`.
+
+B0.2 Store: `upsert_items` is idempotent on `item_id` and replaces every other column,
+`prompt_version` and `model` included; it raises `ValueError` for an item of type
+`absence` (the table has no column for `absence`, and absences are not stored).
+`items_for_thread` returns the thread's items in `first_seen` order. `items(as_of)`
+returns items whose `last_updated` is at or before `as_of`, in `first_seen` order.
+`record_triage` upserts on the four-column key; `triage_decision` returns the row or
+None; `triage_for_thread` returns the thread's decisions in `last_ts` order. Column round trip: `Item` in, equal `Item` out (JSON columns, date, enums).
+
+B0.3 `World.glossary()` returns every entity (id, type, description, aliases) and every
+persona (user id, name, role or None for a bot, aliases, authority), in file order.
+
+B0.4 `load_manifest` reads `{"threads": {<event id>: {"channel_id", "thread_ts",
+"authored"}}}`; `write_manifest` writes it with keys sorted, two-space indent and a
+trailing newline, so a round trip is byte-stable. A missing file raises
+`FileNotFoundError`; an unknown key, an `authored` value outside `human | render` or a
+`thread_ts` that does not match `TS_PATTERN` raises `ValidationError`. An empty
+`threads` mapping is valid.
+
+### Tests
+
+`tests/test_priors.py` (new): B0.1 on a file under `tmp_path` and on the bundled
+`config/priors.yaml`; null case: a file with the `absence` block missing (error).
+`tests/test_store.py` (appended): B0.2, including the null columns (`owner`, `due`,
+`resolved_by` None), `absence` None, and the refused absence item. `tests/test_world.py`
+(appended): B0.3 on the bundled world (a bot with `role=None`, an entity with no aliases),
+B0.4 (round trip, missing file, bad `authored`, empty mapping), and the channel-count and
+corpus-bound edits. No consolidation of existing tests.
 
 ## Shared types (`digest/models.py`, stubs commit)
 
@@ -337,7 +381,8 @@ def resolve_person(text: str, glossary: Glossary) -> str | None         # user i
 ```python
 DROP_FIELDS = ("evidence.unknown_message", "evidence.quote", "item_id.unknown",
                "entities.unresolved", "claims.entity", "claims.message",
-               "owner.unresolved", "due.format", "tasks.unknown", "tasks.message")
+               "owner.unresolved", "due.format", "tasks.unknown", "tasks.message",
+               "evidence.stale", "evidence.stale_item")
 
 class Verified(Frozen):
     items: tuple[Item, ...]
@@ -447,9 +492,7 @@ M3's `run` decides what it persists per impression.
 
 ### Behaviours
 
-B1.1 `load_priors` reads `config/priors.yaml` and validates: `miss_cost_ratio > 0`,
-`ask_reply_cadence_days >= 1`, unknown keys are errors. `keep_threshold` is
-`1 / (1 + miss_cost_ratio)`; with the default 10 it is `1/11`.
+B1.1 Moved to B0.1: the priors loader lands in the stubs pull request.
 
 B1.2 `triage` sends `triage_request` with `model="classify"` through `llm.extract(...,
 TriageOutput)`. The request carries the channel purpose when known, the thread root
@@ -499,9 +542,14 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
   null `item_id` makes a new item with id `f"{thread_id}#{last_ts}#{n}"`, `n` the
   item's index in the output (unique because a store holds one extraction prompt
   version, B1.6). An existing id keeps `item_id`; its `evidence` is the
-  old entries followed by the new ones not already present (deduplicated by
-  `message_ts`, output order kept, so `evidence[0]` stays the first message the item
-  cited), and its
+  old entries followed by the new ones for messages not already cited (output order
+  kept, so `evidence[0]` stays the first message the item cited); a new entry for an
+  already cited `message_ts` replaces the old one in place, because it was verified
+  against the current text; an old entry whose message is in `citable` (the delta
+  carries the edit) is re-checked against the current text and dropped when its quote
+  no longer matches (`evidence.stale`); an update that would leave no evidence is
+  refused and counted (`evidence.stale_item`), the item stays as it was, and the
+  retraction of items edited away from their evidence is M3's rule with deletes, and its
   `claims` the union deduplicated by `(entity, attribute, value, message_ts)`; its
   `tasks` the union deduplicated by `(task, effect, message_ts)`, so a `done` link is
   never erased by a later update that omits it; every scalar field, `entities` and `affected_roles`
@@ -549,13 +597,7 @@ returned: since the last `ok` extract run, root included. A thread dropped at re
 1 and kept at revision 2 therefore sees only revision 2's new messages plus the root;
 revision 1 was judged to carry no project information.
 
-B1.8 Store: `upsert_items` is idempotent on `item_id` and replaces every other column,
-`prompt_version` and `model` included; it raises `ValueError` for an item of type
-`absence` (the table has no column for `absence`, and absences are not stored).
-`items_for_thread` returns the thread's items in `first_seen` order. `items(as_of)`
-returns items whose `last_updated` is at or before `as_of`, in `first_seen` order.
-`record_triage` upserts on the four-column key; `triage_decision` returns the row or
-None; `triage_for_thread` returns the thread's decisions in `last_ts` order. Column round trip: `Item` in, equal `Item` out (JSON columns, date, enums).
+B1.8 Moved to B0.2: the store methods land in the stubs pull request.
 
 B1.9 `digest extract` on a store replayed to a day, in replay mode with the matching
 cassettes, exits 0 and prints the report. Without `meta.until` it prints the reason and
@@ -566,21 +608,17 @@ log record.
 B1.10 Logging: `triage_decided` (thread id, probability, threshold, kept),
 `extract_thread` (thread id, items written, drops), `extract_failed`. Never text.
 
-B1.11 `World.glossary()` returns every entity (id, type, description, aliases) and every
-persona (user id, name, role or None for a bot, aliases, authority), in file order.
+B1.11 Moved to B0.3: `World.glossary()` lands in the stubs pull request.
 
 ### Tests
 
-`tests/test_extract.py`: B1.1 to B1.7, B1.9 and B1.11 (CliRunner, tmp store, cassette dir under
+`tests/test_extract.py`: B1.2 to B1.7 and B1.9 (CliRunner, tmp store, cassette dir under
 `tmp_path` written with `Cassettes.put` from `LLMResponse`s the test builds; the LLM
 runs in replay mode so no backend is needed). B1.4 has Hypothesis property tests over a
 generated glossary. B1.5 is parametrized over each drop field. Null cases: an item with
 `owner=None`, `due=None`, empty `claims` and empty `tasks`; a delta with `root=None`; a
 glossary with a person who has no role (a bot); `verify` on an `Extraction` with no
 items; a probability of exactly the threshold (kept).
-
-`tests/test_store.py` (appended): B1.8, including the null columns (`owner`, `due`,
-`resolved_by` None) and `absence` None.
 
 ### Acceptance
 
@@ -1216,6 +1254,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | One prompt version for the extract stage | `EXTRACT_PROMPT_VERSION` covers the triage and extraction prompts | A separate triage constant re-ran nothing on its own; one constant gives a prompt edit one visible effect. |
 | `digest extract` steps one day at a time | The CLI runs the stage per working day up to `meta.until` | A multi-day delta is a different request from the one-day deltas the eval records, so replay would miss its cassettes. |
 | Golden freshness | The eval re-derives the golden set and refuses a difference | A cadence check alone misses a world or manifest edit. |
+| Edited evidence | A re-cited message replaces its entry; an entry whose message changed in the delta is re-checked and dropped when stale; an item left with no evidence keeps its state and is counted | The store holds one version per message (M1), so a kept quote must match the current text; the corpus has no edits in M2 and retraction belongs with M3's delete rule. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
 
