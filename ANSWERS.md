@@ -63,9 +63,10 @@ In this repo (built): `src/digest/extract/normalize.py` maps glossary aliases an
 single-letter revision suffix, and `src/digest/extract/verify.py` normalizes revision and
 quantity forms and drops a claim whose entity does not resolve. Designed, not built: the
 linker (blocking, field diff and the adjudicator), ECO and PO id parsers, and checks of
-values against the cited text (SPEC section 5). The SPEC day-3 rule cut the ledger and the
-linker from the demo: the eval's claim precision, a stricter proxy for keying precision,
-is 0.537 (n = 41) against 0.8. No vector database is used.
+values against the cited text (SPEC section 5). The ledger and the linker are cut from the
+demo under the SPEC day-3 rule, as a conservative scope decision: the eval's claim
+precision is 0.537 (n = 41), but it uses stricter matching on golden threads only, so it
+does not establish whether keying precision meets 0.8. No vector database is used.
 
 ## Evaluation: how do you evaluate LLM-generated content and summaries?
 

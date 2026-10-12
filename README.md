@@ -13,10 +13,11 @@ message in code, and code builds every link.
 
 The claims ledger and the stale-belief lines ("you were told Rev B; it is Rev C") are cut.
 SPEC section 9 set a rule before the build: if claim keying precision is below 0.8, cut
-the ledger to the ranker plus absences. The eval has no separate keying metric. Its claim
-precision is stricter: it also needs an equal value on rev, gate date, qty and owner, and
-it counts any claim the golden labels do not list as wrong, even a true one. That proxy measures
-0.537 (n = 41), so the ledger is not in this slice. The design stays in `SPEC.md` and
+the ledger to the ranker plus absences. The eval has no direct keying metric. Its claim
+precision, 0.537 (n = 41), uses stricter matching on claims in golden threads only: it
+also needs an equal value on rev, gate date, qty and owner, and it counts any claim the
+golden labels do not list as wrong, even a true one. It does not establish whether keying
+precision meets 0.8. The cut is a conservative scope decision under that uncertainty. The design stays in `SPEC.md` and
 `docs/decisions.md` (D19, D21).
 
 Measured on the recorded corpus (`reports/eval-2026-10-23.md`):
@@ -25,7 +26,7 @@ Measured on the recorded corpus (`reports/eval-2026-10-23.md`):
 | --- | --- | --- | --- |
 | Citation validity | 1.0 | 73 | 1.0 (gate) |
 | Triage recall | 1.0 | 30 | |
-| Claim precision | 0.537 | 41 | 0.8 to keep the ledger |
+| Claim precision (strict match, golden threads) | 0.537 | 41 | |
 | Claim recall | 0.629 | 35 | |
 | Detected absences that are false | 0.304 | 23 | |
 | Absence recall | 0.516 | 31 | |
