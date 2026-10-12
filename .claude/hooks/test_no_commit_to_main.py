@@ -112,6 +112,7 @@ def test_blocks_plain_project_commit_on_main(repos):
         pytest.param("GIT.EXE commit -m update", id="git-exe-upper-case"),
         pytest.param("/usr/bin/git commit -m update", id="full-path"),
         pytest.param('"/c/Program Files/Git/cmd/git.exe" commit -m update', id="windows-full-path"),
+        pytest.param("if true; then git.exe commit -m update; fi", id="after-then-keyword"),
     ],
 )
 def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):

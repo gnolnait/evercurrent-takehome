@@ -190,11 +190,20 @@ def test_blocks_windows_shell_syntax_forms():
     assert _verdict("powershell -Command 'git `\n  commit --no-verify -m x'") == "BLOCK"
     assert _verdict('cmd /c "call git.exe commit --no-verify -m x"') == "BLOCK"
     assert _verdict('cmd /c "echo It\'s done & git commit --no-verify -m x"') == "BLOCK"
+    assert _verdict('cmd //c"git commit --no-verify -m x & echo done"') == "BLOCK"
+    assert _verdict('pwsh -Command "git commit -an -m x"') == "BLOCK"
 
 
 def test_bypass_words_as_powershell_arguments_fail_closed():
-    """The text is not parsed, so bypass words that are only printed block too."""
+    """The text is not parsed, so bypass words that are only printed block too,
+    and so does any short git option cluster that holds `n`."""
     assert _verdict("powershell Write-Output git commit --no-verify") == "BLOCK"
+    assert _verdict('cmd //c "git log -n 5"') == "BLOCK"
+
+
+def test_allows_long_options_that_hold_n_in_windows_shells():
+    assert _verdict('powershell -ExecutionPolicy Bypass -NoProfile -Command "git status"') == "ALLOW"
+    assert _verdict('cmd //c "git --no-pager log"') == "ALLOW"
 
 
 def test_blocks_encoded_powershell_command():

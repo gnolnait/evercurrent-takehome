@@ -209,6 +209,11 @@ BLOCK = [
     ),
     # cmd reads the command glued to /c, and `#` is plain text there.
     pytest.param("cmd //cgh pr merge 5", id="cmd-attached-command"),
+    pytest.param('cmd //c"gh pr merge 5 & echo done"', id="cmd-attached-quoted-command"),
+    pytest.param(
+        "powershell -ExecutionPolicy Bypass -EncodedCommand ZwBoAA==",
+        id="powershell-encoded-after-option-value",
+    ),
     pytest.param('cmd //c "echo # header & gh pr merge 5"', id="cmd-hash-is-not-a-comment"),
     pytest.param('cmd /c "echo It\'s ready & gh pr merge 5"', id="cmd-apostrophe-is-text"),
     pytest.param('cmd /c "call gh.exe pr merge 5"', id="cmd-call"),
