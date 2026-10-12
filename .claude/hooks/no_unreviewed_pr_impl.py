@@ -65,6 +65,9 @@ OVERRIDE_VAR = "PR_REVIEW_OVERRIDE"
 LOG_NAME = "pr-create.jsonl"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 GQL_CREATE = re.compile(r"createPullRequest")
+# The GraphQL endpoint as an argument: gh's bare "graphql", or a URL whose path
+# is /graphql or /api/graphql. A field value (head=fix/graphql) does not match.
+GQL_ENDPOINT = re.compile(r"^(graphql|(https?://)?[^/\s=]+(/api)?/graphql)/?(\?.*)?$")
 PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
 MAY_CREATE = ("gh", "pulls", "PullRequest")
@@ -170,8 +173,7 @@ def _create_kind(cmdword, rest):
     is_api = (cmdword == "gh" and "api" in rest) or cmdword in HTTP_TOOLS
     if not is_api:
         return "", False
-    # gh takes the endpoint "graphql" or a full URL; HTTP tools take the URL.
-    graphql = any(t == "graphql" or "/graphql" in t for t in rest)
+    graphql = any(GQL_ENDPOINT.match(t) for t in rest)
     if graphql:
         if any(GQL_CREATE.search(t) for t in rest):
             return "GraphQL createPullRequest", True
