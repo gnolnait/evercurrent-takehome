@@ -92,6 +92,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" startup || :; fi; exit 0",
+            "timeout": 15
+          }
+        ]
       }
     ]
   }

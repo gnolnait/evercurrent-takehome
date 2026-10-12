@@ -49,6 +49,22 @@ on each PR's next event (a push, a reopen).
   the new job on a PR, push to it; a rebase is not required.
 
 
+## A scan of a commit range misses the other branches
+
+A scan limited to a commit range (the `secrets` job reads the PR's commits) does not see
+the history of other branches. Its findings there show up only when a later PR carries
+that history.
+
+- **Check:** before the merge, run the scanner over the history of all branches. With no
+  `--log-opts`, `gitleaks git .` reads every local ref. For each false positive, add an
+  allowlist entry scoped by rule and field. Then put a real match in a file next to the
+  allowed field, and scan it with `gitleaks dir` (`gitleaks git` reads only commits).
+  The scan must find the match.
+- **Anchor:** the gitleaks job passed on the 6 commits of PR #39. All branches held 104
+  `generic-api-key` hits on the cassette `key` hash, in one m3-data commit. Without
+  `.gitleaks.toml`, the merge of m3-data (PR #41) fails on main.
+
+
 ## `|| true` in a `run:` step fails open
 
 `cmd || true` (and `|| :`, `|| continue`) turns a failed command into an empty result

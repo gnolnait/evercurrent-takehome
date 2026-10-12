@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """context_snapshot - work-state handoff across a compaction or a spawn.
 
-Four modes. The `context-snapshot` bash fence launches the three hook modes:
+Five modes. The `context-snapshot` bash fence launches the four hook modes:
 
 - `snapshot` (PreCompact): write `notes/handoffs/auto-state.md` with the git,
   PR and notes state of the project. The model does not write this file, so it
@@ -9,6 +9,10 @@ Four modes. The `context-snapshot` bash fence launches the three hook modes:
 - `print` (SessionStart, matcher `compact`): print a short preface, the
   auto-state file and the newest hand-written handoff. Claude Code adds this
   stdout to the resumed context.
+- `startup` (SessionStart, matcher `startup`): fetch `main` from origin, then
+  print how many commits the session HEAD is behind `origin/main` and the
+  titles of the open PRs. A new session then sees work that already exists.
+  The fetch updates the remote-tracking ref that all worktrees share.
 - `spawn-hook` (PreToolUse on `mcp__ccd_session__spawn_task`): write a handoff
   under `notes/handoffs/spawn/` and add its path to the spawn prompt.
 - `spawn` (run by the orchestrator): write the same handoff before the call
@@ -32,6 +36,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 AUTO_STATE = "auto-state.md"
@@ -45,9 +50,32 @@ MAX_PRS = 10
 MAX_PRINT_CHARS = 9000
 # Total time for all subprocess calls in one run, below each hook's settings
 # timeout (60 s for PreCompact, 15 s for SessionStart, 30 s for spawn_task).
-BUDGET_S = {"snapshot": 45.0, "print": 10.0, "spawn-hook": 20.0, "spawn": 45.0}
+BUDGET_S = {"snapshot": 45.0, "print": 10.0, "startup": 10.0, "spawn-hook": 20.0, "spawn": 45.0}
+# A fetch took 1 to 5 s on 2026-10-12 on a loaded machine. `gh pr list` runs
+# at the same time, so the fetch can use most of the 10 s startup budget.
+FETCH_TIMEOUT_S = 8.0
+BASE = "main"
 
 _deadline = [0.0]
+
+
+def _proc(argv, cwd, timeout=10.0, env=None, capture=True):
+    """The finished process, or None on a launch error, timeout or spent budget.
+
+    `capture=False` discards the output. After a timeout, a captured run on
+    Windows waits for every child that holds the pipe, with no time limit.
+    """
+    left = _deadline[0] - time.monotonic()
+    if left <= 0.5:
+        return None
+    if capture:
+        io = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace"}
+    else:
+        io = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    try:
+        return subprocess.run(argv, cwd=cwd, timeout=min(timeout, left), env=env, **io)
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def run(argv, cwd, timeout=10.0):
@@ -56,22 +84,8 @@ def run(argv, cwd, timeout=10.0):
     A non-zero exit still returns stdout: `gh pr checks` exits 8 while checks
     are pending and prints valid JSON all the same.
     """
-    left = _deadline[0] - time.monotonic()
-    if left <= 0.5:
-        return None
-    try:
-        out = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=min(timeout, left),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout
+    out = _proc(argv, cwd, timeout)
+    return out.stdout if out else None
 
 
 def primary_root(start):
@@ -174,7 +188,8 @@ def check_summary(gh, root, number):
     return "checks: " + ", ".join("%s %d" % kv for kv in sorted(counts.items()))
 
 
-def pr_lines(root):
+def pr_lines(root, checks=True):
+    """One line per open PR. `checks=False` skips the `gh pr checks` call per PR."""
     gh = shutil.which("gh")
     if not gh:
         return ["- skipped: gh not found"]
@@ -195,13 +210,13 @@ def pr_lines(root):
             continue
         number = pr.get("number")
         lines.append(
-            "- #%s %s [%s]%s %s"
+            "- #%s %s [%s]%s%s"
             % (
                 number,
                 str(pr.get("title", ""))[:80],
                 pr.get("headRefName", ""),
                 " draft" if pr.get("isDraft") else "",
-                check_summary(gh, root, number),
+                " " + check_summary(gh, root, number) if checks else "",
             )
         )
     if len(prs) > MAX_PRS:
@@ -350,6 +365,44 @@ def render_resume(root):
     return preface + "\n" + "\n".join(parts)
 
 
+def render_startup(start, root):
+    """The startup report: commits behind origin/main and open PR titles.
+
+    A failed or slow fetch adds a note; the count then uses the last fetch.
+    """
+    lines = ["Session start: freshness check. Read it before you start new work."]
+    # The PR list does not need the fetch, so the two run at the same time.
+    pool = ThreadPoolExecutor(max_workers=1)
+    prs = pool.submit(pr_lines, root, False)
+    pool.shutdown(wait=False)
+    fetch = _proc(
+        # An explicit destination: a single-branch clone does not map main.
+        ["git", "fetch", "-q", "origin", "+refs/heads/%s:refs/remotes/origin/%s" % (BASE, BASE)],
+        start,
+        timeout=FETCH_TIMEOUT_S,
+        # A credential prompt waits for a person. Git Credential Manager
+        # shows a sign-in window, which GIT_TERMINAL_PROMPT does not stop.
+        env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never"),
+        # git-remote-https outlives a killed git and holds a captured pipe.
+        capture=False,
+    )
+    if fetch is None or fetch.returncode != 0:
+        lines.append("- git fetch failed or timed out. The count below uses the last fetch.")
+    out = (run(["git", "rev-list", "--count", "HEAD..origin/" + BASE], start) or "").strip()
+    if not out.isdigit():
+        lines.append("- No behind count: git rev-list HEAD..origin/%s failed." % BASE)
+    elif out == "0":
+        lines.append("- This checkout is up to date with origin/%s." % BASE)
+    else:
+        lines.append(
+            "- This checkout is %s commit%s behind origin/%s. Update it before you build on it."
+            % (out, "" if out == "1" else "s", BASE)
+        )
+    lines.append("- Open PRs. Make sure that none of them already does your task:")
+    lines.extend("  " + line for line in prs.result())
+    return "\n".join(lines) + "\n"
+
+
 # Spawn handoffs go in a subdirectory: they belong to the child session, so
 # the compaction printer must not take one as this session's newest handoff.
 SPAWN_DIR = os.path.join(
@@ -452,14 +505,15 @@ def main(argv):
         return spawn_cli(argv[1:])
     try:
         payload = read_payload()
-        root = primary_root(start_dir(payload))
+        start = start_dir(payload)
+        root = primary_root(start)
         if not root:
             return 0
         if mode == "snapshot":
             trigger = payload.get("trigger")
             snapshot(root, trigger if isinstance(trigger, str) else "manual run")
-        elif mode == "print":
-            text = render_resume(root)
+        elif mode in ("print", "startup"):
+            text = render_resume(root) if mode == "print" else render_startup(start, root)
             # On Windows a piped sys.stdout is cp1252, and one character
             # outside it (an arrow, a check mark) raised and lost the output.
             sys.stdout.reconfigure(encoding="utf-8")

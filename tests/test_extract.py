@@ -5,6 +5,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from functools import partialmethod
+from itertools import permutations
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -909,9 +910,9 @@ def test_verify_new_item_sets_ids_times_permalink_authority_and_nulls() -> None:
         {},
     )
     item, second_item = result.items
-    assert item.item_id == f"{delta_row.thread_id}#{delta_row.last_ts}#0"
-    assert second_item.item_id == f"{delta_row.thread_id}#{delta_row.last_ts}#1"
-    assert delta_row.last_ts != max(entry.message_ts for entry in item.evidence)
+    assert item.item_id == f"{delta_row.thread_id}#{ROOT}#0"
+    assert second_item.item_id == f"{delta_row.thread_id}#{ROOT}#1"
+    assert delta_row.last_ts != min(entry.message_ts for entry in item.evidence)
     assert item.entities == ("PN-31010",)
     assert item.owner is None and item.due is None
     assert item.first_seen == ROOT
@@ -924,6 +925,231 @@ def test_verify_new_item_sets_ids_times_permalink_authority_and_nulls() -> None:
     assert [claim.entity for claim in item.claims] == ["PN-31010", "PN-31010"]
     assert [claim.authority for claim in item.claims] == ["owner_stated", "hearsay"]
     assert result.drops == dict.fromkeys(DROP_FIELDS, 0)
+
+
+@st.composite
+def item_id_threads(draw: st.DrawFn) -> tuple[Event, ...]:
+    offsets = draw(st.lists(st.integers(2, 999999), min_size=1, max_size=3, unique=True))
+    return (event(), *(event(f"1760000000.{offset:06d}") for offset in sorted(offsets)))
+
+
+@settings(max_examples=30, derandomize=True)
+@given(item_id_threads(), st.data())
+def test_verify_new_ids_are_unique_across_delta_sequence(
+    thread: tuple[Event, ...], data: st.DataObject
+) -> None:
+    _, _, tasks = verify_context()
+    old = stored_item(item_id=f"C1:{ROOT}#{ROOT}#0")
+    existing = {old.item_id: old}
+    expected_count = len(existing)
+    for size in range(1, len(thread) + 1):
+        prefix = thread[:size]
+        delta_row = delta(*prefix, root=thread[0])
+        citations = data.draw(
+            st.lists(
+                st.lists(
+                    st.sampled_from(prefix), min_size=1, max_size=size, unique_by=lambda e: e.ts
+                ),
+                min_size=1,
+                max_size=3,
+            )
+        )
+        raw = [
+            extracted_item(
+                title=f"Fact {size}-{index}",
+                evidence=[ExtractedEvidence(message_ts=row.ts, quote=row.text) for row in rows],
+            )
+            for index, rows in enumerate(citations)
+        ]
+
+        result = verify(
+            Extraction(rationale="New facts in each prefix.", items=raw),
+            delta_row,
+            {row.ts: row for row in prefix},
+            glossary(),
+            tasks,
+            existing,
+        )
+
+        ids = [item.item_id for item in result.items]
+        assert len(ids) == len(raw) == len(set(ids))
+        assert set(ids).isdisjoint(existing)
+        for item_id in ids:
+            thread_id, anchor, suffix = item_id.split("#")
+            assert thread_id == delta_row.thread_id
+            assert anchor in {row.ts for row in prefix}
+            assert re.fullmatch(r"0|[1-9][0-9]*", suffix)
+        existing.update((item.item_id, item) for item in result.items)
+        expected_count += len(raw)
+
+    assert len(existing) == expected_count
+    assert len({item.item_id for item in existing.values()}) == expected_count
+
+
+@settings(max_examples=30, derandomize=True)
+@given(item_id_threads(), st.data())
+def test_verify_new_id_is_invariant_to_evidence_order(
+    thread: tuple[Event, ...], data: st.DataObject
+) -> None:
+    _, _, tasks = verify_context()
+    delta_row = delta(*thread, root=thread[0])
+    cited = data.draw(
+        st.lists(
+            st.sampled_from(thread), min_size=1, max_size=len(thread), unique_by=lambda e: e.ts
+        )
+    )
+    ids = set()
+    for ordered in permutations(cited):
+        raw = extracted_item(
+            evidence=[ExtractedEvidence(message_ts=row.ts, quote=row.text) for row in ordered]
+        )
+        result = verify(
+            Extraction(rationale="Reorder citations.", items=[raw]),
+            delta_row,
+            {row.ts: row for row in thread},
+            glossary(),
+            tasks,
+            {},
+        )
+        (item,) = result.items
+        ids.add(item.item_id)
+
+    assert ids == {f"{delta_row.thread_id}#{min(row.ts for row in cited)}#0"}
+
+
+@settings(max_examples=30, derandomize=True)
+@given(item_id_threads(), st.data())
+def test_verify_new_ids_with_unshared_anchors_are_invariant_to_item_order(
+    thread: tuple[Event, ...], data: st.DataObject
+) -> None:
+    _, _, tasks = verify_context()
+    delta_row = delta(*thread, root=thread[0])
+    anchors = data.draw(st.lists(st.integers(0, len(thread) - 2), min_size=1, max_size=3))
+    anchors.append(len(thread) - 1)
+    raw = [
+        extracted_item(
+            title=f"Fact {index}",
+            evidence=[ExtractedEvidence(message_ts=thread[anchor].ts, quote=thread[anchor].text)],
+        )
+        for index, anchor in enumerate(anchors)
+    ]
+    expected = {
+        item.title: f"{delta_row.thread_id}#{thread[anchor].ts}#0"
+        for item, anchor in zip(raw, anchors, strict=True)
+        if anchors.count(anchor) == 1
+    }
+    assert expected
+    for ordered in permutations(raw):
+        result = verify(
+            Extraction(rationale="Reorder new facts.", items=list(ordered)),
+            delta_row,
+            {row.ts: row for row in thread},
+            glossary(),
+            tasks,
+            {},
+        )
+
+        assert len(result.items) == len(raw)
+        assert {
+            item.title: item.item_id for item in result.items if item.title in expected
+        } == expected
+
+
+@pytest.mark.parametrize("evidence_order", [(REPLY, ROOT), (ROOT, REPLY)])
+def test_verify_stable_id_uses_earliest_evidence(evidence_order: tuple[str, ...]) -> None:
+    delta_row, citable, tasks = verify_context()
+    raw = extracted_item(
+        evidence=[
+            ExtractedEvidence(message_ts=stamp, quote=citable[stamp].text)
+            for stamp in evidence_order
+        ]
+    )
+
+    result = verify(
+        Extraction(rationale="Anchor to the earliest citation.", items=[raw]),
+        delta_row,
+        citable,
+        glossary(),
+        tasks,
+        {},
+    )
+
+    assert [item.item_id for item in result.items] == [f"{delta_row.thread_id}#{ROOT}#0"]
+
+
+def test_verify_stable_id_survives_delta_growth() -> None:
+    delta_row, citable, tasks = verify_context()
+    root = citable[ROOT]
+    extraction = Extraction(rationale="The same root fact.", items=[extracted_item()])
+
+    root_only = verify(extraction, delta(root, root=root), {ROOT: root}, glossary(), tasks, {})
+    with_reply = verify(extraction, delta_row, citable, glossary(), tasks, {})
+
+    assert (
+        [item.item_id for item in root_only.items]
+        == [item.item_id for item in with_reply.items]
+        == [f"{delta_row.thread_id}#{ROOT}#0"]
+    )
+
+
+def test_verify_stable_id_numbers_shared_anchor_after_update() -> None:
+    root = event()
+    delta_row = delta(root, root=root)
+    old = stored_item()
+    extraction = Extraction(
+        rationale="An update does not consume a new id.",
+        items=[
+            extracted_item(item_id=old.item_id),
+            extracted_item(title="First new item"),
+            extracted_item(title="Second new item"),
+        ],
+    )
+
+    result = verify(extraction, delta_row, {ROOT: root}, glossary(), {}, {old.item_id: old})
+
+    assert [item.item_id for item in result.items if item.item_id != old.item_id] == [
+        f"{delta_row.thread_id}#{ROOT}#0",
+        f"{delta_row.thread_id}#{ROOT}#1",
+    ]
+
+
+@pytest.mark.parametrize(("occupied", "expected_k"), [((0,), 1), ((0, 1), 2), ((0, 2), 1)])
+def test_verify_stable_id_skips_existing_ids(occupied: tuple[int, ...], expected_k: int) -> None:
+    root = event()
+    delta_row = delta(root, root=root)
+    existing = {
+        item_id: stored_item(item_id=item_id)
+        for k in occupied
+        for item_id in [f"{delta_row.thread_id}#{ROOT}#{k}"]
+    }
+
+    result = verify(
+        Extraction(rationale="Keep existing ids reserved.", items=[extracted_item()]),
+        delta_row,
+        {ROOT: root},
+        glossary(),
+        {},
+        existing,
+    )
+
+    assert [item.item_id for item in result.items] == [f"{delta_row.thread_id}#{ROOT}#{expected_k}"]
+
+
+@pytest.mark.parametrize("item_id", ["I1", f"C1:{ROOT}#{LATER}#7"])
+def test_verify_stable_id_preserves_updated_id(item_id: str) -> None:
+    delta_row, citable, tasks = verify_context()
+    old = stored_item(item_id=item_id)
+
+    result = verify(
+        Extraction(rationale="Update the existing item.", items=[extracted_item(item_id=item_id)]),
+        delta_row,
+        citable,
+        glossary(),
+        tasks,
+        {item_id: old},
+    )
+
+    assert [item.item_id for item in result.items] == [item_id]
 
 
 def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> None:

@@ -129,6 +129,9 @@ severity, confidence, evidence[{channel_id, message_ts, quote}], claims[], first
 last_updated, status, resolved_by, links[{kind, item_id}], tasks[{task, effect,
 channel_id, message_ts}], ask_message, absence}`
 - type: decision | blocker | risk | schedule_change | spec_change | bom_change | ask | fyi | absence
+- `item_id` of a new item is `{thread_id}#{anchor_ts}#{k}`: `anchor_ts` is the item's
+  earliest cited message, `k` the lowest index not already used in the thread. An updated
+  item keeps its id (`docs/plans/stable-item-ids.md`).
 - entities: part numbers with rev, ECO/ECR/DEV ids, gates, tests, vendors, POs, people
 - evidence entries and task links name their channel, because a Slack `ts` is unique
   only within a channel. Every lookup by message uses `(channel_id, message_ts)`.
@@ -246,7 +249,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 
 1. Ingest: events into SQLite, idempotent on (channel_id, ts). Replay feeds the JSONL
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
-   Mode events, event_id dedup and a nightly 26-hour reconciliation read. `digest import plm`
+   Mode events, each raw event written to the store before the ack (D7), event_id dedup,
+   and a reconciliation read before each digest build that also reads thread replies.
+   `digest import plm`
    (stretch) renders each CSV row as a `plm_bot` post into the feed channel named by
    `--channel`, which must already exist in the store with its visibility (else refused),
    `ts` from the row's `asserted_ts` and row order, so it enters this step like any event
@@ -313,7 +318,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
-   owned entities, a change on an entity an owned entity depends on, an open
+   owned entities, a change on an entity an owned entity depends on (one hop, on an edge
+   from a system of record; a chat-extracted edge or a second hop is ranked, D22), an open
    contradiction on an owned key, a stale value on an entity the reader's pending
    checklist task touches, a stale reference to a buildable document posted into an
    external channel for the document's owner, and an action taken against a superseded
@@ -463,8 +469,9 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   fields (rev, date, qty, owner).
 - Citation validity: 100% of delivered items carry verified evidence: a quote found in the
   cited message, or for a referenced claim a file name or URL present in it. Release gate.
-- Faithfulness: binary judge per claim from a different model family where a key is
-  present, with judge agreement on a hand-checked sample of 50.
+- Faithfulness: binary judge per claim from a model family different from both the
+  extractor and the corpus renderer (D12) where a key is present, with judge agreement
+  on a hand-checked sample of 50.
 - Ranking: must-see recall at 5 and nDCG at 5 per persona per day; role separation;
   phase sensitivity.
 - Headline, on simulated personas and labelled as such: stale-belief person-days. For
@@ -530,7 +537,9 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   the Haiku-class model through the gateway (core) against Jev (TypeSafe's native API,
   needs its key) and Laya (local, Linux) on the same inputs.
 
-Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
+Online (design only in v1): App Home opens (`app_home_opened`), clicks on URL buttons,
+thumbs, mute rate, replies and time-to-first-action. A bot cannot see whether a user
+read its DM, so open rate is not a metric.
 
 ## 8. Acceptance criteria
 

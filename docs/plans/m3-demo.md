@@ -4,7 +4,9 @@ Status: v0.4, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant d
 with the user for the 2026-10-14 deadline: Codex writes the tests, an Opus subagent
 writes the code, every test is RED-GREEN proven, one review lane per commit
 (alternating Codex and the Claude lenses), at most one fix round per commit; findings
-left over are recorded in the verdict.
+left over are recorded in the verdict. Amended 2026-10-12, 11:00: the user returned to
+the full process. Both review lanes run on every commit, with fix rounds until the
+findings are clean.
 
 ## Goal
 
