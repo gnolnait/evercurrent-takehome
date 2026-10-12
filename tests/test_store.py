@@ -268,7 +268,7 @@ def test_events_and_meta_commit_atomically(store: Store) -> None:
 def test_file_store_creates_parents_and_preserves_data(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "store.sqlite"
     with Store.open(path) as db:
-        assert db.get_meta("schema_version") == "1"
+        assert db.get_meta("schema_version") == "2"
         db.set_meta("world", "kestrel")
         db.upsert_events([event()])
         (delta,) = db.thread_deltas("extract", "v1", "extract", AS_OF)
@@ -295,7 +295,7 @@ def test_file_store_refuses_unrelated_database_without_modifying_it(tmp_path: Pa
     path = tmp_path / "unrelated.sqlite"
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE t (value TEXT)")
-    with pytest.raises(ValueError, match=r"schema version None, expected 1"), Store.open(path):
+    with pytest.raises(ValueError, match=r"schema version None, expected 2"), Store.open(path):
         pass
     with sqlite3.connect(path) as connection:
         tables = connection.execute(
@@ -376,6 +376,7 @@ def item(**changes: Any) -> models.Item:
         "confidence": "medium",
         "evidence": (
             models.Evidence(
+                channel_id="C1",
                 message_ts=ROOT,
                 quote="PN-31010 is released at Rev C.",
                 permalink=event().permalink,
@@ -385,6 +386,7 @@ def item(**changes: Any) -> models.Item:
         "last_updated": "1760000000.000002",
         "claims": (
             models.Claim(
+                channel_id="C1",
                 entity="PN-31010",
                 attribute="rev",
                 value="C",
@@ -392,7 +394,9 @@ def item(**changes: Any) -> models.Item:
                 authority="plm_bot",
             ),
         ),
-        "tasks": (models.TaskLink(task="G-DVT1.thermal", effect="done", message_ts=ROOT),),
+        "tasks": (
+            models.TaskLink(channel_id="C1", task="G-DVT1.thermal", effect="done", message_ts=ROOT),
+        ),
         "status": "resolved",
         "resolved_by": "1760000000.000002",
         "absence": None,
@@ -441,6 +445,7 @@ def test_upsert_items_replaces_fields_and_provenance(tmp_path: Path) -> None:
         confidence="high",
         evidence=(
             models.Evidence(
+                channel_id="C1",
                 message_ts="1760000000.000003",
                 quote="Review needed.",
                 permalink="https://kestrel.slack.com/review",
