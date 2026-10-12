@@ -51,7 +51,9 @@ HEAD.
 
 If the Workflow tool is not available, do STEP 3 and STEP 4 of `ORCHESTRATOR.md` by
 hand: one `Agent` call per lens with `subagent_type: review-lens-<lens>`, all in one
-message, the same prompt for each, `run_in_background: false`.
+message, the same prompt for each, `run_in_background: false`. A reply that is not
+`{"coverage": {...}, "findings": [...]}` is a broken dispatch: dispatch that lens once
+more, and if it fails again, report it as not run.
 
 
 ## 4. Finish verification
@@ -65,10 +67,14 @@ Map the workflow result onto the STEP 5 keys:
   reason. If it does not hold, keep the finding. One verifier can drop on one run what
   it kept on the last.
 - `carried`: `still_present` goes to `findings` with `carried_from` set to the original
-  file and line; `addressed` goes to `addressed`; `retracted` goes to `retractions`.
+  file and line. If a kept finding names the same defect, merge the two into one entry
+  and keep `carried_from`. `addressed` goes to `addressed`; `retracted` goes to
+  `retractions`. A carried entry with `result: null` was not checked: keep its original
+  finding unchanged in `findings`.
 - A lens with `ok: false` did not run. Say so in `coverage`.
 - If `unverified` is not empty or `verification_complete` is false, set
-  `verification_complete: false`.
+  `verification_complete: false`. An `unverified` entry with a non-empty `prior` was a
+  finding of the earlier verdict: keep that finding unchanged in `findings`.
 
 
 ## 5. Write the verdict
