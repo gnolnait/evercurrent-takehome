@@ -281,9 +281,12 @@ def _verified_entries(store: Store, items: Iterable[Item], as_of: datetime) -> i
     """Evidence entries whose quote is in the stored text of the cited message."""
     count = 0
     for item in items:
-        events = {event.ts: event for event in store.events_in_thread(item.thread_id, as_of)}
+        events = {
+            (event.channel_id, event.ts): event
+            for event in store.events_in_thread(item.thread_id, as_of)
+        }
         for entry in item.evidence:
-            event = events.get(entry.message_ts)
+            event = events.get((entry.channel_id, entry.message_ts))
             if event is not None and quotes(entry.quote, event):
                 count += 1
     return count

@@ -63,11 +63,11 @@ def _task_evidence(
         return None
     if links:
         item, link = max(links, key=lambda pair: (ts_micros(pair[1].message_ts), pair[0].item_id))
-        return item, _entry(item, link.message_ts)
+        return item, _entry(item, link.channel_id, link.message_ts)
     if not claims:
         return None
     item, claim = min(claims, key=lambda pair: (ts_micros(pair[1].message_ts), pair[0].item_id))
-    return item, _entry(item, claim.message_ts)
+    return item, _entry(item, claim.channel_id, claim.message_ts)
 
 
 def task_citations(
@@ -151,9 +151,9 @@ def ask_absences(
         if owner is None:
             continue
         events = thread_events(ask)
-        authors = {event.ts: event.user_id for event in events}
+        authors = {(event.channel_id, event.ts): event.user_id for event in events}
         evidence = next(
-            (entry for entry in ask.evidence if authors.get(entry.message_ts, owner) != owner),
+            (entry for entry in ask.evidence if authors.get(_message(entry), owner) != owner),
             None,
         )
         if evidence is None:
@@ -170,7 +170,7 @@ def ask_absences(
         days_silent = working_days_between(_local_date(evidence.message_ts, zone), as_of)
         if days_silent <= cadence_days:
             continue
-        absences.append(_ask_item(ask, owner, authors[evidence.message_ts], evidence, days_silent))
+        absences.append(_ask_item(ask, owner, authors[_message(evidence)], evidence, days_silent))
     return absences
 
 
@@ -220,9 +220,18 @@ def detect_absences(
     ]
 
 
-def _entry(item: Item, message_ts: str) -> Evidence:
+def _entry(item: Item, channel_id: str, message_ts: str) -> Evidence:
     """The item's evidence entry for a message; extraction keeps one per cited message."""
-    return next(entry for entry in item.evidence if entry.message_ts == message_ts)
+    return next(
+        entry
+        for entry in item.evidence
+        if entry.channel_id == channel_id and entry.message_ts == message_ts
+    )
+
+
+def _message(entry: Evidence) -> tuple[str, str]:
+    """The message an evidence entry cites; a Slack ts is unique only within a channel."""
+    return entry.channel_id, entry.message_ts
 
 
 def _local_date(message_ts: str, zone: ZoneInfo) -> date:

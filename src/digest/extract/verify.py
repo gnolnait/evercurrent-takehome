@@ -76,9 +76,9 @@ def verify(
             old = items.get(item_id, existing[item_id])
             evidence, old_claims, old_links = _merge(old, evidence, citable, drops)
         # A claim or a link cites a message the item holds and the delta carries.
-        cited = {entry.message_ts for entry in evidence if entry.message_ts in citable}
+        cited = {_key(entry) for entry in evidence if _in_delta(entry, citable)}
         claims = old_claims + _claims(raw.claims, cited, citable, glossary, drops)
-        links = old_links + _task_links(raw.tasks, cited, tasks, drops)
+        links = old_links + _task_links(raw.tasks, cited, citable, tasks, drops)
         items[item_id] = _item(
             raw, item_id, delta.thread_id, evidence, claims, links, glossary, drops
         )
@@ -92,7 +92,7 @@ def _evidence(
 
     None when an entry cites an unknown message or misquotes its message; the item drops.
     """
-    verified: dict[str, Evidence] = {}
+    verified: dict[str, Evidence] = {}  # the delta is one thread, so one channel
     for entry in entries:
         event = citable.get(entry.message_ts)
         if event is None:
@@ -102,9 +102,32 @@ def _evidence(
             drops["evidence.quote"] += 1
             return None
         verified[entry.message_ts] = Evidence(
-            message_ts=entry.message_ts, quote=entry.quote, permalink=event.permalink
+            channel_id=event.channel_id,
+            message_ts=entry.message_ts,
+            quote=entry.quote,
+            permalink=event.permalink,
         )
     return list(verified.values())
+
+
+def _key(cited: Evidence | Claim | TaskLink) -> tuple[str, str]:
+    """The message a citation names; a Slack ts is unique only within a channel."""
+    return cited.channel_id, cited.message_ts
+
+
+def _in_delta(entry: Evidence, citable: Mapping[str, Event]) -> bool:
+    event = citable.get(entry.message_ts)
+    return event is not None and event.channel_id == entry.channel_id
+
+
+def _cited_event(
+    message_ts: str, cited: set[tuple[str, str]], citable: Mapping[str, Event]
+) -> Event | None:
+    """The delta's event for a message the item cites, else None."""
+    event = citable.get(message_ts)
+    if event is None or (event.channel_id, message_ts) not in cited:
+        return None
+    return event
 
 
 def quotes(quote: str, event: Event) -> bool:
@@ -116,7 +139,7 @@ def quotes(quote: str, event: Event) -> bool:
 
 def _claims(
     raw: Iterable[ExtractedClaim],
-    cited: set[str],
+    cited: set[tuple[str, str]],
     citable: Mapping[str, Event],
     glossary: Glossary,
     drops: dict[str, int],
@@ -126,7 +149,7 @@ def _claims(
         entity = resolve_entity(claim.entity, glossary)
         if entity is None:
             drops["claims.entity"] += 1
-        elif claim.message_ts not in cited:
+        elif (event := _cited_event(claim.message_ts, cited, citable)) is None:
             drops["claims.message"] += 1
         else:
             claims.append(
@@ -134,8 +157,9 @@ def _claims(
                     entity=entity,
                     attribute=claim.attribute,
                     value=claim.value,
+                    channel_id=event.channel_id,
                     message_ts=claim.message_ts,
-                    authority=_authority(citable[claim.message_ts].user_id, glossary),
+                    authority=_authority(event.user_id, glossary),
                 )
             )
     return claims
@@ -148,7 +172,8 @@ def _authority(user_id: str, glossary: Glossary) -> Authority:
 
 def _task_links(
     raw: Iterable[ExtractedTask],
-    cited: set[str],
+    cited: set[tuple[str, str]],
+    citable: Mapping[str, Event],
     tasks: Mapping[str, ChecklistTask],
     drops: dict[str, int],
 ) -> list[TaskLink]:
@@ -156,10 +181,17 @@ def _task_links(
     for link in raw:
         if link.task not in tasks:
             drops["tasks.unknown"] += 1
-        elif link.message_ts not in cited:
+        elif (event := _cited_event(link.message_ts, cited, citable)) is None:
             drops["tasks.message"] += 1
         else:
-            links.append(TaskLink(task=link.task, effect=link.effect, message_ts=link.message_ts))
+            links.append(
+                TaskLink(
+                    task=link.task,
+                    effect=link.effect,
+                    channel_id=event.channel_id,
+                    message_ts=link.message_ts,
+                )
+            )
     return links
 
 
@@ -175,19 +207,19 @@ def _merge(
     A new entry for a cited message replaces the old entry in place. An old entry whose message
     the delta carries is checked again against the current text.
     """
-    incoming = {entry.message_ts: entry for entry in evidence}
+    incoming = {_key(entry): entry for entry in evidence}
     merged = []
     for entry in old.evidence:
-        if entry.message_ts in incoming:
-            merged.append(incoming.pop(entry.message_ts))
-        elif entry.message_ts in citable and not quotes(entry.quote, citable[entry.message_ts]):
+        if _key(entry) in incoming:
+            merged.append(incoming.pop(_key(entry)))
+        elif _in_delta(entry, citable) and not quotes(entry.quote, citable[entry.message_ts]):
             drops["evidence.stale"] += 1
         else:
             merged.append(entry)
     merged += incoming.values()
-    held = {entry.message_ts for entry in merged}
-    old_claims = [claim for claim in old.claims if claim.message_ts in held]
-    old_links = [link for link in old.tasks if link.message_ts in held]
+    held = {_key(entry) for entry in merged}
+    old_claims = [claim for claim in old.claims if _key(claim) in held]
+    old_links = [link for link in old.tasks if _key(link) in held]
     drops["claims.stale"] += len(old.claims) - len(old_claims)
     drops["tasks.stale"] += len(old.tasks) - len(old_links)
     return merged, old_claims, old_links
@@ -257,8 +289,8 @@ def _due(raw: str | None, drops: dict[str, int]) -> date | None:
 
 
 def _unique_claims(claims: Iterable[Claim]) -> tuple[Claim, ...]:
-    """The first claim for each (entity, attribute, value, message_ts), in order."""
-    first: dict[tuple[str, str, str, str], Claim] = {}
+    """The first claim for each (entity, attribute, value, channel_id, message_ts), in order."""
+    first: dict[tuple[str, str, str, str, str], Claim] = {}
     for claim in claims:
-        first.setdefault((claim.entity, claim.attribute, claim.value, claim.message_ts), claim)
+        first.setdefault((claim.entity, claim.attribute, claim.value, *_key(claim)), claim)
     return tuple(first.values())
