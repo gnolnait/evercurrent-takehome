@@ -84,7 +84,7 @@ def absence_item(source: str) -> Item:
         detail = AbsenceDetail(
             source="checklist",
             gate="G-DVT1",
-            task="Sign off FAI",
+            task="G-DVT1.fai",
             asker=None,
             days_silent=3,
             buffer_consumed=2,
@@ -113,7 +113,7 @@ def absence_item(source: str) -> Item:
         item_id="ABS-ASK",
         type="absence",
         title="Ask absence",
-        summary="No reply.",
+        summary="Can you approve the motor controller release?",
         entities=(),
         owner="U0EE01",
         evidence=(evidence(8),),
@@ -159,10 +159,8 @@ def test_render_digest_exact_normal_line(world: World, profile: Profile) -> None
     )
 
 
-def test_render_digest_orders_only_nonempty_sections_and_absences(
-    world: World, profile: Profile
-) -> None:
-    """Set up every section and both absences; render; assert order and absence wording."""
+def test_render_digest_orders_only_nonempty_sections(world: World, profile: Profile) -> None:
+    """Set up every section; render; assert section order."""
     lines = (
         line(item(item_id="ASK", type="ask", title="Approve release"), "needs_you"),
         line(absence_item("checklist"), "not_happened", must_see=True),
@@ -179,17 +177,39 @@ def test_render_digest_orders_only_nonempty_sections_and_absences(
         for title in ("Needs you", "Not happened", "Decisions", "Risks", "FYI")
     ]
     assert positions == sorted(positions)
-    assert (
-        "- Not happened: Sign off FAI for G-DVT1 - 3 working days silent, 2/7 buffer days used"
-        in rendered
-    )
-    assert (
-        "- Not happened: Nadia Brenner asked Tobias Lindqvist, no reply for 4 working days"
-        in rendered
-    )
     assert rendered.count("[must see]") == 1
-    assert f"source: {evidence(7).permalink}" in rendered
-    assert f"source: {evidence(8).permalink}" in rendered
+
+
+def test_render_digest_checklist_absence_uses_world_task_text_and_includes_summary(
+    world: World, profile: Profile
+) -> None:
+    selected = selection(
+        profile,
+        line(absence_item("checklist"), "not_happened", must_see=True),
+    )
+
+    rendered = render_digest(world, selected)
+
+    assert (
+        "- Not happened: Sign off FAI on DVT-1 mechanical parts (ME) for G-DVT1 - "
+        "3 working days silent, 2/7 buffer days used [must see]\n"
+        "  No FAI update.\n"
+        f"  source: {evidence(7).permalink}"
+    ) in rendered
+
+
+def test_render_digest_ask_absence_includes_what_was_asked_before_source(
+    world: World, profile: Profile
+) -> None:
+    selected = selection(profile, line(absence_item("ask"), "not_happened"))
+
+    rendered = render_digest(world, selected)
+
+    assert (
+        "- Not happened: Nadia Brenner asked Tobias Lindqvist, no reply for 4 working days\n"
+        "  Can you approve the motor controller release?\n"
+        f"  source: {evidence(8).permalink}"
+    ) in rendered
 
 
 def test_render_digest_omits_empty_sections(world: World, profile: Profile) -> None:
@@ -314,8 +334,14 @@ def test_build_digest_refuses_store_replayed_after_day(tmp_path: Path, world: Wo
         set_replay_meta(store, until="2026-10-16T06:59:59.999999+00:00")
         store.upsert_items([future], prompt_version="m2.1", model="extract")
 
-        with pytest.raises(ValueError, match=r"(?i)(until|replay|cutoff).*2026-10-14"):
+        with pytest.raises(ValueError) as raised:
             build_digest(store, world, load_priors(), "U0ME01", DAY)
+
+    message = str(raised.value)
+    assert DAY.isoformat() in message
+    assert re.search(r"(?i)fresh\s+--db", message)
+    assert "extract" in message.lower()
+    assert "digest replay --until" not in message
 
 
 def make_cli_store(
@@ -488,14 +514,16 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
     )
 
 
-def test_cli_demo_reports_only_cassette_miss_without_constructing_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("exists", [False, True], ids=["missing-directory", "empty-directory"])
+def test_cli_demo_refuses_missing_or_empty_cassette_directory_before_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists: bool
 ) -> None:
-    empty_cassettes = tmp_path / "empty-cassettes"
-    empty_cassettes.mkdir()
+    cassettes = tmp_path / "no-cassettes"
+    if exists:
+        cassettes.mkdir()
     monkeypatch.chdir(ROOT)
     monkeypatch.setenv("DIGEST_MODE", "replay")
-    monkeypatch.setenv("DIGEST_CASSETTES", str(empty_cassettes))
+    monkeypatch.setenv("DIGEST_CASSETTES", str(cassettes))
     monkeypatch.setenv("OPENROUTER_API_KEY", "must-not-be-read")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-be-read")
 
@@ -503,11 +531,16 @@ def test_cli_demo_reports_only_cassette_miss_without_constructing_settings(
         raise AssertionError("digest demo constructed Settings")
 
     monkeypatch.setattr(Settings, "__init__", refuse_settings)
+    monkeypatch.setattr(
+        cli,
+        "_extract_days",
+        lambda *args, **kwargs: pytest.fail("digest demo replayed before cassette preflight"),
+    )
 
     result = runner.invoke(app, ["demo"])
 
     assert result.exit_code == 1, result.output
-    assert re.search(r"no cassette for key", result.output, re.IGNORECASE), result.output
+    assert str(cassettes) in result.output
 
 
 def test_cli_demo_exits_one_and_reports_failed_extract_threads(
