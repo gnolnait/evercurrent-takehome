@@ -87,6 +87,21 @@ the case for it. This applies to chat as well as to the repo.
 - Default to draft unless end-to-end validation is done, tests are green and the body
   has no TODO.
 
+## Skills per stage
+
+At each stage of `docs/process.md`, invoke the skill with the Skill tool; do not run its
+procedure from memory. The user-level routing table covers the other moments.
+
+- Plan: `grill-me` on a load-bearing unit; `prototype` for one uncertain premise.
+- Tests: `testing` (`property-testing` for invariants); `prove-test` for every new test.
+- Code: `minimal-diff-ladder` before new structure; `bug-fix` for a reported bug.
+- Review: `/review-local --base main` plus `codex exec -p review`; `ship-review` sets
+  the intensity.
+- Adversarial: `ship-adversarial-validate`, then `pass-loop` on correctness-critical units.
+- A change a reader sees (Slack, the web preview): `browser-verify`, which reads
+  `.claude/browser-verify.md`.
+- PR, checks, review threads: `github`. Session end: `handoff`. Unit done: `retrospective`.
+
 ## Reviews
 
 Review findings are leads, not verdicts: verify each against the code before acting.
