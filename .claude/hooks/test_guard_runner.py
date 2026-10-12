@@ -29,6 +29,7 @@ STANDALONE = {
     "signing": str(HOOK_DIR / "no-bypass-signing"),
     "merge": str(HOOK_DIR / "no-merge-pr"),
     "commit": str(HOOK_DIR / "no-commit-to-main"),
+    "review": str(HOOK_DIR / "no-unreviewed-pr"),
 }
 
 # Trigger fragments assembled at runtime so this test file carries no literal
@@ -36,6 +37,7 @@ STANDALONE = {
 _C = "com" + "mit"
 _NV = "--no" + "-verify"
 _MERGE = "mer" + "ge"
+_CREATE = "cre" + "ate"
 
 
 def _run(hook, payload, env=None, cwd=None):
@@ -83,6 +85,8 @@ MATRIX = [
     (f"g''it {_C} {_NV} -m x", 2),        # signing, quote-assembled
     (f"gh pr {_MERGE} 5 --squash", 2),    # merge
     (f"gh pr m''erge 5 --squash", 2),     # merge, quote-assembled
+    (f"gh pr {_CREATE} --fill", 2),       # PR creation with no review
+    (f"gh pr cr''eate --fill", 2),        # PR creation, quote-assembled
 ]
 
 
@@ -238,7 +242,7 @@ def test_unusable_field_shims_match_runner(payload, repo):
     extraction already fails it closed on a non-dict tool_input)."""
     env = _env(repo)
     runner_rc = _run(RUNNER, payload, env=env, cwd=repo)
-    for name in ("merge", "commit"):
+    for name in ("merge", "commit", "review"):
         shim_rc = _run(STANDALONE[name], payload, env=env, cwd=repo)
         assert shim_rc == runner_rc, \
             "%s shim rc %d != runner rc %d" % (name, shim_rc, runner_rc)
@@ -275,7 +279,7 @@ def test_no_command_still_allows_everywhere(payload, repo):
     env = _env(repo)
     runner_rc = _run(RUNNER, payload, env=env, cwd=repo)
     assert runner_rc == 0, "runner must allow a command-less payload, got %d" % runner_rc
-    for name in ("merge", "commit"):
+    for name in ("merge", "commit", "review"):
         shim_rc = _run(STANDALONE[name], payload, env=env, cwd=repo)
         assert shim_rc == 0, "%s shim must allow, got %d" % (name, shim_rc)
 
