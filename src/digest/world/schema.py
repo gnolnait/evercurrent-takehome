@@ -124,6 +124,7 @@ class WorldEvent(Frozen):
 class World(Frozen):
     name: str
     program: str
+    description: str = ""  # one line about the product, for the renderer prompt
     workspace_url: str
     timezone: str  # IANA name
     start_date: dt.date  # a Monday

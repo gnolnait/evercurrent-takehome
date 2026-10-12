@@ -6,6 +6,7 @@ import sqlite3
 from collections import Counter
 from datetime import UTC, date, datetime, time
 from pathlib import Path
+from statistics import median
 from typing import NoReturn
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,8 @@ from pydantic import ValidationError
 
 from digest import __version__
 from digest.absence import detect_absences
+from digest.corpus.avoid import load_avoid_names
+from digest.corpus.render import render_world
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
@@ -263,7 +266,32 @@ def world_render(
     ),
 ) -> None:
     """Render the world's events into events.jsonl through the render model."""
-    raise typer.Exit(code=_not_yet("world render"))
+    settings = Settings()
+    world_dir = Path("data/world") / (world or settings.world)
+    manifest = world_dir / "manifest.json"
+    try:
+        report = render_world(
+            load_world(world_dir / "world.yaml"),
+            from_settings(settings),
+            world_dir / "anchor.jsonl",
+            load_manifest(manifest),
+            load_avoid_names(),
+            world_dir / "events.jsonl",
+            manifest,
+        )
+    # ValueError covers RenderError, a missing API key and malformed world, manifest
+    # and anchor files. The notes name the file that the loader read.
+    except (OSError, ValueError, yaml.YAMLError, CassetteMiss) as error:
+        _refuse("\n".join([str(error), *getattr(error, "__notes__", [])]))
+    typer.echo(
+        f"rendered {report.rendered} threads, reused {report.reused} anchor threads, "
+        f"{report.messages} messages"
+    )
+    if report.chars_per_message:
+        typer.echo(
+            f"chars per message: median {median(report.chars_per_message)}, "
+            f"max {max(report.chars_per_message)}"
+        )
 
 
 @world_app.command("golden")

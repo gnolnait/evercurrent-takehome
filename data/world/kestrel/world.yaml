@@ -3,6 +3,7 @@
 # docs/plans/m1-store-replay.md B3.5 names.
 name: kestrel
 program: Kestrel K2
+description: A compact autonomous mobile robot that moves totes between racks and packing stations in a warehouse.
 workspace_url: https://kestrel-k2.slack.com
 timezone: America/Los_Angeles
 start_date: 2026-10-12
