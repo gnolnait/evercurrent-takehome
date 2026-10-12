@@ -9,10 +9,12 @@ from zoneinfo import ZoneInfo
 
 from digest.models import (
     AbsenceDetail,
+    Claim,
     Event,
     Evidence,
     Item,
     Severity,
+    TaskLink,
     ts_datetime,
     ts_micros,
 )
@@ -56,27 +58,38 @@ def _task_evidence(
     gate: Gate, task: ChecklistTask, items: Sequence[Item], as_of: date, zone: ZoneInfo
 ) -> tuple[Item, Evidence] | None:
     """The item and evidence entry the task's silence counts from; None for a done task."""
+    links, claims = task_citations(gate, task, items, as_of, zone)
+    if any(link.effect == "done" for _, link in links):
+        return None
+    if links:
+        item, link = max(links, key=lambda pair: (ts_micros(pair[1].message_ts), pair[0].item_id))
+        return item, _entry(item, link.message_ts)
+    if not claims:
+        return None
+    item, claim = min(claims, key=lambda pair: (ts_micros(pair[1].message_ts), pair[0].item_id))
+    return item, _entry(item, claim.message_ts)
+
+
+def task_citations(
+    gate: Gate, task: ChecklistTask, items: Sequence[Item], as_of: date, zone: ZoneInfo
+) -> tuple[list[tuple[Item, TaskLink]], list[tuple[Item, Claim]]]:
+    """The links to the task and the claims on its gate, from messages on or before `as_of`.
+
+    A task with no link and no gate claim has no evidence to count its silence from.
+    """
     links = [
         (item, link)
         for item in items
         for link in item.tasks
         if link.task == task.id and _local_date(link.message_ts, zone) <= as_of
     ]
-    if any(link.effect == "done" for _, link in links):
-        return None
-    if links:
-        item, link = max(links, key=lambda pair: (ts_micros(pair[1].message_ts), pair[0].item_id))
-        return item, _entry(item, link.message_ts)
     claims = [
         (item, claim)
         for item in items
         for claim in item.claims
         if claim.entity == gate.id and _local_date(claim.message_ts, zone) <= as_of
     ]
-    if not claims:
-        return None
-    item, claim = min(claims, key=lambda pair: (ts_micros(pair[1].message_ts), pair[0].item_id))
-    return item, _entry(item, claim.message_ts)
+    return links, claims
 
 
 def _checklist_item(

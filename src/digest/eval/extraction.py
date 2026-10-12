@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import get_args
 from zoneinfo import ZoneInfo
 
-from digest.absence import detect_absences
+from digest.absence import detect_absences, task_citations
 from digest.extract.normalize import normalize_space
-from digest.extract.stage import run_extract
-from digest.extract.verify import DROP_FIELDS
+from digest.extract.stage import ExtractReport, run_extract
+from digest.extract.verify import DROP_FIELDS, quotes
 from digest.llm.client import LLM
 from digest.models import Claim, Frozen, Item, ItemType, TriageDecision
 from digest.priors import Priors
@@ -66,12 +66,15 @@ class ExtractionReport(Frozen):
     entity_recall: float | None  # entities_found / entities_golden
     citation_validity: float  # verified entries over delivered entries; 1.0 by construction
     drops: dict[str, int]
+    extract_threads: int  # deltas the extract stage saw, summed over days; the n of extract_failed
+    extract_failed: int  # of those, deltas whose triage or extract call failed
     triage_golden_kept: int
-    triage_golden_total: int
-    triage_by_event: dict[str, float]  # max probability over the thread's revisions, per event
-    triage_dropped_golden: tuple[str, ...]
+    triage_golden_total: int  # every golden item; a thread whose triage call failed is not kept
+    # Max probability over the thread's revisions, per event with a triage decision.
+    triage_by_event: dict[str, float]
+    triage_dropped_golden: tuple[str, ...]  # golden events with a decision and none kept
     triage_distractors_kept: tuple[str, ...]
-    missed: tuple[str, ...]  # golden event ids with no matched item
+    missed: tuple[str, ...]  # golden event ids with no matched item, failed calls included
     unmatched: tuple[str, ...]  # extracted item ids matched to no golden item, with the thread kind
     absence_tp: int
     absence_fp: int
@@ -79,7 +82,8 @@ class ExtractionReport(Frozen):
     absence_false_alarm_rate: float | None
     absence_recall: float | None
     uncitable_tasks: tuple[str, ...]  # tasks with no link and no gate anchor on a day in a buffer
-    realism: dict[str, float]  # messages per thread and chars per message: mean, median, p90
+    # Messages per thread and chars per message: mean, median, p90; empty with no rendered thread.
+    realism: dict[str, float]
     not_run: dict[str, str]  # metric -> reason
 
 
@@ -89,15 +93,21 @@ def run_extraction_eval(
     """Run the world day by day in the store at `store_path` and score it against golden."""
     world = load_world(world_dir / "world.yaml")
     manifest = load_manifest(world_dir / "manifest.json")
-    golden = _current_golden(world_dir / "golden.jsonl", derive_golden(world, manifest, priors))
+    try:
+        derived = derive_golden(world, manifest, priors)
+    except KeyError as error:  # derive_golden names the event the manifest lacks
+        raise ValueError(
+            f"{world_dir / 'manifest.json'} has no thread for event {error.args[0]}"
+        ) from error
+    golden = _current_golden(world_dir / "golden.jsonl", derived)
     asks = {_thread_of(item): item.event_id for item in golden.items if item.type == "ask"}
     end = _end_of(world.date_of(world.days), ZoneInfo(world.timezone))
     with Store.open(store_path) as store:
-        drops, detected, uncitable = _run_days(store, world, world_dir, llm, priors, asks)
+        extracted, detected, uncitable = _run_days(store, world, world_dir, llm, priors, asks)
         items = store.items(end)
         verified = _verified_entries(store, items, end)
         decisions = {
-            event_id: _decisions(store, event_id, thread)
+            event_id: _decisions(store, event_id, thread, end)
             for event_id, thread in _triaged_threads(golden).items()
         }
     golden_threads = {_thread_of(item) for item in golden.items}
@@ -121,6 +131,7 @@ def run_extraction_eval(
         len(golden_keys - detected),
     )
     evidence_entries = sum(len(item.evidence) for item in items)
+    realism = _realism(world_dir, world, manifest)
     return ExtractionReport(
         world=world.name,
         days=world.days,
@@ -148,15 +159,20 @@ def run_extraction_eval(
         entity_recall=_ratio(entities_found, entities_golden),
         # No entry is wrong when no entry is delivered.
         citation_validity=verified / evidence_entries if evidence_entries else 1.0,
-        drops=drops,
+        drops=extracted.drops,
+        extract_threads=extracted.threads,
+        extract_failed=extracted.failed,
         triage_golden_kept=sum(1 for item in golden.items if kept[item.event_id]),
         triage_golden_total=len(golden.items),
         triage_by_event={
             event_id: max(row.probability for row in decisions[event_id])
             for event_id in sorted(decisions)
+            if decisions[event_id]
         },
         triage_dropped_golden=tuple(
-            item.event_id for item in golden.items if not kept[item.event_id]
+            item.event_id
+            for item in golden.items
+            if decisions[item.event_id] and not kept[item.event_id]
         ),
         triage_distractors_kept=tuple(
             row.event_id for row in golden.distractors if kept[row.event_id]
@@ -174,21 +190,27 @@ def run_extraction_eval(
         absence_false_alarm_rate=_ratio(fp, tp + fp),
         absence_recall=_ratio(tp, tp + fn),
         uncitable_tasks=tuple(sorted(uncitable)),
-        realism=_realism(world_dir, world, manifest),
-        not_run=_NOT_RUN,
+        realism=realism,
+        not_run={
+            **_NOT_RUN,
+            **({} if realism else {"realism": "no rendered threads in manifest.json"}),
+        },
     )
 
 
 def _current_golden(path: Path, derived: Golden) -> Golden:
     """The label file, when it equals the labels derived now; a stale file raises."""
     stored = read_golden(path)
-    if stored != derived:
-        raise ValueError(
-            f"{path} differs from the labels derived from world.yaml, manifest.json and the"
-            f" priors (ask_reply_cadence_days {stored.ask_reply_cadence_days} in the file,"
-            f" {derived.ask_reply_cadence_days} in force); run digest world golden"
+    if stored == derived:
+        return stored
+    if stored.ask_reply_cadence_days != derived.ask_reply_cadence_days:
+        cause = (
+            f"ask_reply_cadence_days is {stored.ask_reply_cadence_days} in the file and"
+            f" {derived.ask_reply_cadence_days} in force"
         )
-    return stored
+    else:
+        cause = "the labels differ from those derived from world.yaml, manifest.json and the priors"
+    raise ValueError(f"{path}: {cause}; run digest world golden")
 
 
 def _run_days(
@@ -198,12 +220,22 @@ def _run_days(
     llm: LLM,
     priors: Priors,
     asks: Mapping[str, str],
-) -> tuple[dict[str, int], set[_AbsenceKey], set[str]]:
-    """Replay, extract and detect absences for each day; the summed drops and the day keys."""
+) -> tuple[ExtractReport, set[_AbsenceKey], set[str]]:
+    """Replay, extract and detect absences for each day.
+
+    Return the extract reports summed over the days, the absence keys and the uncitable tasks.
+    """
     zone = ZoneInfo(world.timezone)
     glossary = world.glossary()
     purposes = {channel.id: channel.purpose for channel in world.channels}
-    drops = dict.fromkeys(DROP_FIELDS, 0)
+    extracted = ExtractReport(
+        threads=0,
+        kept=0,
+        dropped=0,
+        failed=0,
+        items_written=0,
+        drops=dict.fromkeys(DROP_FIELDS, 0),
+    )
     detected: set[_AbsenceKey] = set()
     uncitable: set[str] = set()
     for day in range(1, world.days + 1):
@@ -211,11 +243,11 @@ def _run_days(
         replay_world(store, world_dir, today)
         as_of = _end_of(today, zone)
         report = run_extract(store, llm, glossary, world.project, priors, as_of, zone, purposes)
-        drops = {key: drops[key] + report.drops[key] for key in DROP_FIELDS}
+        extracted = extracted.plus(report)
         found = detect_absences(store, world.project, priors, as_of, zone)
         detected |= {_absence_key(day, item, asks) for item in found}
-        uncitable |= _uncitable(world.project, store.items(as_of), today)
-    return drops, detected, uncitable
+        uncitable |= _uncitable(world.project, store.items(as_of), today, zone)
+    return extracted, detected, uncitable
 
 
 def _absence_key(day: int, item: Item, asks: Mapping[str, str]) -> _AbsenceKey:
@@ -226,17 +258,16 @@ def _absence_key(day: int, item: Item, asks: Mapping[str, str]) -> _AbsenceKey:
     return (day, "ask", asks.get(item.thread_id, item.thread_id))
 
 
-def _uncitable(project: ProjectConfig, items: Sequence[Item], day: date) -> set[str]:
+def _uncitable(
+    project: ProjectConfig, items: Sequence[Item], day: date, zone: ZoneInfo
+) -> set[str]:
     """Tasks of gates in their buffer on `day` with no task link and no claim on the gate."""
-    linked = {link.task for item in items for link in item.tasks}
-    anchored = {claim.entity for item in items for claim in item.claims}
     return {
         task.id
         for gate in project.gates
         if add_working_days(gate.date, -gate.buffer_days) <= day <= gate.date
-        and gate.id not in anchored
         for task in gate.checklist
-        if task.id not in linked
+        if not any(task_citations(gate, task, items, day, zone))
     }
 
 
@@ -244,10 +275,10 @@ def _verified_entries(store: Store, items: Iterable[Item], as_of: datetime) -> i
     """Evidence entries whose quote is in the stored text of the cited message."""
     count = 0
     for item in items:
-        texts = {event.ts: event.text for event in store.events_in_thread(item.thread_id, as_of)}
+        events = {event.ts: event for event in store.events_in_thread(item.thread_id, as_of)}
         for entry in item.evidence:
-            span = normalize_space(entry.quote)
-            if span and span in normalize_space(texts.get(entry.message_ts, "")):
+            event = events.get(entry.message_ts)
+            if event is not None and quotes(entry.quote, event):
                 count += 1
     return count
 
@@ -260,12 +291,17 @@ def _triaged_threads(golden: Golden) -> dict[str, str]:
     }
 
 
-def _decisions(store: Store, event_id: str, thread: str) -> list[TriageDecision]:
+def _decisions(store: Store, event_id: str, thread: str, as_of: datetime) -> list[TriageDecision]:
+    """The thread's triage decisions; empty when each triage call for the thread failed.
+
+    The eval runs the extract stage on every thread in the store. A thread with no message in
+    the store was never run, and that raises.
+    """
     decisions = store.triage_for_thread(thread)
-    if not decisions:
+    if not decisions and not store.events_in_thread(thread, as_of):
         raise ValueError(
-            f"thread {thread} of event {event_id} has no triage decision; the eval triages"
-            " every thread in the store, so events.jsonl has no message in that thread"
+            f"thread {thread} of event {event_id} was never run: events.jsonl has no message"
+            " in that thread"
         )
     return decisions
 
@@ -386,7 +422,7 @@ def _entity_counts(
 
 
 def _realism(world_dir: Path, world: World, manifest: Manifest) -> dict[str, float]:
-    """Messages per rendered thread and characters per rendered message."""
+    """Messages per rendered thread and characters per rendered message; empty with none."""
     rendered = {
         (ref.channel_id, ref.thread_ts)
         for ref in manifest.threads.values()
@@ -396,6 +432,8 @@ def _realism(world_dir: Path, world: World, manifest: Manifest) -> dict[str, flo
     for event in read_events(world_dir / "events.jsonl", world.workspace_url):
         if (event.channel_id, event.thread_ts) in rendered:
             threads.setdefault((event.channel_id, event.thread_ts), {})[event.ts] = event.text
+    if not threads:
+        return {}
     return {
         **_stats("messages_per_thread", [len(texts) for texts in threads.values()]),
         **_stats(
@@ -504,6 +542,7 @@ def write_report(report: ExtractionReport, path: Path) -> None:
                     _ratio(report.triage_golden_kept, report.triage_golden_total),
                     report.triage_golden_total,
                 ),
+                ("extract failures", report.extract_failed, report.extract_threads),
                 ("golden events dropped", _listed(report.triage_dropped_golden), ""),
                 ("distractor events kept", _listed(report.triage_distractors_kept), ""),
                 *(

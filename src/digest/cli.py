@@ -71,7 +71,7 @@ def eval_cmd(
     """Run the evaluation suite against the golden corpus and write the report.
 
     The eval runs in a fresh store at data/eval-<world>.sqlite. The command deletes that file
-    first.
+    and its -wal and -shm files first.
     """
     settings = Settings()
     name = world or settings.world
@@ -81,10 +81,12 @@ def eval_cmd(
         loaded = load_world(world_dir / "world.yaml")
         priors = load_priors()
         llm = from_settings(settings)
-        store_path.unlink(missing_ok=True)
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{store_path}{suffix}").unlink(missing_ok=True)
         report = run_extraction_eval(world_dir, llm, priors, store_path)
-    # CassetteMiss: replay found no recording. ValueError: a stale golden.jsonl, a missing
-    # API key or a malformed file. OSError: a missing world, manifest or golden file.
+    # CassetteMiss: replay found no recording. ValueError: a stale golden.jsonl, a manifest
+    # with no thread for an event, a golden thread never run, a missing API key or a
+    # malformed file. OSError: a missing world, manifest or golden file.
     except (CassetteMiss, ValueError, OSError, yaml.YAMLError) as error:
         _refuse(_with_notes(error))
     path = out or Path("reports") / f"eval-{loaded.date_of(loaded.days)}.md"
@@ -98,6 +100,7 @@ def eval_cmd(
         ("citation validity", report.citation_validity),
         ("absence false-alarm rate", report.absence_false_alarm_rate),
         ("absence recall", report.absence_recall),
+        ("extract failures", report.extract_failed),
     ]:
         typer.echo(f"{label}: {'n/a' if value is None else round(value, 3)}")
 
