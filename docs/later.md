@@ -102,3 +102,50 @@ would promote it.
   slice; M2 ships nine. Add 31 human-written lines in two or three threads to
   `data/world/kestrel/anchor.jsonl` with their `authored: human` manifest entries, then
   re-render. Trigger: after the 2026-10-14 interview.
+
+## Next steps from the eval and research review (2026-10-12)
+
+In order. Each item names its trigger. Measured numbers are from
+`reports/eval-2026-10-23.md`.
+
+1. Absence false alarms. Per-scenario tests on task-link extraction, because silence is
+   counted from links the extractor writes; ask absences go only to the asker and the
+   owner. Trigger: SPEC A6 fails (0.304, n = 23, against 0.20).
+2. Claim value against the cited text (D5). Check each claim value in the cited message
+   after Slack-aware normalization (mentions, links, markup, curly quotes); on a miss,
+   search the message for a supporting span and check again before the drop. A verbatim
+   quote is not support for a claim (arXiv 2609.15964). Trigger: now.
+3. Claim key checks in code. A table of the attributes each entity type may carry, a
+   value form per attribute, and an attachment rule: the entity is named in the quote,
+   the thread root or an earlier cited message. The measured key errors put a true fact
+   on the wrong entity or attribute (a PO revision stored as a part revision, status
+   stored as lead time); a synonym merge does not fix that. Trigger: before the ledger.
+4. Claim scoring. Report each extracted claim as matched, true but unlabeled, wrong key,
+   wrong value or unsupported. Label every claim in the golden threads from the message
+   text, by a labeler who does not see the extractor output. The ledger gate becomes the
+   key-error rate, with a recall guard and key stability across two recordings.
+   Trigger: before the ledger.
+5. Digest window per reader and a seen record, so a reader is not told the same thing
+   twice. Trigger: every demo digest is a first digest (13 to 16 lines).
+6. Stage key records the concrete model id, and a run refuses a mismatch. Today the key
+   holds the logical name, so a model change in `config/models.yaml` reuses old runs.
+7. Extraction payload limit: open items, plus items that share an entity with the new
+   messages, with the new messages last. Trigger: threads longer than the corpus p90
+   (5 messages).
+8. Absence sources (f) suspect evidence and (g) ended scope (SPEC section 5 step 5) as
+   candidates for core. A drawing revision change triggers a partial first article
+   inspection (AS9102), and a deviation carries an end. Add a last-time-buy
+   window absence: a discontinuation notice opens a fixed buy window (JEDEC JESD48).
+   Trigger: item 1 passes.
+9. A Sonnet-class extraction run on the same 36 thread revisions, and one re-record
+   through the Anthropic API backend, each with its report difference.
+10. Gate tolerances (D23) from paired differences over three recordings, clustered by
+    world day.
+11. Exposure weight: `shown_in_digest` counts less than authored, replied or reacted.
+12. A test that every repo path named in the root Markdown files exists. Trigger: five
+    such paths were found in `ANSWERS.md` on 2026-10-12.
+13. More names in `data/world/avoid-names.yaml` from the 2026-10-12 search of public
+    submissions (Robot Arm, Mobile Base, Alice Chen, Sam). The render prompt reads the
+    list, so the change re-renders the corpus. Trigger: the next re-render.
+14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
+    instead of an instant interruption. Trigger: a real-time tier.
