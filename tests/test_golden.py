@@ -427,14 +427,15 @@ def test_derive_golden_skips_checklist_absences_after_done_touch() -> None:
 @pytest.mark.parametrize("line", ["null", "[1]", '"x"'])
 def test_read_golden_rejects_non_object_line_with_location(tmp_path: Path, line: str) -> None:
     path = tmp_path / "malformed.jsonl"
-    path.write_text(f"{line}\n", encoding="utf-8")
+    meta = json.dumps({"kind": "meta", "ask_reply_cadence_days": 2})
+    path.write_text(f"{meta}\n{line}\n", encoding="utf-8")
 
     with pytest.raises(ValueError) as caught:
         read_golden(path)
 
     message = str(caught.value)
     assert str(path) in message
-    assert re.search(r"(?:line\s+|:)1\b", message, re.IGNORECASE), message
+    assert re.search(r"(?:line\s+|:)2\b", message, re.IGNORECASE), message
 
 
 @pytest.mark.parametrize("state", ["empty", "item-first"])
