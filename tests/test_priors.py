@@ -77,10 +77,11 @@ def test_load_priors_rejects_invalid_file(tmp_path: Path, contents: str, field: 
 
 def test_load_priors_yaml_error_names_file(tmp_path: Path) -> None:
     path = tmp_path / "priors.yaml"
-    path.write_text("triage: [", encoding="utf-8")
+    path.write_text("triage:\n  - [\n", encoding="utf-8")
     with pytest.raises(yaml.YAMLError) as excinfo:
         load_priors(path)
     assert str(path) in str(excinfo.value)
+    assert "line 3" in str(excinfo.value)
 
 
 def test_load_priors_validation_error_notes_file(tmp_path: Path) -> None:
