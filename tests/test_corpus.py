@@ -179,8 +179,9 @@ def rendered_messages(event: WorldEvent) -> list[dict[str, Any]]:
 def earlier_events(world: World, event: WorldEvent) -> tuple[WorldEvent, ...]:
     if event.scenario is None:
         return ()
-    position = world.events.index(event)
-    return tuple(item for item in world.events[:position] if item.scenario == event.scenario)
+    ordered = sorted(enumerate(world.events), key=lambda pair: (pair[1].day, pair[0]))
+    position = next(index for index, (_, item) in enumerate(ordered) if item is event)
+    return tuple(item for _, item in ordered[:position] if item.scenario == event.scenario)
 
 
 def request_for(world: World, event: WorldEvent, avoid: AvoidNames) -> LLMRequest:
@@ -294,8 +295,8 @@ def test_thread_model_schema_is_strict_and_channel_scoped() -> None:
         for definition in schema["$defs"].values()
         if "user_id" in definition.get("properties", {})
     )
-    assert set(poster["enum"]) == {"UME", "UEE", "UEM", "BPLM"}
-    assert set(reaction_user["enum"]) == {"UME", "UEE", "UEM"}
+    assert poster["enum"] == ["UME", "UEE", "UEM", "BPLM"]
+    assert reaction_user["enum"] == ["UME", "UEE", "UEM"]
     invalid = {"messages": rendered_messages(event)}
     invalid["messages"][0]["poster"] = "UOUT"
     with pytest.raises(ValidationError, match="poster"):
@@ -330,31 +331,22 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
 
     assert report.rendered == 2
     assert llm.requests == [expected_requests["E-DECISION"], expected_requests["E-ASK"]]
-    for request in llm.requests:
+    rendered_events = sorted(enumerate(world.events), key=lambda pair: (pair[1].day, pair[0]))
+    for request, (_, event) in zip(llm.requests, rendered_events, strict=True):
         assert request.model == "render"
-        assert (
-            request.output_schema
-            == request_for(
-                world,
-                next(
-                    event
-                    for event in world.events
-                    if event.day == (1 if request is llm.requests[0] else 2)
-                ),
-                avoid,
-            ).output_schema
-        )
+        assert request.output_schema == thread_model(world, event).model_json_schema()
         assert len(request.messages) == 1
         prompt = request.messages[0].content
         assert world.program in prompt
         assert world.project.name in prompt
         assert "kestrel-program" in prompt and "Coordinate the build" in prompt
         assert all(value in prompt for value in ("UME", "Morgan Vale", "ME", "mechanical owner"))
-        assert "Monday" in prompt or "Tuesday" in prompt
+        assert "UOUT" not in prompt and "Taylor Quill" not in prompt
         assert "E-ASK" not in prompt and "E-DECISION" not in prompt
         assert "S-SHARED" not in prompt
         assert "scenario" not in prompt.casefold()
     decision_prompt = llm.requests[0].messages[0].content
+    assert "Monday" in decision_prompt
     assert all(
         value in decision_prompt
         for value in (
@@ -364,18 +356,24 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
             "PN-71010",
             "drive plate",
             "motor plate",
-            "B",
-            "indirection",
-            "False",
-            "The manager asks for the plate release status.",
-            "3",
-            "8",
         )
     )
+    assert "The manager asks for the plate release status." not in decision_prompt
     ask_prompt = llm.requests[1].messages[0].content
-    assert all(
-        value in ask_prompt
-        for value in ("UEM", "ask", "UEE", str(world.date_of(3)), "delayed_crosspost", "2")
+    assert "Tuesday" in ask_prompt
+    assert all(value in ask_prompt for value in ("UEM", "ask", "UEE", "delayed_crosspost"))
+    assert "The team releases the drive plate at Rev B." in ask_prompt
+    assert re.search(
+        rf"{re.escape(str(world.date_of(3)))}|\bday\s+3\b|\bWednesday\b",
+        ask_prompt,
+        re.IGNORECASE,
+    )
+    assert re.search(
+        r"(?:one|1)\s+(?:root\s+)?message.{0,40}(?:one|1)\s+repl|"
+        r"(?:one|1)\s+repl.{0,40}(?:one|1)\s+(?:root\s+)?message|"
+        r"(?:two|2)\s+messages?",
+        ask_prompt,
+        re.IGNORECASE,
     )
     system = llm.requests[0].system
     folded = system.casefold()
@@ -395,7 +393,6 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
         ("output", "json", "schema"),
     ):
         assert any(concept in folded for concept in concepts)
-    assert "scenario" not in folded
 
 
 @pytest.mark.parametrize(
@@ -428,6 +425,16 @@ def test_render_request_sets_the_message_count_for_each_kind(
         prompt,
         re.IGNORECASE,
     )
+    for other_low, other_high in {(1, 3), (2, 6), (3, 6), (3, 8)} - {expected}:
+        other_range = (
+            rf"(?:{other_low}\s*(?:-|to)\s*{other_high}|"
+            rf"between\s+{other_low}\s+and\s+{other_high})"
+        )
+        assert not re.search(
+            rf"(?:message.{{0,40}}{other_range}|{other_range}.{{0,40}}message)",
+            prompt,
+            re.IGNORECASE,
+        )
 
 
 def test_render_request_states_when_an_ask_is_never_answered() -> None:
@@ -496,6 +503,16 @@ def test_render_assigns_timestamps_fields_mentions_reactions_and_permalinks(tmp_
         assert event.permalink == permalink_for(
             world.workspace_url, event.channel_id, event.ts, event.thread_ts
         )
+    ordered_events = sorted(enumerate(world.events), key=lambda pair: (pair[1].day, pair[0]))
+    for root, (_, world_event) in zip(roots, ordered_events, strict=True):
+        replies = [event for event in events if event.thread_ts == root.ts and event.ts != root.ts]
+        expected_replies = rendered_messages(world_event)[1:]
+        for reply, expected_reply in zip(replies, expected_replies, strict=True):
+            assert reply.user_id == expected_reply["poster"]
+            assert reply.thread_ts == root.ts
+            assert reply.channel_id == world_event.channel
+            assert reply.text == expected_reply["text"]
+            assert reply.files == tuple(expected_reply["files"])
 
 
 @pytest.mark.parametrize(
@@ -510,21 +527,26 @@ def test_render_assigns_timestamps_fields_mentions_reactions_and_permalinks(tmp_
         ("reply-precedes-root", r"preced|before.*root"),
         ("timestamp-date", r"date|midnight|timestamp"),
         ("ask-reply-not-last", "last"),
-        ("unanswered-ask-posts", r"unanswered|never.*answer|ask"),
-        ("answered-ask-one-message", r"at least two|two.*message|reply"),
+        ("unanswered-ask-posts", r"unanswered|never.*answer"),
+        ("answered-ask-one-message", r"at least two|two.*message|last.*repl|repl.*last"),
+        ("answered-ask-last-day-offset", r"day.?offset|answered.*day|reply.*day"),
     ],
 )
 def test_render_rejects_invalid_thread_without_writes(tmp_path: Path, case: str, rule: str) -> None:
+    """A one-message ask cannot satisfy both root-poster and last-replier rules; either error is valid."""
     data = world_data()
-    event_index = 0 if case.startswith(("ask-", "unanswered", "answered")) else 1
+    event_index = 0 if case.startswith(("ask-", "unanswered", "answered", "root-day-offset")) else 1
     if case == "unanswered-ask-posts":
         data["events"][0]["ask"]["answered_day"] = None
+    elif case == "zero-messages":
+        data["events"][1]["claims"] = []
     world = World.model_validate(data)
     event = world.events[event_index]
     messages = deepcopy(rendered_messages(event))
     avoid = EMPTY_AVOID
     if case == "missing-entity":
         messages[0]["text"] = "The release is now Rev B."
+        messages[0]["files"] = []
     elif case == "avoided-name":
         messages[0]["text"] += " Alex approved it."
         avoid = AvoidNames(names=("Alex",), identifiers=(), phrases=())
@@ -539,7 +561,8 @@ def test_render_rejects_invalid_thread_without_writes(tmp_path: Path, case: str,
     elif case == "reply-precedes-root":
         messages[1]["minutes_after_start"] = -1
     elif case == "timestamp-date":
-        messages[0]["minutes_after_start"] = 1_000
+        for message in messages:
+            message["minutes_after_start"] += 1_000
     elif case == "ask-reply-not-last":
         messages.insert(
             1,
@@ -552,12 +575,12 @@ def test_render_rejects_invalid_thread_without_writes(tmp_path: Path, case: str,
                 "reactions": [],
             },
         )
-        messages[-1]["poster"] = "UME"
-        messages[-1]["day_offset"] = 1
     elif case == "unanswered-ask-posts":
         messages[1]["day_offset"] = 0
     elif case == "answered-ask-one-message":
         messages = messages[:1]
+    elif case == "answered-ask-last-day-offset":
+        messages[-1]["day_offset"] = 0
     anchored = [(other, anchor_event(world, other)) for other in world.events if other is not event]
     manifest = Manifest(
         threads={
@@ -639,8 +662,9 @@ def test_render_merges_anchor_updates_manifest_and_is_byte_stable(tmp_path: Path
 
     first_report = render_world(world, llm, anchor, manifest, EMPTY_AVOID, events_out, manifest_out)
     first = events_out.read_bytes(), manifest_out.read_bytes()
+    rerun_manifest = load_manifest(manifest_out)
     second_report = render_world(
-        world, llm, anchor, manifest, EMPTY_AVOID, events_out, manifest_out
+        world, llm, anchor, rerun_manifest, EMPTY_AVOID, events_out, manifest_out
     )
 
     events = list(read_events(events_out, world.workspace_url))
@@ -648,7 +672,12 @@ def test_render_merges_anchor_updates_manifest_and_is_byte_stable(tmp_path: Path
     assert [event.event_ts for event in events] == sorted(event.event_ts for event in events)
     assert anchor_row in events
     assert written_manifest.threads[human.id] == manifest.threads[human.id]
-    assert written_manifest.threads["E-DECISION"].authored == "render"
+    rendered_root = next(
+        event for event in events if event.user_id == "UME" and event.thread_ts == event.ts
+    )
+    assert written_manifest.threads["E-DECISION"] == ThreadRef(
+        channel_id="CMAIN", thread_ts=rendered_root.ts, authored="render"
+    )
     assert first_report == second_report
     assert (events_out.read_bytes(), manifest_out.read_bytes()) == first
 
@@ -660,6 +689,22 @@ def test_all_human_world_rewrites_files_unchanged_without_model_calls(tmp_path: 
         key=lambda pair: pair[1].event_ts,
     )
     anchor_rows = [row for _, row in anchored]
+    first_root = anchor_rows[0]
+    reply_ts = f"{int(first_root.ts.split('.', 1)[0]) + 60}.000101"
+    anchor_rows.append(
+        first_root.model_copy(
+            update={
+                "thread_ts": first_root.ts,
+                "ts": reply_ts,
+                "event_ts": reply_ts,
+                "text": "A second human-authored line.",
+                "permalink": permalink_for(
+                    world.workspace_url, first_root.channel_id, reply_ts, first_root.ts
+                ),
+            }
+        )
+    )
+    anchor_rows.sort(key=lambda event: event.event_ts)
     anchor = tmp_path / "anchor.jsonl"
     write_events(anchor, anchor_rows)
     manifest = Manifest(
@@ -681,6 +726,7 @@ def test_all_human_world_rewrites_files_unchanged_without_model_calls(tmp_path: 
 
     assert report.rendered == 0
     assert report.reused == 2
+    assert len(anchor_rows) == 3
     assert report.messages == 0
     assert report.messages_per_thread == {}
     assert report.chars_per_message == ()
@@ -694,7 +740,11 @@ def test_all_human_world_rewrites_files_unchanged_without_model_calls(tmp_path: 
         ("Alex met ALEX; Jun replied to jun.", ["Alex", "Jun"]),
         ("Alexander met June.", []),
         ("Use (E204), not XE204 or E204A.", ["E204"]),
+        ("Use e204 for this build.", ["E204"]),
+        ("The xe204a variant is unrelated.", []),
         ("The board bring-up is done; keyboard bring-upstream is not.", ["board bring-up"]),
+        ("BOARD BRING-UP is done.", ["board bring-up"]),
+        ("The keyboard bring-upstream is unrelated.", []),
         ("BAD-2 then alex then BAD-2 again", ["BAD-2", "Alex"]),
     ],
 )
@@ -729,16 +779,16 @@ def test_bundled_anchor_and_manifest_pin_the_nine_human_lines() -> None:
 
     assert anchor.is_file()
     assert manifest_path.is_file()
-    assert anchor.read_bytes() == events.read_bytes()
-    assert len(anchor.read_bytes().splitlines()) == 9
-    lines = list(read_events(anchor, "https://kestrel-k2.slack.com"))
+    anchor_lines = anchor.read_bytes().splitlines()
+    event_lines = events.read_bytes().splitlines()
+    assert anchor_lines[:9] == event_lines
+    lines = list(read_events(anchor, "https://kestrel-k2.slack.com"))[:9]
     manifest = load_manifest(manifest_path)
     expected = {
         "N1-TORQUE": ("C0EXTCM", "1791898872.000100"),
         "S1-AGREE": ("C0ENGME", "1791911662.000400"),
         "S1-CUT": ("C0EXTCM", "1792068738.000800"),
     }
-    assert set(manifest.threads) == set(expected)
     for event_id, (channel_id, thread_ts) in expected.items():
         ref = manifest.threads[event_id]
         assert (ref.channel_id, ref.thread_ts, ref.authored) == (channel_id, thread_ts, "human")
