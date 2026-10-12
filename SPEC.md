@@ -127,31 +127,35 @@ Item: one extracted unit of information.
 `{item_id, type, title, summary, entities[], owner, due, affected_roles[], phase_tags[],
 severity, confidence, evidence[{channel_id, message_ts, quote}], claims[], first_seen,
 last_updated, status, resolved_by, links[{kind, item_id}], tasks[{task, effect,
-channel_id, message_ts}], absence}`
+channel_id, message_ts}], ask_message, absence}`
 - type: decision | blocker | risk | schedule_change | spec_change | bom_change | ask | fyi | absence
 - entities: part numbers with rev, ECO/ECR/DEV ids, gates, tests, vendors, POs, people
 - evidence entries and task links name their channel, because a Slack `ts` is unique
   only within a channel. Every lookup by message uses `(channel_id, message_ts)`.
-- `owner` is a user id. For an ask, it is the person asked; the asker is the author of
-  the first evidence message that the owner did not write.
+- `owner` is a user id. For an ask, it is the person asked. `ask_message`
+  (`{channel_id, message_ts}`, set only on an ask) is the message that asks; its author
+  is the asker, and its thread and time decide what counts as a reply. A merge keeps the
+  earliest ask message.
 - `tasks` links the item to checklist tasks. `effect` is evidence (progress on the task)
   or done (the task is complete). The model picks the task id from the checklist in the
   prompt, and code verifies that the id exists.
-- `absence` is set exactly when the type is absence: `{source (checklist | ask), gate,
-  task, asker, days_silent, buffer_consumed, buffer_days}`, with days in working days.
+- `absence` is set exactly when the type is absence: `{source, gate, task, asker,
+  days_silent, buffer_consumed, buffer_days}`, with days in working days. `source` is
+  checklist or ask in core; each stretch absence rule (section 5 step 5, c to g) adds
+  its own source value and fields when it is built.
 - status: open | resolved | superseded; `resolved_by` is the item or message that closed
   it, so a reader told while it was open can be shown the closing evidence
 - links.kind: duplicate | update_of | supersedes | contradicts | related
 
-Claim: `{key, value, asserted_ts, observed_ts, invalid_ts, author, channel, authority,
-certainty, kind, conditions, scope}`
+Claim: `{key, value, param, asserted_ts, observed_ts, invalid_ts, author, channel,
+authority, certainty, kind, conditions, scope}`
 where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
 rev, lead_time, gate_date, owner, status, qty, spec_param, priority. For `spec_param`
-the key also holds the parameter name: the words of the value before its first numeric
-token, in lower case (`payload 600 kg` is parameter `payload` with value `600 kg`); a
-value with no numeric token takes its first word as the name (`material ABS` is
-parameter `material` with value `ABS`). A value that starts with a number has no name
-and fails verification. Two parameters on one entity never share a key. authority is a
+the key also holds `param`, the parameter name in lower case (`payload`, `surface
+finish`), so two parameters on one entity never share a key; `param` is empty for every
+other attribute. The extractor sets `param`, and code verifies that it appears in the
+cited text. The world file writes a `spec_param` value as the name followed by the
+quantity (`payload 600 kg`), and its loader splits it at the first numeric token. authority is a
 small enum (owner_stated, plm_bot, cm_stated, hearsay). `certainty` is decided |
 reported | hedged | question; `kind` is stated (default: a fact such as a rev, owner, status or date) | target |
 measured | referenced (a value carried by a file name or link, which never supersedes);
@@ -228,7 +232,8 @@ stale_beliefs[], not_happened[], decisions[], risks[], fyi[]}, items[],
 rationale{item_id: score_breakdown}}`
 - `coverage` (M4 stretch) states the data the digest was built from: the window it covers, the time
   the store reaches, any channel not ingested, and a partial marker when a stage failed.
-  A digest never looks complete when it is not.
+  A digest never looks complete when it is not. `missing_channels` lists only channels
+  the reader can see; the full list is for the operator.
 
 LandingMap: per decision item, per role: landed | contradicted | unknown, each with
 evidence item ids. Only contradicting evidence may mark a cell contradicted; silence is

@@ -332,10 +332,11 @@ or question claim never supersedes, a target never supersedes a stated or measur
 resolves it: confirmation supersedes, restatement makes a contradiction routed to the key's
 owner, and silence past a cadence makes an absence.
 
-Amended 2026-10-12 (SPEC v0.4.3): a `spec_param` key also holds the parameter name, taken
-from the words before the value's first numeric token. Without it, two parameters on one
-part share a key and supersede each other. The world file already writes values in that
-form, so it needs no change; the ledger code and the world validator derive the name.
+Amended 2026-10-12 (SPEC v0.4.3): a claim carries `param`, and a `spec_param` key holds
+it. Without it, two parameters on one part share a key and supersede each other. The
+extractor sets the name and code verifies it in the cited text; a name guessed from the
+value's words collides ("surface finish" and "surface treatment"). The world file keeps
+writing the name before the quantity, and its loader and validator split the value.
 
 ## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
 
