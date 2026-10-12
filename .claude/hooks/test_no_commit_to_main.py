@@ -123,13 +123,19 @@ def test_allows_foreign_commit_by_full_git_path(repos):
     assert _verdict(cmd, repos["project"]) == "ALLOW"
 
 
+def test_allows_git_exe_as_an_argument_on_main(repos):
+    """Only the command word is read as a program name, not each argument."""
+    cmd = "gh issue create --title git.exe --body commit"
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
 @pytest.mark.parametrize(
     "cmd",
     [
         pytest.param('powershell -Command "git commit -m update"', id="powershell"),
         pytest.param("pwsh -c 'git commit -m update'", id="pwsh"),
         pytest.param('cmd //c "git commit -m update"', id="cmd"),
-        pytest.param('powershell -Command "GIT COMMIT -m update"', id="powershell-upper-case"),
+        pytest.param('powershell -Command "GIT commit -m update"', id="powershell-upper-case-program"),
     ],
 )
 def test_blocks_windows_shell_wrapped_commit_on_main(cmd, repos):

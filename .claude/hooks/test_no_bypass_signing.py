@@ -183,13 +183,18 @@ def test_blocks_windows_shell_wrapped_bypass_by_backslash_path():
 
 
 def test_blocks_windows_shell_syntax_forms():
-    """cmd reads a command glued to /c; PowerShell joins a backtick line end."""
+    """The guard does not parse cmd or PowerShell text, so their own syntax
+    (a command glued to /c, a backtick line end, `call`, an apostrophe) cannot
+    hide git and a bypass flag."""
     assert _verdict("cmd //cgit commit --no-verify -m x") == "BLOCK"
     assert _verdict("powershell -Command 'git `\n  commit --no-verify -m x'") == "BLOCK"
+    assert _verdict('cmd /c "call git.exe commit --no-verify -m x"') == "BLOCK"
+    assert _verdict('cmd /c "echo It\'s done & git commit --no-verify -m x"') == "BLOCK"
 
 
-def test_allows_bypass_words_as_powershell_arguments():
-    assert _verdict("powershell Write-Output git commit --no-verify") == "ALLOW"
+def test_bypass_words_as_powershell_arguments_fail_closed():
+    """The text is not parsed, so bypass words that are only printed block too."""
+    assert _verdict("powershell Write-Output git commit --no-verify") == "BLOCK"
 
 
 def test_blocks_encoded_powershell_command():
@@ -199,6 +204,7 @@ def test_blocks_encoded_powershell_command():
 
 def test_allows_windows_shell_wrapped_clean_commit():
     assert _verdict('powershell -Command "git commit -m x"') == "ALLOW"
+    assert _verdict('powershell -NoProfile -nop -Command "git status"') == "ALLOW"
     assert _verdict('cmd //c "git status"') == "ALLOW"
 
 

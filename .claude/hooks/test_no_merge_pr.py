@@ -183,7 +183,8 @@ BLOCK = [
     pytest.param("gh.exe pr merge 5", id="gh-exe-suffix"),
     pytest.param("GH.EXE pr merge 5", id="gh-exe-upper-case"),
     pytest.param('"/c/Program Files/GitHub CLI/gh.exe" pr merge 5', id="gh-exe-full-path"),
-    # Windows shells nested in Bash run their argument text as a command.
+    # Windows shells nested in Bash run their argument text as a command. The
+    # guard does not parse that text: it blocks when the text names a merge.
     pytest.param('powershell.exe -NoProfile -Command "gh pr merge 5"', id="powershell-command"),
     pytest.param(
         'powershell -ExecutionPolicy Bypass -Command "gh pr merge 5"',
@@ -209,6 +210,13 @@ BLOCK = [
     # cmd reads the command glued to /c, and `#` is plain text there.
     pytest.param("cmd //cgh pr merge 5", id="cmd-attached-command"),
     pytest.param('cmd //c "echo # header & gh pr merge 5"', id="cmd-hash-is-not-a-comment"),
+    pytest.param('cmd /c "echo It\'s ready & gh pr merge 5"', id="cmd-apostrophe-is-text"),
+    pytest.param('cmd /c "call gh.exe pr merge 5"', id="cmd-call"),
+    pytest.param(
+        'cmd /c "curl -X PUT https://api.github.com/repos/o/r/pulls/9/merge"', id="cmd-rest-merge"
+    ),
+    # Merge words that are only arguments still block: the text is not parsed.
+    pytest.param("powershell Write-Output gh pr merge 5", id="powershell-merge-words-fail-closed"),
     # PowerShell joins a line that ends in a backtick to the next line.
     pytest.param("powershell -Command 'gh `\n  pr merge 5'", id="powershell-backtick-continuation"),
     # An encoded command cannot be read, so it is refused.
@@ -273,7 +281,7 @@ ALLOW = [
     ),
     pytest.param("powershell -ExecutionPolicy Bypass -File build.ps1", id="powershell-file"),
     pytest.param("powershell -ep Bypass -File build.ps1", id="powershell-ep-is-execution-policy"),
-    pytest.param("powershell Write-Output gh pr merge 5", id="powershell-merge-words-as-arguments"),
+    pytest.param('cmd //c "git merge main"', id="cmd-git-merge-has-no-gh"),
     pytest.param('cmd //c "dir"', id="cmd-unrelated"),
 ]
 
