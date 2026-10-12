@@ -1,7 +1,8 @@
 """Refuse a commit that adds a token this project handles (pre-commit hook `no-secrets`).
 
 `detect-private-key` catches only PEM keys. This scan matches the token shapes the
-project uses: Slack bot and app tokens, OpenRouter and Anthropic API keys. It prints the
+project uses: Slack bot, app, refresh and rotated tokens, OpenRouter and Anthropic API
+keys. It prints the
 file, the line and the kind of token, never the token. CI runs gitleaks as the broad net.
 
 Usage: check_secrets.py PATH [PATH ...]   (prek passes the staged files)
@@ -16,6 +17,8 @@ PATTERNS = {
     "Slack app token": re.compile(r"xapp-\d-[0-9A-Za-z-]{20,}"),
     "OpenRouter key": re.compile(r"sk-or-v1-[0-9a-f]{32,}"),
     "Anthropic key": re.compile(r"sk-ant-[0-9A-Za-z_-]{20,}"),
+    # Token rotation: refresh tokens are xoxe-1-..., rotated access tokens xoxe.xoxb-1-...
+    "Slack refresh or rotated token": re.compile(r"xoxe(\.xox[bp])?-\d-[0-9A-Za-z-]{20,}"),
 }
 
 

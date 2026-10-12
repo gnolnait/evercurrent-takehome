@@ -8,6 +8,7 @@ push through: the check needs GitHub, and a missing tool must not block all work
 """
 
 import json
+import os
 import subprocess
 from collections.abc import Callable
 
@@ -35,7 +36,7 @@ def merged_pr(branch: str, run: Run = _run) -> int | None:
                 "--state",
                 "all",
                 "--json",
-                "number,state",
+                "number,state,isCrossRepository",
                 "--limit",
                 "20",
             ]
@@ -44,6 +45,8 @@ def merged_pr(branch: str, run: Run = _run) -> int | None:
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         print(f"pr-not-merged: could not check the PR state ({error}); push allowed")
         return None
+    # A PR from a fork with the same branch name says nothing about this repo's branch.
+    prs = [pr for pr in prs if not pr.get("isCrossRepository", False)]
     if any(pr["state"] == "OPEN" for pr in prs):
         return None
     merged = [pr["number"] for pr in prs if pr["state"] == "MERGED"]
@@ -51,7 +54,11 @@ def merged_pr(branch: str, run: Run = _run) -> int | None:
 
 
 def main() -> int:
+    # prek names the branch being pushed; it can differ from the checked-out one.
     branch = current_branch()
+    pushed = os.environ.get("PRE_COMMIT_REMOTE_BRANCH", "").removeprefix("refs/heads/")
+    if pushed:
+        branch = pushed
     if branch in ("main", "HEAD"):
         return 0
     number = merged_pr(branch)
