@@ -79,7 +79,11 @@ def select(
     priors: Priors,
     day: date,
 ) -> Selection:
-    """Choose the reader's lines for the day. Items must be open and updated by the end of the day."""
+    """Choose the reader's lines for the day. Items must be open and updated by the end of the day.
+
+    A checklist absence that is not must-see for the reader is left out. It is not counted in
+    `hidden`.
+    """
     end = micros_since_epoch(datetime.combine(day, time.max, ZoneInfo(world.timezone)))
     current = [
         item for item in items if item.status == "open" and ts_micros(item.last_updated) <= end
@@ -99,6 +103,8 @@ def select(
             line = Line(item=trimmed, section=section, must_see=True, reason=rule, score=0)
             must_see[section].append(line)
             continue
+        if _is_checklist_absence(trimmed):
+            continue  # a checklist absence never enters the ranked lane (plan B5.5)
         line = _ranked_line(trimmed, section, profile, priors)
         if line.score >= priors.daily.min_score:
             ranked[section].append(line)
@@ -112,6 +118,11 @@ def select(
         line for line in lines if not (line.item.type == "ask" and line.item.item_id in absent_asks)
     ]
     return Selection(profile=profile, day=day, lines=tuple(lines), hidden=hidden)
+
+
+def _is_checklist_absence(item: Item) -> bool:
+    """True when the item is a checklist absence."""
+    return item.absence is not None and item.absence.source == "checklist"
 
 
 def _cited_ask(item: Item) -> str | None:
@@ -160,7 +171,11 @@ def _rank_key(line: Line) -> tuple[float, int, str]:
 
 
 def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
-    """The must-see rule the item meets for the reader (plan B5.3), or None."""
+    """The must-see rule the item meets for the reader (plan B5.3), or None.
+
+    A checklist absence is must-see for a reader whose role is in its `affected_roles` and
+    for the EM, who runs the gate. Any other reader never sees it (plan B5.5).
+    """
     owned = set(item.entities) & set(profile.owned_entities)
     if item.type == "ask" and item.owner == profile.user_id:
         return "must see: an open ask addressed to you"
@@ -172,6 +187,8 @@ def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
         return None
     if item.absence.source == "checklist" and profile.role in item.affected_roles:
         return "must see: a checklist absence for your role"
+    if item.absence.source == "checklist" and profile.role == "EM":
+        return "must see: a checklist absence, you run the gate"
     if item.absence.source == "ask" and item.absence.asker == profile.user_id:
         return "must see: an ask absence, you asked"
     if item.absence.source == "ask" and item.owner == profile.user_id:
