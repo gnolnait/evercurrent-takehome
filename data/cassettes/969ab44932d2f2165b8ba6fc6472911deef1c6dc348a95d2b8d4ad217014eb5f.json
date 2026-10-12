@@ -1,0 +1,417 @@
+{
+  "key": "969ab44932d2f2165b8ba6fc6472911deef1c6dc348a95d2b8d4ad217014eb5f",
+  "request": {
+    "model": "extract",
+    "system": "You read one Slack thread of a hardware engineering program and extract project items.\nThe user message lists, in this order: the glossary of entities and people, the checklist tasks of gates on or after today, the existing items of this thread, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nReturn items for new information only: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask, or an fyi that a program member needs to know.\nDo not return an item again when a changed message adds nothing to an existing item.\nTo update or close an existing item, set item_id to its item_id from the list. For a new item, set item_id to null.\nSet status to resolved when the messages close the item, else open.\nEach evidence entry names one listed message by its ts and quotes a span of that message verbatim. Do not join text from two messages in one quote.\nUse null, never a guess, for owner, due and item_id when the messages do not state them.\nWrite owner as a user id from the glossary. Write due as YYYY-MM-DD.\nFor an ask, the owner is the person asked, not the person who asks. The first evidence entry of an ask is the message that asks.\nWrite each entity as a glossary entity id. Write a revision as a claim with attribute rev, not as part of the entity.\nEach claim states one attribute value of one entity and names the evidence message that states it.\nIn tasks, name only checklist tasks from the list, and only when a message reports progress on the task: a run, a result, a review held, a sign-off, a part received.\nSet effect to done only when a message states that the task is complete; else set effect to evidence. Each task link names the evidence message that shows the progress.\nA task link needs a progress report: a question about a task, or a status roll-up that lists a task as open, is not a task link. A question can still be an ask item.\nWrite the rationale first, before every other field, for the output and for each item.\nWhen the changed messages carry no new project information, return an empty items list.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Glossary entities (id | type | description | aliases):\n- drive | subsystem | Drive modules, motors, gearheads and motor drivers | none\n- compute | subsystem | Compute carrier, navigation sensors and signal wiring | none\n- safety | subsystem | Safety scanners, e-stop chain and safety I/O | none\n- power | subsystem | Battery, power distribution and main harness | none\n- chassis | subsystem | Chassis, brackets and top-level assembly | none\n- enclosure | subsystem | Molded top cover and bumper | none\n- PN-90001 | assembly | Kestrel K2 top-level assembly, DVT config | K2 top level\n- PN-11020 | part | Chassis base, 5052-H32 3 mm sheet | chassis base, chassis plate\n- PN-11034 | part | Drive-module bracket, 6061-T6 | drive bracket\n- PN-11051 | part | LiDAR mount bracket | lidar bracket, lidar mount\n- PN-51010 | molded | Top cover, PC/ABS textured | top cover\n- PN-51012 | molded | Bumper fascia, TPU | bumper fascia, fascia\n- PN-41001 | purchased | Drive motor and gearhead, Maxon EC-i 52 with GPX | drive motor, gearhead\n- PN-21010 | pcba | Power distribution board, precharge and contactor drive | PDB\n- PN-21020 | pcba | Compute carrier for Jetson Orin NX | carrier board, Orin carrier\n- PN-21030 | pcba | Motor driver board, DRV83xx-class | motor driver\n- PN-21040 | pcba | Safety I/O board, e-stop chain and STO | safety IO board\n- PN-42010 | purchased | Jetson Orin NX 16GB module | Orin NX\n- PN-42011 | purchased | Xavier NX carrier used on the EVT reliability fleet | Xavier carrier, CTI carrier\n- PN-43010 | purchased | Safety laser scanner, front and rear (SICK nanoScan3) | nanoScan, safety scanner\n- PN-43020 | purchased | 3D navigation LiDAR (Ouster OS0) | OS0, nav lidar\n- PN-44010 | purchased | E-stop button (Schneider Harmony XB5) | e-stop button\n- PN-61001 | battery | 48 V LFP pack, 16S, BQ769x0-class BMS | battery pack, pack\n- PN-31010 | harness | Main power and motor-phase harness, TE DEUTSCH DT | main harness, motor harness\n- PN-31020 | harness | Signal harness, Molex Micro-Fit 3.0 and JST GH | signal harness\n- C-MLCC-100V | component | 100 V X7R 1210 MLCC on the motor driver (Murata GRM, Samsung alternate) | the 1210s, 100V MLCC\n- ECO-0139 | eco | BMS board change on the battery pack | none\n- ECO-0142 | eco | Harness PN-31010 Rev B to C, adds the safety-I/O pigtail | 0142\n- DEV-0007 | deviation | Rev A bumper fascia allowed for EVT-2 only, qty 12 | none\n- FA-0031 | fa | EVT2-SN007 drive wheel loosened, set screw backed out | none\n- PO-45002211 | po | PO for 50 main harnesses PN-31010 | PO 4500-2211, harness PO\n- G-EVT2-EXIT | gate | EVT-2 exit review | none\n- G-TR1 | gate | Tooling and texture release for top cover PN-51010 | texture release\n- G-DVT1 | gate | DVT-1 go/no-go | DVT gate, go/no-go\n- BLD-DVT1 | build | DVT-1, 40 units at Sunrise Precision Mfg | DVT-1, DVT1 build\n- TST-THM-02 | test | Thermal soak at 40 C ambient, full duty | thermal soak, thermal review\n- TST-EMC-01 | test | EMC pre-scan, FCC 15B radiated and IEC 61000-4-2 ESD | EMC pre-scan\n- TST-SAF-01 | test | E-stop and safety-stop validation, ISO 13849-1 PL d | safety validation\n- TST-BMP-01 | test | Bumper stop-force and personnel-contact test | bumper test\n- TST-UN383 | test | UN 38.3 battery transport test | UN 38.3\n- FW-0.9.3 | release | Firmware v0.9.3 | v0.9.3\n- V-SUNRISE | vendor | Sunrise Precision Mfg, the contract manufacturer | Sunrise, the CM\n- DOC-11020-CM | document | CM drawing pack for chassis base PN-11020 | CM drawing pack\n- DOC-PRD | document | Kestrel K2 product requirements document | PRD\n- DOC-SCHED | document | Kestrel K2 program schedule | program schedule, Smartsheet\nGlossary people (user id | name | role | aliases):\n- U0ME01 | Nadia Brenner | ME | Nadia, @nadia\n- U0EE01 | Tobias Lindqvist | EE | Tobias, @tobias, Tobi\n- U0FW01 | Ana Folau | FW | Ana, @ana\n- U0SC01 | Hamid Rostami | supply_chain | Hamid, @hamid\n- U0EM01 | Grace Okonkwo | EM | Grace, @grace\n- U0PM01 | Wen Hollis | PM | Wen, @wen\n- U0CM01 | Luis Ortega | PM | Luis, @luis\n- B0PLM01 | plm_bot | none | none\n- B0SCH01 | schedule_bot | none | none\n- B0DOC01 | doc_control_bot | none | none\n\nChecklist tasks of gates on or after 2026-10-19 (task id | task | owner role | gate):\n- G-TR1.dfm | Close the top-cover DFM review | ME | G-TR1 on 2026-10-20\n- G-TR1.texture | Release texture on PN-51010 | ME | G-TR1 on 2026-10-20\n- G-DVT1.thermal | Close the TST-THM-02 thermal review | EE | G-DVT1 on 2026-10-22\n- G-DVT1.emc | Pass the TST-EMC-01 EMC pre-scan | EE | G-DVT1 on 2026-10-22\n- G-DVT1.safety | Validate e-stop timing (TST-SAF-01) on the DVT firmware | FW | G-DVT1 on 2026-10-22\n- G-DVT1.fai | Sign off FAI on DVT-1 mechanical parts | ME | G-DVT1 on 2026-10-22\n- G-DVT1.ctb | Reach clear-to-build for 40 units | supply_chain | G-DVT1 on 2026-10-22\n- G-DVT1.battery | Confirm the DVT-1 battery ship plan | supply_chain | G-DVT1 on 2026-10-22\n- G-DVT1.review | Hold the DVT-1 go/no-go review | EM | G-DVT1 on 2026-10-22\n\nExisting items of this thread:\nnone\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792423800.010077] author U0EM01: G-DVT1 is on day 9 and we're 4 days into the 7-day buffer. TST-THM-02 is still open, and the top-cover DFM review is still open too.\n[ts 1792423980.010078] author U0EE01: I still owe the thermal review closeout. The rerun with the new vent layout is queued, and I'll post the readout as soon as it finishes.\n[ts 1792424160.010079] author U0ME01: Top-cover DFM is waiting on the snap detail feedback. I can pull that into the same closeout path so we do not burn another day.\n[ts 1792424340.010080] author U0PM01: Please keep the buffer view current today. If either review slips past close of day, I'll flag the G-DVT1 schedule risk in the status note.\n[ts 1792424520.010081] author U0EM01: Thanks. Let's treat TST-THM-02 and top-cover DFM as the only blockers for the next G-DVT1 call unless someone sees another one."
+      }
+    ],
+    "output_schema": {
+      "$defs": {
+        "ExtractedClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "entity": {
+              "title": "Entity",
+              "type": "string"
+            },
+            "attribute": {
+              "enum": [
+                "rev",
+                "lead_time",
+                "gate_date",
+                "owner",
+                "status",
+                "qty",
+                "spec_param",
+                "priority"
+              ],
+              "title": "Attribute",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            },
+            "message_ts": {
+              "title": "Message Ts",
+              "type": "string"
+            }
+          },
+          "required": [
+            "entity",
+            "attribute",
+            "value",
+            "message_ts"
+          ],
+          "title": "ExtractedClaim",
+          "type": "object"
+        },
+        "ExtractedEvidence": {
+          "additionalProperties": false,
+          "properties": {
+            "message_ts": {
+              "title": "Message Ts",
+              "type": "string"
+            },
+            "quote": {
+              "title": "Quote",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message_ts",
+            "quote"
+          ],
+          "title": "ExtractedEvidence",
+          "type": "object"
+        },
+        "ExtractedItem": {
+          "additionalProperties": false,
+          "properties": {
+            "rationale": {
+              "title": "Rationale",
+              "type": "string"
+            },
+            "item_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Item Id"
+            },
+            "type": {
+              "enum": [
+                "decision",
+                "blocker",
+                "risk",
+                "schedule_change",
+                "spec_change",
+                "bom_change",
+                "ask",
+                "fyi"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            },
+            "owner": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            },
+            "due": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Due"
+            },
+            "affected_roles": {
+              "items": {
+                "enum": [
+                  "ME",
+                  "EE",
+                  "FW",
+                  "supply_chain",
+                  "EM",
+                  "PM"
+                ],
+                "type": "string"
+              },
+              "title": "Affected Roles",
+              "type": "array"
+            },
+            "severity": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "confidence": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "Confidence",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "open",
+                "resolved"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/ExtractedEvidence"
+              },
+              "minItems": 1,
+              "title": "Evidence",
+              "type": "array"
+            },
+            "claims": {
+              "items": {
+                "$ref": "#/$defs/ExtractedClaim"
+              },
+              "title": "Claims",
+              "type": "array"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/$defs/ExtractedTask"
+              },
+              "title": "Tasks",
+              "type": "array"
+            }
+          },
+          "required": [
+            "rationale",
+            "item_id",
+            "type",
+            "title",
+            "summary",
+            "entities",
+            "owner",
+            "due",
+            "affected_roles",
+            "severity",
+            "confidence",
+            "status",
+            "evidence",
+            "claims",
+            "tasks"
+          ],
+          "title": "ExtractedItem",
+          "type": "object"
+        },
+        "ExtractedTask": {
+          "additionalProperties": false,
+          "properties": {
+            "task": {
+              "title": "Task",
+              "type": "string"
+            },
+            "effect": {
+              "enum": [
+                "evidence",
+                "done"
+              ],
+              "title": "Effect",
+              "type": "string"
+            },
+            "message_ts": {
+              "title": "Message Ts",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "effect",
+            "message_ts"
+          ],
+          "title": "ExtractedTask",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ExtractedItem"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rationale",
+        "items"
+      ],
+      "title": "Extraction",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\":\"Grace's thread reports two open G-DVT1 reviews, TST-THM-02 and top-cover DFM, which she names as the only blockers for the next go/no-go call, plus a schedule buffer that is already partly consumed. Each new fact is captured once as a new item, with the thread's messages as evidence.\",\"items\":[{\"rationale\":\"Grace names TST-THM-02 as open and as a blocker for the next G-DVT1 call. Tobias says he still owes the thermal review closeout, and the rerun is queued but not finished.\",\"item_id\":null,\"type\":\"blocker\",\"title\":\"TST-THM-02 thermal review open and blocking G-DVT1\",\"summary\":\"The TST-THM-02 thermal soak review is still open. Tobias owes the closeout after a rerun with the new vent layout, which is queued but not finished. Grace lists it as a blocker for the next G-DVT1 call.\",\"entities\":[\"TST-THM-02\",\"G-DVT1\",\"enclosure\"],\"owner\":\"U0EE01\",\"due\":null,\"affected_roles\":[\"EE\",\"EM\"],\"severity\":\"high\",\"confidence\":\"high\",\"status\":\"open\",\"evidence\":[{\"message_ts\":\"1792423800.010077\",\"quote\":\"TST-THM-02 is still open\"},{\"message_ts\":\"1792423980.010078\",\"quote\":\"I still owe the thermal review closeout\"},{\"message_ts\":\"1792424520.010081\",\"quote\":\"treat TST-THM-02 and top-cover DFM as the only blockers for the next G-DVT1 call\"}],\"claims\":[{\"entity\":\"TST-THM-02\",\"attribute\":\"status\",\"value\":\"open\",\"message_ts\":\"1792423800.010077\"},{\"entity\":\"TST-THM-02\",\"attribute\":\"owner\",\"value\":\"U0EE01\",\"message_ts\":\"1792423980.010078\"}],\"tasks\":[]},{\"rationale\":\"Grace states the top-cover DFM review is still open and a blocker. Nadia says it is waiting on snap detail feedback, but she does not say she owns the review, so the owner stays null.\",\"item_id\":null,\"type\":\"blocker\",\"title\":\"Top-cover DFM review open and blocking G-DVT1\",\"summary\":\"The top-cover DFM review is still open and waiting on snap detail feedback. Grace lists it as a blocker for the next G-DVT1 call.\",\"entities\":[\"G-TR1\",\"PN-51010\",\"G-DVT1\"],\"owner\":null,\"due\":null,\"affected_roles\":[\"ME\",\"EM\"],\"severity\":\"high\",\"confidence\":\"high\",\"status\":\"open\",\"evidence\":[{\"message_ts\":\"1792423800.010077\",\"quote\":\"the top-cover DFM review is still open too\"},{\"message_ts\":\"1792424160.010079\",\"quote\":\"Top-cover DFM is waiting on the snap detail feedback\"},{\"message_ts\":\"1792424520.010081\",\"quote\":\"treat TST-THM-02 and top-cover DFM as the only blockers for the next G-DVT1 call\"}],\"claims\":[{\"entity\":\"G-TR1\",\"attribute\":\"status\",\"value\":\"open\",\"message_ts\":\"1792423800.010077\"}],\"tasks\":[]},{\"rationale\":\"Grace reports the G-DVT1 buffer is already 4 of 7 days used with two reviews open. Wen says he will flag a G-DVT1 schedule risk if either review slips past close of day, so the risk is real but not yet confirmed.\",\"item_id\":null,\"type\":\"risk\",\"title\":\"G-DVT1 schedule buffer eroding with two open reviews\",\"summary\":\"G-DVT1 is on day 9 with 4 of the 7 buffer days used. Both open reviews must close soon or the schedule risk gets flagged in the status note.\",\"entities\":[\"G-DVT1\",\"DOC-SCHED\"],\"owner\":null,\"due\":null,\"affected_roles\":[\"PM\",\"EM\"],\"severity\":\"medium\",\"confidence\":\"medium\",\"status\":\"open\",\"evidence\":[{\"message_ts\":\"1792423800.010077\",\"quote\":\"we're 4 days into the 7-day buffer\"},{\"message_ts\":\"1792424340.010080\",\"quote\":\"If either review slips past close of day, I'll flag the G-DVT1 schedule risk\"}],\"claims\":[],\"tasks\":[]}]}",
+    "data": {
+      "rationale": "Grace's thread reports two open G-DVT1 reviews, TST-THM-02 and top-cover DFM, which she names as the only blockers for the next go/no-go call, plus a schedule buffer that is already partly consumed. Each new fact is captured once as a new item, with the thread's messages as evidence.",
+      "items": [
+        {
+          "rationale": "Grace names TST-THM-02 as open and as a blocker for the next G-DVT1 call. Tobias says he still owes the thermal review closeout, and the rerun is queued but not finished.",
+          "item_id": null,
+          "type": "blocker",
+          "title": "TST-THM-02 thermal review open and blocking G-DVT1",
+          "summary": "The TST-THM-02 thermal soak review is still open. Tobias owes the closeout after a rerun with the new vent layout, which is queued but not finished. Grace lists it as a blocker for the next G-DVT1 call.",
+          "entities": [
+            "TST-THM-02",
+            "G-DVT1",
+            "enclosure"
+          ],
+          "owner": "U0EE01",
+          "due": null,
+          "affected_roles": [
+            "EE",
+            "EM"
+          ],
+          "severity": "high",
+          "confidence": "high",
+          "status": "open",
+          "evidence": [
+            {
+              "message_ts": "1792423800.010077",
+              "quote": "TST-THM-02 is still open"
+            },
+            {
+              "message_ts": "1792423980.010078",
+              "quote": "I still owe the thermal review closeout"
+            },
+            {
+              "message_ts": "1792424520.010081",
+              "quote": "treat TST-THM-02 and top-cover DFM as the only blockers for the next G-DVT1 call"
+            }
+          ],
+          "claims": [
+            {
+              "entity": "TST-THM-02",
+              "attribute": "status",
+              "value": "open",
+              "message_ts": "1792423800.010077"
+            },
+            {
+              "entity": "TST-THM-02",
+              "attribute": "owner",
+              "value": "U0EE01",
+              "message_ts": "1792423980.010078"
+            }
+          ],
+          "tasks": []
+        },
+        {
+          "rationale": "Grace states the top-cover DFM review is still open and a blocker. Nadia says it is waiting on snap detail feedback, but she does not say she owns the review, so the owner stays null.",
+          "item_id": null,
+          "type": "blocker",
+          "title": "Top-cover DFM review open and blocking G-DVT1",
+          "summary": "The top-cover DFM review is still open and waiting on snap detail feedback. Grace lists it as a blocker for the next G-DVT1 call.",
+          "entities": [
+            "G-TR1",
+            "PN-51010",
+            "G-DVT1"
+          ],
+          "owner": null,
+          "due": null,
+          "affected_roles": [
+            "ME",
+            "EM"
+          ],
+          "severity": "high",
+          "confidence": "high",
+          "status": "open",
+          "evidence": [
+            {
+              "message_ts": "1792423800.010077",
+              "quote": "the top-cover DFM review is still open too"
+            },
+            {
+              "message_ts": "1792424160.010079",
+              "quote": "Top-cover DFM is waiting on the snap detail feedback"
+            },
+            {
+              "message_ts": "1792424520.010081",
+              "quote": "treat TST-THM-02 and top-cover DFM as the only blockers for the next G-DVT1 call"
+            }
+          ],
+          "claims": [
+            {
+              "entity": "G-TR1",
+              "attribute": "status",
+              "value": "open",
+              "message_ts": "1792423800.010077"
+            }
+          ],
+          "tasks": []
+        },
+        {
+          "rationale": "Grace reports the G-DVT1 buffer is already 4 of 7 days used with two reviews open. Wen says he will flag a G-DVT1 schedule risk if either review slips past close of day, so the risk is real but not yet confirmed.",
+          "item_id": null,
+          "type": "risk",
+          "title": "G-DVT1 schedule buffer eroding with two open reviews",
+          "summary": "G-DVT1 is on day 9 with 4 of the 7 buffer days used. Both open reviews must close soon or the schedule risk gets flagged in the status note.",
+          "entities": [
+            "G-DVT1",
+            "DOC-SCHED"
+          ],
+          "owner": null,
+          "due": null,
+          "affected_roles": [
+            "PM",
+            "EM"
+          ],
+          "severity": "medium",
+          "confidence": "medium",
+          "status": "open",
+          "evidence": [
+            {
+              "message_ts": "1792423800.010077",
+              "quote": "we're 4 days into the 7-day buffer"
+            },
+            {
+              "message_ts": "1792424340.010080",
+              "quote": "If either review slips past close of day, I'll flag the G-DVT1 schedule risk"
+            }
+          ],
+          "claims": [],
+          "tasks": []
+        }
+      ]
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 5480,
+    "output_tokens": 3555
+  },
+  "recorded_at": "2026-10-12T19:55:32.346729+00:00"
+}

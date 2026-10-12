@@ -1,0 +1,46 @@
+{
+  "key": "ef4e97932269f3163e4f74d479e7dc2700b1c2e1322aa281f1357fc7fde5250d",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program status, schedule, gate reviews and decisions\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791823500.010005] author U0EM01: EVT-2 exit review decision: G-EVT2-EXIT is passed with actions. DEV-0007 is expired as of today.\n[ts 1791823620.010006] author U0PM01: Thanks <@U0EM01>. I’ll keep the schedule status as green-with-actions and track owners in the program log.\n[ts 1791823740.010007] author U0EE01: Got it. I’ll close out the DEV-0007 references from the EE side so we don’t keep carrying that exception.\n[ts 1791823860.010008] author U0ME01: ME actions are noted. Nothing blocking the exit from our side.\n[ts 1791823980.010009] author U0FW01: FW is aligned. Send me any action wording you want mirrored in the test notes."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages announce a gate decision: EVT-2 exit review passed with actions, and deviation DEV-0007 expired. The follow-up replies confirm schedule status is green-with-actions, EE will close out DEV-0007 references, and ME and FW are aligned. This is a decision and a schedule status update that program members need to know, so it carries project information.\", \"probability\": 0.96}",
+    "data": {
+      "rationale": "The changed messages announce a gate decision: EVT-2 exit review passed with actions, and deviation DEV-0007 expired. The follow-up replies confirm schedule status is green-with-actions, EE will close out DEV-0007 references, and ME and FW are aligned. This is a decision and a schedule status update that program members need to know, so it carries project information.",
+      "probability": 0.96
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 795,
+    "output_tokens": 134
+  },
+  "recorded_at": "2026-10-12T19:51:25.355557+00:00"
+}

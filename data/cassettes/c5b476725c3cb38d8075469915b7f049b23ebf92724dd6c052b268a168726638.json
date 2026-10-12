@@ -1,0 +1,46 @@
+{
+  "key": "c5b476725c3cb38d8075469915b7f049b23ebf92724dd6c052b268a168726638",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Shared channel with Sunrise Precision Mfg\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792068738.000800] author U0CM01: DVT-1 machining status: PN-11051 lidar bracket rev A, qty 40, on the Haas today, should finish Fri. PN-11034 drive bracket done 40/40. <@U0SC01> pls confirm the anodize PO when you're online\n[ts 1792077302.000900] author U0SC01: <@U0CM01> anodize PO goes out this morning, I'll drop the number in here"
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages carry schedule and status information: a DVT-1 machining status update (PN-11051 lidar bracket finishing Friday, PN-11034 drive bracket complete at 40/40) and a request to confirm the anodize PO, which the vendor acknowledges will go out this morning. This is program-relevant status and an action item, not small talk.\", \"probability\": 0.85}",
+    "data": {
+      "rationale": "The changed messages carry schedule and status information: a DVT-1 machining status update (PN-11051 lidar bracket finishing Friday, PN-11034 drive bracket complete at 40/40) and a request to confirm the anodize PO, which the vendor acknowledges will go out this morning. This is program-relevant status and an action item, not small talk.",
+      "probability": 0.85
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 680,
+    "output_tokens": 132
+  },
+  "recorded_at": "2026-10-12T19:53:34.234200+00:00"
+}

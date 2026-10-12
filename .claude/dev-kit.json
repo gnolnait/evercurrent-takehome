@@ -1,8 +1,8 @@
 {
-  "kit_commit": "abec56941ef6ef4d456c5d66bde529e498794f91",
+  "kit_commit": "d8e469670c3b5459efb469121dde0e2ba279e2d9",
   "exclude": [],
   "files": {
-    ".claude/commands/review-local.md": "9d47eada4c3fd56c1036939d7186546fdd730e9de11b7cb5c384b9f4e7c16be2",
+    ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
     ".claude/hooks/conftest.py": "0d8c9595b7b71f78fcf2fba4623d958c19a1e591ae5a2be785b63a86ce56207a",
     ".claude/hooks/context-snapshot": "e2ae5fafe77ec2eb847c759ef3ac095f10e94e9655dcf772156420c5d18a3897",
     ".claude/hooks/context_snapshot.py": "a10b3024128a2e03a21620eacc5d0a68687b63beadb08a257449470db521d8cb",

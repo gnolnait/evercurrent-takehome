@@ -1,0 +1,46 @@
+{
+  "key": "316796f98713f45883dcf5ded106c44b5d7aa0371e83a060104460bd6329db5f",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Posts from PLM, the program schedule and document control\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791822000.010003] author B0DOC01: DOC-11020-CM Rev B issued to Sunrise for PN-11020.\n[ts 1791822120.010004] author U0SC01: Thanks, I’ll treat Rev B as the CM pack for Sunrise."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread root is new in this delta and reports that DOC-11020-CM Rev B was issued to Sunrise for PN-11020, which is document control information a program member needs to know. The follow-up reply confirms Rev B is being treated as the CM pack for Sunrise, so it adds acknowledgment of the same project fact rather than new information. The channel purpose is PLM and document control, which fits this content. Overall this is a clear project fyi about a document revision issued to a customer.\", \"probability\": 0.9}",
+    "data": {
+      "rationale": "The thread root is new in this delta and reports that DOC-11020-CM Rev B was issued to Sunrise for PN-11020, which is document control information a program member needs to know. The follow-up reply confirms Rev B is being treated as the CM pack for Sunrise, so it adds acknowledgment of the same project fact rather than new information. The channel purpose is PLM and document control, which fits this content. Overall this is a clear project fyi about a document revision issued to a customer.",
+      "probability": 0.9
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 621,
+    "output_tokens": 172
+  },
+  "recorded_at": "2026-10-12T19:51:49.928429+00:00"
+}

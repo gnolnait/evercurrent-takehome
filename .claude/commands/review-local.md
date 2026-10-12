@@ -36,7 +36,7 @@ matched rule paths go into the dispatch prompt.
 
 Run `.claude/workflows/review-local.js` with the Workflow tool. Pass it as `scriptPath`,
 as an absolute path under `git rev-parse --show-toplevel` (the current checkout, not
-`<root>`). Do not run it by name. The name lookup does not read this checkout's file.
+`<root>`). Do not run it by name. A name lookup can miss this checkout's file.
 Pass these `args`:
 
 - `base`, `head`: the SHAs from step 1.
