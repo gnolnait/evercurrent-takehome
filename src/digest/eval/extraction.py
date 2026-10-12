@@ -15,7 +15,7 @@ from digest.extract.normalize import normalize_space
 from digest.extract.stage import ExtractReport, run_extract
 from digest.extract.verify import DROP_FIELDS, quotes
 from digest.llm.client import LLM
-from digest.models import Claim, Frozen, Item, ItemType, TriageDecision
+from digest.models import Attribute, Claim, Frozen, Item, ItemType, TriageDecision
 from digest.priors import Priors
 from digest.project import ProjectConfig, add_working_days
 from digest.replay import read_events, replay_world
@@ -24,6 +24,10 @@ from digest.world.golden import Golden, GoldenClaim, GoldenItem, derive_golden, 
 from digest.world.load import load_world
 from digest.world.manifest import Manifest, load_manifest
 from digest.world.schema import World
+
+# A golden claim on one of these attributes matches only with an equal normalized value.
+# A golden claim on any other attribute matches on entity and attribute (plan Q6).
+DISCRIMINATING_ATTRIBUTES: frozenset[Attribute] = frozenset({"rev", "gate_date", "qty", "owner"})
 
 # (day, source, task id for a checklist absence or ask event id for an ask absence)
 _AbsenceKey = tuple[int, str, str | None]
@@ -51,7 +55,9 @@ class ExtractionReport(Frozen):
     by_type: dict[str, TypeScores]
     thread_recall: float | None  # golden items whose thread yielded any item
     type_agreement: float | None  # among matched golden items, share whose item has the same type
-    objective_misses: dict[str, int]  # thread-matched golden items with a wrong objective field
+    # Thread-matched golden items with a wrong objective field; claims.value counts only
+    # claims on DISCRIMINATING_ATTRIBUTES.
+    objective_misses: dict[str, int]
     claims_golden: int
     claims_found: int
     claims_extracted: int  # extracted claims in golden threads
@@ -309,7 +315,7 @@ def _decisions(store: Store, event_id: str, thread: str, as_of: datetime) -> lis
 def _pairs(
     golden_items: Sequence[GoldenItem], by_thread: Mapping[str, list[Item]]
 ) -> dict[str, Item]:
-    """Event id to item: each golden item takes the first free item that carries its fields."""
+    """Event id to item: each golden item takes the first free item with its claims and owner."""
     taken: set[str] = set()
     pairs: dict[str, Item] = {}
     for golden in golden_items:
@@ -333,10 +339,18 @@ def _qualifies(golden: GoldenItem, item: Item) -> bool:
 
 
 def _carries(item: Item, claim: GoldenClaim) -> bool:
+    """True when the item has a claim that matches the golden claim (see `_claim_key`)."""
     return _claim_key(claim) in {_claim_key(own) for own in item.claims}
 
 
-def _claim_key(claim: GoldenClaim | Claim) -> tuple[str, str, str]:
+def _claim_key(claim: GoldenClaim | Claim) -> tuple[str, str, str | None]:
+    """The match key: entity, attribute and, on a discriminating attribute, the value.
+
+    The value is normalized with `normalize_space` and lower case. On any other attribute
+    the value is None, so two claims on the same entity and attribute match.
+    """
+    if claim.attribute not in DISCRIMINATING_ATTRIBUTES:
+        return (claim.entity, claim.attribute, None)
     return (claim.entity, claim.attribute, normalize_space(claim.value).lower())
 
 
@@ -372,13 +386,20 @@ def _objective_misses(
     by_thread: Mapping[str, list[Item]],
     pairs: Mapping[str, Item],
 ) -> dict[str, int]:
-    """Per field, the unmatched thread-matched golden items whose thread has no correct value."""
+    """Per field, the unmatched thread-matched golden items whose thread has no correct value.
+
+    `claims.value` counts only golden claims on DISCRIMINATING_ATTRIBUTES.
+    """
     misses = {"claims.value": 0, "owner": 0}
     for golden in golden_items:
         items = by_thread.get(_thread_of(golden), [])
         if not items or golden.event_id in pairs:
             continue
-        if not all(any(_carries(item, claim) for item in items) for claim in golden.claims):
+        if not all(
+            any(_carries(item, claim) for item in items)
+            for claim in golden.claims
+            if claim.attribute in DISCRIMINATING_ATTRIBUTES
+        ):
             misses["claims.value"] += 1
         if golden.owner is not None and all(item.owner != golden.owner for item in items):
             misses["owner"] += 1
@@ -388,14 +409,19 @@ def _objective_misses(
 def _claim_counts(
     golden_items: Sequence[GoldenItem], by_thread: Mapping[str, list[Item]]
 ) -> tuple[int, int, int, int]:
-    """Golden claims, those found in their thread, extracted claims in golden threads, matched."""
+    """Golden claims, those found in their thread, extracted claims in golden threads, matched.
+
+    Recall and precision use one match rule, `_claim_key`.
+    """
     golden_claims = [(_thread_of(item), claim) for item in golden_items for claim in item.claims]
     found = sum(
         1
         for thread, claim in golden_claims
         if any(_carries(item, claim) for item in by_thread.get(thread, []))
     )
-    keys: dict[str, set[tuple[str, str, str]]] = {_thread_of(item): set() for item in golden_items}
+    keys: dict[str, set[tuple[str, str, str | None]]] = {
+        _thread_of(item): set() for item in golden_items
+    }
     for thread, claim in golden_claims:
         keys[thread].add(_claim_key(claim))
     extracted = [
