@@ -28,6 +28,10 @@ On Windows, clone into a short path such as `C:\dc`. The `anthropic` package ins
 `anthropic/types/cache_miss_previous_message_not_found.py`; under a deep folder its full
 path passes the 260-character limit, the file is not written, and the import fails.
 
+If Windows reports "An Application Control policy has blocked this file", Smart App
+Control has blocked the `digest.exe` launcher in the new venv. Run the same command
+through Python instead: `uv run python -m digest demo`.
+
 ## What a reader sees, and why
 
 - Visibility fails closed: a line reaches a reader only when its thread is in a public
