@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 from collections import Counter
@@ -49,6 +50,7 @@ _DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")
 _DEMO_ROLES = ("ME", "supply_chain", "EM")  # the roles of _DEMO_READERS, in the same order
 _RULE = "-" * 40
 _WEBHOOK_PREFIX = "https://hooks.slack.com/"
+_SLACK_ERROR_CODE = re.compile(r"[a-z_]+")  # a body such as invalid_blocks
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -94,9 +96,11 @@ def post(
     exits 1 before it builds a digest. It builds the three digests as `digest demo` does
     and posts nothing until all three are built. It posts one message per reader, in
     reader order. It stops at the first message that Slack refuses or that fails to send.
-    A send failure shows the reader and the exception type only. The command never
-    constructs the settings object, so it reads no API key. No output contains the
-    webhook URL.
+    A send failure shows the reader and the exception type only. A refusal shows the
+    reader, the status and the response body. It shows the body only when the body is a
+    Slack error code (lower-case letters and underscores), else it says the body is
+    withheld. The command never constructs the settings object, so it reads no API key.
+    No output contains the webhook URL.
     """
     url = _webhook_url()
     if url is None:
@@ -114,9 +118,15 @@ def post(
         except Exception as error:
             _refuse(f"cannot post the digest for {reader}: {type(error).__name__}")
         if response.status_code != 200:
+            # Show only a Slack error code. Another body, such as a proxy page, can echo the URL.
+            body = response.body
+            shown = (
+                body
+                if _SLACK_ERROR_CODE.fullmatch(body)
+                else "body withheld (not a Slack error code)"
+            )
             _refuse(
-                f"Slack refused the digest for {reader}: status {response.status_code}, "
-                f"{response.body}".replace(url, "<webhook>")
+                f"Slack refused the digest for {reader}: status {response.status_code}, {shown}"
             )
         typer.echo(f"posted the digest for {reader}")
 
