@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.10, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.11, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -30,9 +30,8 @@ any order; a unit branch rebases on `main` if `digest/cli.py` conflicts. The stu
 implements, not stubs, the shared pieces more than one unit reads (the store's item and
 triage methods, the priors loader, the manifest reader and writer, `World.glossary()`).
 They are about a hundred lines of real code, so they go through the wall inside that
-pull request: a Codex test author appends their tests to `tests/test_store.py`,
-`tests/test_project.py` and `tests/test_world.py`, and an Opus implementer makes them
-pass; the orchestrator writes only the interfaces, the fixture content and the
+pull request: a Codex test author writes `tests/test_priors.py` and appends to `tests/test_store.py`
+and `tests/test_world.py`, and an Opus implementer makes them pass; the orchestrator writes only the interfaces, the fixture content and the
 configuration. The stubs branch forks from `m2-plan` (it needs the plan and the SPEC
 edit) and rebases onto `main` after the plan pull request merges; its pull request opens
 as a draft until then. Commit order: interfaces, fixture and configuration first; then
@@ -382,7 +381,7 @@ def resolve_person(text: str, glossary: Glossary) -> str | None         # user i
 DROP_FIELDS = ("evidence.unknown_message", "evidence.quote", "item_id.unknown",
                "entities.unresolved", "claims.entity", "claims.message",
                "owner.unresolved", "due.format", "tasks.unknown", "tasks.message",
-               "evidence.stale", "evidence.stale_item")
+               "evidence.stale", "claims.stale", "tasks.stale")
 
 class Verified(Frozen):
     items: tuple[Item, ...]
@@ -547,9 +546,11 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
   already cited `message_ts` replaces the old one in place, because it was verified
   against the current text; an old entry whose message is in `citable` (the delta
   carries the edit) is re-checked against the current text and dropped when its quote
-  no longer matches (`evidence.stale`); an update that would leave no evidence is
-  refused and counted (`evidence.stale_item`), the item stays as it was, and the
-  retraction of items edited away from their evidence is M3's rule with deletes, and its
+  no longer matches (`evidence.stale`), and every old claim or task link whose
+  `message_ts` is no longer in the merged evidence is dropped with it (`claims.stale`,
+  `tasks.stale`), so a link never cites an entry the item does not hold; the merged
+  evidence is never empty, because the incoming item passed the schema's `minItems: 1`
+  and its entries were verified before the merge, and its
   `claims` the union deduplicated by `(entity, attribute, value, message_ts)`; its
   `tasks` the union deduplicated by `(task, effect, message_ts)`, so a `done` link is
   never erased by a later update that omits it; every scalar field, `entities` and `affected_roles`
@@ -1001,8 +1002,9 @@ B3.7 `anchor.jsonl` holds the human-authored anchor slice: the nine lines M1 shi
 human`; unit 3 creates `manifest.json` with those entries and the data pull request
 adds the rendered ones. `events.jsonl` keeps the nine lines until the data pull request regenerates it.
 
-B3.8 `RenderReport` carries message counts per thread and the character length of every
-message for the command's printed summary; the eval computes the same figures from the
+B3.8 `RenderReport` carries message counts per rendered thread (anchor threads excluded,
+as in B4.6) and the character length of every rendered message for the command's
+printed summary; the eval computes the same figures from the
 files (B4.6), so the report has one source.
 
 ### Tests
@@ -1254,7 +1256,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | One prompt version for the extract stage | `EXTRACT_PROMPT_VERSION` covers the triage and extraction prompts | A separate triage constant re-ran nothing on its own; one constant gives a prompt edit one visible effect. |
 | `digest extract` steps one day at a time | The CLI runs the stage per working day up to `meta.until` | A multi-day delta is a different request from the one-day deltas the eval records, so replay would miss its cassettes. |
 | Golden freshness | The eval re-derives the golden set and refuses a difference | A cadence check alone misses a world or manifest edit. |
-| Edited evidence | A re-cited message replaces its entry; an entry whose message changed in the delta is re-checked and dropped when stale; an item left with no evidence keeps its state and is counted | The store holds one version per message (M1), so a kept quote must match the current text; the corpus has no edits in M2 and retraction belongs with M3's delete rule. |
+| Edited evidence | A re-cited message replaces its entry; an entry whose message changed in the delta is re-checked and dropped when stale, with the claims and task links that cited it | The store holds one version per message (M1), so a kept quote must match the current text and a link must cite an entry the item holds; the corpus has no edits in M2. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
 
