@@ -772,9 +772,13 @@ def test_load_manifest_validation_error_notes_file(tmp_path: Path) -> None:
 
 def _world_with_valid_ask() -> dict[str, Any]:
     raw = _world()
-    raw["events"][0]["kind"] = "ask"
-    raw["events"][0]["ask"] = {"of": "UEM", "answered_day": 2}
+    raw["events"][2]["kind"] = "ask"
+    raw["events"][2]["ask"] = {"of": "UEM", "answered_day": 3}
     return raw
+
+
+def _ask_event(raw: dict[str, Any]) -> dict[str, Any]:
+    return next(event for event in raw["events"] if event["kind"] == "ask")
 
 
 @pytest.mark.parametrize(
@@ -792,7 +796,7 @@ def _world_with_valid_ask() -> dict[str, Any]:
 )
 def test_world_rejects_broken_ask_references(broken: str) -> None:
     raw = _world_with_valid_ask()
-    event = raw["events"][0]
+    event = _ask_event(raw)
     if broken == "ask-on-non-ask":
         event["kind"] = "fyi"
     elif broken == "ask-missing":
@@ -820,6 +824,6 @@ def test_world_rejects_broken_ask_references(broken: str) -> None:
 
 def test_world_accepts_valid_ask_reference() -> None:
     world = World.model_validate(_world_with_valid_ask())
-    ask = world.events[0].ask
+    ask = world.events[2].ask
     assert ask is not None
-    assert (ask.of, ask.answered_day) == ("UEM", 2)
+    assert (ask.of, ask.answered_day) == ("UEM", 3)

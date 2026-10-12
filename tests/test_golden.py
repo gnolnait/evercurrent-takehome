@@ -147,7 +147,7 @@ def test_derive_golden_maps_non_distractor_events_and_distractors() -> None:
 
     golden = derive_golden(world, manifest, _priors())
 
-    assert [item.event_id for item in golden.items] == ["GATE", "TOUCH", "ASK"]
+    assert [item.event_id for item in golden.items] == ["GATE", "ASK", "TOUCH"]
     gate = golden.items[0]
     assert gate.model_dump() == {
         "event_id": "GATE",
@@ -191,10 +191,10 @@ def test_derive_golden_maps_non_distractor_events_and_distractors() -> None:
         "must_see_for": ("UOWNER",),
         "known_by": {"UASK": 1},
     }
-    assert golden.items[1].entities == ()
-    assert golden.items[1].claims == ()
-    assert golden.items[1].tasks == world.events[1].tasks
-    assert golden.items[2].owner == "UOWNER"
+    assert golden.items[1].owner == "UOWNER"
+    assert golden.items[2].entities == ()
+    assert golden.items[2].claims == ()
+    assert golden.items[2].tasks == world.events[1].tasks
     assert [row.model_dump() for row in golden.distractors] == [
         {
             "event_id": "NOISE",
@@ -234,6 +234,33 @@ def test_derive_golden_world_without_asks_has_no_ask_absences() -> None:
     world = World.model_validate(raw)
     golden = derive_golden(world, _manifest(world), _priors())
     assert not any(absence.source == "ask" for absence in golden.absences)
+
+
+def test_derive_golden_uses_earliest_gate_claim_on_buffer_opening_day() -> None:
+    raw = _world_data()
+    raw["project"]["gates"][0]["buffer_days"] = 1
+    raw["events"] = [
+        {
+            "id": "LATER-GATE",
+            "day": 3,
+            "channel": "CF",
+            "poster": "BOT",
+            "kind": "fyi",
+            "summary": "The gate remains scheduled.",
+            "claims": [{"entity": "G1", "attribute": "status", "value": "open"}],
+        },
+        raw["events"][0],
+    ]
+    world = World.model_validate(raw)
+
+    golden = derive_golden(world, _manifest(world), _priors())
+
+    checklist = [row for row in golden.absences if row.source == "checklist"]
+    assert [(row.day, row.cites) for row in checklist] == [
+        (4, "GATE"),
+        (5, "GATE"),
+    ]
+    assert not any(row.day == 3 for row in checklist)
 
 
 def test_bundled_world_golden_absences_match_project_day_table_and_audiences(
@@ -280,6 +307,11 @@ def test_bundled_world_golden_absences_match_project_day_table_and_audiences(
     }
     assert all(absence.audience == ("U0EM01", "U0FW01") for absence in asks)
     assert all(absence.days_silent == absence.day - 3 for absence in asks)
+    claims = {
+        item.event_id: {claim.attribute: claim for claim in item.claims} for item in golden.items
+    }
+    assert claims["N4-FOUND"]["qty"].supersedes == "N4-MISSING"
+    assert claims["S2-PO"]["rev"].contradicts == ("PLM-0142",)
 
 
 def test_golden_jsonl_order_kind_round_trip_and_byte_stability(tmp_path: Path) -> None:

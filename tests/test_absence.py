@@ -23,7 +23,7 @@ from digest.models import (
     TaskLink,
 )
 from digest.project import ProjectConfig, add_working_days, load_project, working_days_between
-from digest.store import Store
+from digest.store import StageRun, Store
 
 ROOT = Path(__file__).resolve().parents[1]
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -66,12 +66,14 @@ def _item(
     tasks: tuple[TaskLink, ...] = (),
     evidence: tuple[Evidence, ...] | None = None,
     status: ItemStatus = "open",
+    first_seen: str | None = None,
     last_updated: str | None = None,
+    thread_id: str | None = None,
 ) -> Item:
     cited = evidence or (_evidence(day, item_id),)
     return Item(
         item_id=item_id,
-        thread_id=f"C1:{cited[0].message_ts}",
+        thread_id=thread_id or f"C1:{cited[0].message_ts}",
         type=item_type,
         title=item_id,
         summary=f"Summary for {item_id}.",
@@ -82,7 +84,7 @@ def _item(
         severity="medium",
         confidence="high",
         evidence=cited,
-        first_seen=cited[0].message_ts,
+        first_seen=first_seen or cited[0].message_ts,
         last_updated=last_updated or cited[-1].message_ts,
         claims=claims,
         tasks=tasks,
@@ -127,7 +129,7 @@ def _two_gate_project() -> ProjectConfig:
                             "task": "High task",
                             "owner": "EE",
                             "expected_cadence_days": 1,
-                            "priority": "critical",
+                            "priority": "high",
                         },
                         {
                             "id": "G-A.normal",
@@ -192,28 +194,31 @@ def test_working_day_helpers_are_inverse_for_nonnegative_offsets(day: date, coun
 
 def test_checklist_absence_uses_latest_link_and_emits_all_contract_fields() -> None:
     project = _two_gate_project()
+    merged_root = _evidence(1, "merged root")
     old = _evidence(2, "old")
     latest = _evidence(3, "latest")
     items = [
+        _item(
+            "latest",
+            3,
+            entities=("PART",),
+            tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=latest.message_ts),),
+            evidence=(merged_root, latest),
+            first_seen=merged_root.message_ts,
+            last_updated=_day_ts(6),
+        ),
         _item(
             "old",
             2,
             entities=("OLD",),
             tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=old.message_ts),),
         ),
-        _item(
-            "latest",
-            3,
-            entities=("PART",),
-            tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=latest.message_ts),),
-            last_updated=_day_ts(6),
-        ),
     ]
 
     (absence,) = checklist_absences(project, items, date(2026, 10, 19), ZONE)
 
     assert absence.item_id == "absence:G-A.high"
-    assert absence.thread_id == items[1].thread_id
+    assert absence.thread_id == items[0].thread_id
     assert "Alpha gate" in absence.title
     assert "High task" in absence.title
     assert absence.entities == ("G-A", "PART")
@@ -265,6 +270,7 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
                 ),
             ),
             evidence=(first_b,),
+            thread_id="C1:thread-b",
         ),
         _item(
             "A-anchor",
@@ -280,6 +286,7 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
                 ),
             ),
             evidence=(first_a,),
+            thread_id="C1:thread-a",
         ),
         _item(
             "later",
@@ -301,7 +308,7 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
 
     assert [item.item_id for item in absences] == ["absence:G-A.high", "absence:G-A.normal"]
     assert all(item.evidence == (first_a,) for item in absences)
-    assert all(item.thread_id == items[1].thread_id for item in absences)
+    assert all(item.thread_id == "C1:thread-a" for item in absences)
     assert [item.severity for item in absences] == ["high", "medium"]
 
 
@@ -312,14 +319,30 @@ def test_checklist_skips_mentions_without_claims_and_unanchored_tasks() -> None:
     assert checklist_absences(project, [mention, unrelated], date(2026, 10, 19), ZONE) == []
 
 
-@pytest.mark.parametrize(
-    "as_of",
-    [
-        pytest.param(date(2026, 10, 12), id="before-buffer"),
-        pytest.param(date(2026, 10, 23), id="after-gate"),
-    ],
-)
-def test_checklist_respects_gate_window(as_of: date) -> None:
+def test_checklist_fires_on_buffer_opening_but_not_day_before() -> None:
+    project = _two_gate_project()
+    anchor_ts = _ts(date(2026, 10, 8))
+    anchor = Evidence(message_ts=anchor_ts, quote="anchor", permalink="https://example.test/anchor")
+    item = _item(
+        "anchor",
+        1,
+        claims=(
+            Claim(
+                entity="G-A",
+                attribute="status",
+                value="open",
+                message_ts=anchor.message_ts,
+                authority="owner_stated",
+            ),
+        ),
+        evidence=(anchor,),
+    )
+    assert checklist_absences(project, [item], date(2026, 10, 12), ZONE) == []
+    opened = checklist_absences(project, [item], date(2026, 10, 13), ZONE)
+    assert [row.absence.task for row in opened if row.absence] == ["G-A.high", "G-A.normal"]
+
+
+def test_checklist_emits_nothing_after_gate() -> None:
     project = _two_gate_project()
     anchor = _evidence(1, "anchor")
     item = _item(
@@ -335,7 +358,66 @@ def test_checklist_respects_gate_window(as_of: date) -> None:
             ),
         ),
     )
-    assert checklist_absences(project, [item], as_of, ZONE) == []
+    assert checklist_absences(project, [item], date(2026, 10, 23), ZONE) == []
+
+
+def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
+    project = _two_gate_project()
+    earlier = _evidence(2, "earlier link")
+    future = _evidence(7, "future link and claim")
+    future_item = _item(
+        "future",
+        7,
+        claims=(
+            Claim(
+                entity="G-A",
+                attribute="status",
+                value="open",
+                message_ts=future.message_ts,
+                authority="owner_stated",
+            ),
+        ),
+        tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=future.message_ts),),
+        evidence=(future,),
+    )
+    earlier_item = _item(
+        "earlier",
+        2,
+        tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=earlier.message_ts),),
+        evidence=(earlier,),
+    )
+
+    absences = checklist_absences(project, [future_item, earlier_item], date(2026, 10, 19), ZONE)
+
+    assert [row.item_id for row in absences] == ["absence:G-A.high"]
+    assert absences[0].evidence == (earlier,)
+
+
+def test_checklist_counts_silence_from_local_evidence_date() -> None:
+    project = _two_gate_project()
+    local_evening = datetime(2026, 10, 12, 18, tzinfo=ZONE).astimezone(UTC)
+    timestamp = f"{int(local_evening.timestamp()):010d}.000000"
+    evidence = Evidence(
+        message_ts=timestamp, quote="local evening", permalink="https://example.test"
+    )
+    item = _item(
+        "anchor",
+        1,
+        claims=(
+            Claim(
+                entity="G-A",
+                attribute="status",
+                value="open",
+                message_ts=timestamp,
+                authority="owner_stated",
+            ),
+        ),
+        evidence=(evidence,),
+    )
+
+    absences = checklist_absences(project, [item], date(2026, 10, 16), ZONE)
+
+    assert [row.absence.days_silent for row in absences if row.absence] == [4, 4]
 
 
 def test_checklist_weekend_as_of_counts_only_through_friday() -> None:
@@ -429,6 +511,56 @@ def test_ask_absence_only_live_owner_reply_closes(
     )
 
 
+@pytest.mark.parametrize(
+    "item",
+    [
+        pytest.param(
+            _item("resolved", 1, item_type="ask", owner="UOWNER", status="resolved"),
+            id="resolved-ask",
+        ),
+        pytest.param(_item("owned-fyi", 1, owner="UOWNER"), id="owned-non-ask"),
+    ],
+)
+def test_ask_absence_filters_source_items(item: Item) -> None:
+    assert (
+        ask_absences([item], lambda _: [_event(item, "UASKER", 1)], date(2026, 10, 16), 2, ZONE)
+        == []
+    )
+
+
+def test_ask_absence_clock_uses_ask_message_not_last_updated() -> None:
+    ask = _item(
+        "ASK-1",
+        1,
+        item_type="ask",
+        owner="UOWNER",
+        last_updated=_day_ts(3),
+    )
+
+    (absence,) = ask_absences(
+        [ask], lambda _: [_event(ask, "UASKER", 1)], date(2026, 10, 16), 2, ZONE
+    )
+
+    assert absence.absence is not None
+    assert absence.absence.days_silent == 4
+
+
+def test_ask_absence_counts_silence_from_local_ask_date() -> None:
+    ask = _item("ASK-1", 1, item_type="ask", owner="UOWNER")
+    local_evening = datetime(2026, 10, 12, 18, tzinfo=ZONE).astimezone(UTC)
+    timestamp = f"{int(local_evening.timestamp()):010d}.000000"
+    evidence = Evidence(message_ts=timestamp, quote="late ask", permalink="https://example.test")
+    ask = ask.model_copy(
+        update={"evidence": (evidence,), "first_seen": timestamp, "last_updated": timestamp}
+    )
+    event = _event(ask, "UASKER", 1).model_copy(update={"ts": timestamp, "event_ts": timestamp})
+
+    (absence,) = ask_absences([ask], lambda _: [event], date(2026, 10, 16), 2, ZONE)
+
+    assert absence.absence is not None
+    assert absence.absence.days_silent == 4
+
+
 def test_ask_without_owner_is_skipped() -> None:
     ask = _item("ASK-1", 1, item_type="ask", owner=None)
     assert (
@@ -438,7 +570,7 @@ def test_ask_without_owner_is_skipped() -> None:
 
 def test_ask_without_asking_evidence_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     ask = _item("ASK-1", 1, item_type="ask", owner="UOWNER")
-    caplog.set_level(logging.WARNING, logger="digest.absence")
+    caplog.set_level(logging.DEBUG, logger="digest.absence")
     assert (
         ask_absences([ask], lambda _: [_event(ask, "UOWNER", 1)], date(2026, 10, 16), 2, ZONE) == []
     )
@@ -560,8 +692,14 @@ def test_absence_output_order_is_deterministic() -> None:
     project = project.model_copy(
         update={
             "gates": tuple(
-                gate.model_copy(update={"date": date(2026, 10, 22), "buffer_days": 7})
-                for gate in project.gates
+                gate.model_copy(
+                    update={
+                        "date": date(2026, 10, 22),
+                        "buffer_days": 7,
+                        "checklist": tuple(reversed(gate.checklist)),
+                    }
+                )
+                for gate in reversed(project.gates)
             )
         }
     )
@@ -611,40 +749,77 @@ def _copy_world_files(tmp_path: Path) -> None:
     config.joinpath("priors.yaml").write_bytes((ROOT / "config/priors.yaml").read_bytes())
 
 
+def _set_replay_meta(store: Store) -> None:
+    for key, value in {
+        "world": "kestrel",
+        "timezone": "America/Los_Angeles",
+        "workspace_url": "https://kestrel-k2.slack.com",
+        "until": "2026-10-17T06:59:59.999999+00:00",
+    }.items():
+        store.set_meta(key, value)
+
+
+def _write_ready_cli_store(store: Store) -> None:
+    _set_replay_meta(store)
+    anchor = _evidence(1, "schedule")
+    ask = _item("ASK-CLI", 2, item_type="ask", owner="U0FW01", affected_roles=("FW", "EM"))
+    ask_event = _event(ask, "U0EM01", 2)
+    store.upsert_events([ask_event])
+    store.record_stage_run(
+        StageRun(
+            stage="extract",
+            thread_id=ask_event.thread_id,
+            last_ts=ask_event.event_ts,
+            prompt_version="m2.1",
+            model="extract",
+            run_at=datetime.now(UTC),
+            status="ok",
+        )
+    )
+    store.upsert_items(
+        [
+            _item(
+                "SCHED-1",
+                1,
+                claims=(
+                    Claim(
+                        entity="G-DVT1",
+                        attribute="gate_date",
+                        value="2026-10-22",
+                        message_ts=anchor.message_ts,
+                        authority="plm_bot",
+                    ),
+                ),
+            ),
+            ask,
+        ],
+        prompt_version="m2.1",
+        model="extract",
+    )
+
+
 def test_absences_cli_prints_json_lines_after_extract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _copy_world_files(tmp_path)
     store_path = tmp_path / "store.sqlite"
-    anchor = _evidence(1, "schedule")
     with Store.open(store_path) as store:
-        store.set_meta("until", "2026-10-16")
-        store.upsert_items(
-            [
-                _item(
-                    "SCHED-1",
-                    1,
-                    claims=(
-                        Claim(
-                            entity="G-DVT1",
-                            attribute="gate_date",
-                            value="2026-10-22",
-                            message_ts=anchor.message_ts,
-                            authority="plm_bot",
-                        ),
-                    ),
-                )
-            ],
-            prompt_version="m2.1",
-            model="extract",
-        )
+        _write_ready_cli_store(store)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["absences", "--world", "kestrel", "--db", str(store_path)])
 
     assert result.exit_code == 0, result.output
     rows = [json.loads(line) for line in result.output.splitlines()]
-    assert rows
+    assert [row["item_id"] for row in rows] == [
+        "absence:G-DVT1.battery",
+        "absence:G-DVT1.ctb",
+        "absence:G-DVT1.emc",
+        "absence:G-DVT1.fai",
+        "absence:G-DVT1.safety",
+        "absence:G-DVT1.thermal",
+        "absence:ask:ASK-CLI",
+    ]
     assert all(row["type"] == "absence" for row in rows)
 
 
@@ -662,9 +837,16 @@ def test_absences_cli_refuses_unready_store(
     store_path = tmp_path / "store.sqlite"
     with Store.open(store_path) as store:
         if state == "pending":
-            store.set_meta("until", "2026-10-16")
+            _write_ready_cli_store(store)
             pending = _item("pending", 1)
             store.upsert_events([_event(pending, "U0EM01", 1)])
+        else:
+            for key, value in {
+                "world": "kestrel",
+                "timezone": "America/Los_Angeles",
+                "workspace_url": "https://kestrel-k2.slack.com",
+            }.items():
+                store.set_meta(key, value)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["absences", "--world", "kestrel", "--db", str(store_path)])
