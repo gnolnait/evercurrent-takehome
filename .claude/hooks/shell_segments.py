@@ -72,6 +72,7 @@ branch.
 """
 
 import re
+import shlex
 
 # Tools whose `command` is shell text that the guards must read.
 SHELL_TOOLS = frozenset(
@@ -623,13 +624,27 @@ def split_segments(cmd):
 
 
 def tool_command(tool, cmd):
-    """Return a shell tool's command in the POSIX form the guards parse.
+    """Return a shell tool's command in the POSIX form the guards parse."""
+    return _powershell_text(cmd) if tool == "PowerShell" else cmd
 
-    PowerShell does not treat a backslash as an escape; it is a path separator
-    there. So a PowerShell command gets forward slashes, and `C:\\x\\gh.exe`
-    stays a path to `gh.exe`.
+
+def _powershell_text(text):
+    """Return PowerShell text in the POSIX form the guards parse.
+
+    A backslash is a path separator in PowerShell, so it becomes a slash and
+    `C:\\x\\gh.exe` stays a path to `gh.exe`. A backtick is the escape
+    character: at a line end it joins the two lines, and before any other
+    character it keeps that character. The signing guard turns each newline
+    into `;` before this runs, so a backtick before `;` also joins.
     """
-    return cmd.replace("\\", "/") if tool == "PowerShell" else cmd
+    text = re.sub(r"`(\r?\n|;)", " ", text)
+    return text.replace("`", "").replace("\\", "/")
+
+
+def _cmd_text(text):
+    """Return cmd text in the POSIX form the guards parse. A backslash is a path
+    separator, and `#` is plain text, not a comment."""
+    return text.replace("\\", "/").replace("#", " ")
 
 
 def command_name(word):
@@ -642,27 +657,74 @@ def command_name(word):
     return name
 
 
-def windows_shell_code(args):
-    """Return the code texts that `powershell`, `pwsh` or `cmd` runs from its
-    `args`. Return None for an encoded command, which cannot be read.
+def windows_shell_code(name, args):
+    """Return the command texts that the Windows shell `name` (`powershell`,
+    `pwsh` or `cmd`) runs from its `args`. Return None for an encoded command,
+    which cannot be read. A guard scans each text."""
+    if name == "cmd":
+        return _cmd_code(args)
+    return _powershell_code(args)
 
-    A flag starts with `-`, `--`, `/` or Git Bash's `//`. After a command flag
-    (`-Command` or a prefix of it, `/c`, `/k`), the remaining arguments are one
-    command. With no command flag, PowerShell runs the bare operands as one
-    command. An option value (`-ExecutionPolicy Bypass`) can come first, so each
-    tail of the arguments that starts at an operand is a candidate. A backslash is a path separator in both
-    shells, so it becomes a slash before a guard reads the text.
-    """
+
+def _cmd_code(args):
+    """cmd runs the text after `/c` or `/k`, also when it is glued to the switch
+    (`/cgh pr merge`). Git Bash needs `//c`. Without either switch, cmd runs no
+    command from its arguments."""
     for i, arg in enumerate(args):
-        flag = arg.lower().lstrip("-/") if arg[:1] in ("-", "/") else ""
+        flag = arg.lstrip("/")
+        if arg[:1] == "/" and flag[:1].lower() in ("c", "k"):
+            return _joined(([flag[1:]] if flag[1:] else []) + list(args[i + 1 :]), _cmd_text)
+    return []
+
+
+# PowerShell options that take a value. A flag matches a name by any prefix of
+# three or more letters, or it is one of the aliases.
+_PS_VALUE_FLAGS = (
+    "configurationfile",
+    "configurationname",
+    "custompipename",
+    "executionpolicy",
+    "inputformat",
+    "outputformat",
+    "psconsolefile",
+    "settingsfile",
+    "version",
+    "windowstyle",
+    "workingdirectory",
+)
+_PS_VALUE_ALIASES = frozenset({"ep", "ex", "if", "of", "o", "v", "w", "wd"})
+
+
+def _powershell_code(args):
+    """PowerShell takes a flag with `-`, `--` or `/`. It runs the text after
+    `-Command` (or a prefix of it). Without that flag, its first argument that is
+    not an option or an option's value starts the command, and the arguments
+    from there are one command. `-File` runs a script, which no guard can read."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg[:1] not in ("-", "/"):
+            return _joined(args[i:], _powershell_text)
+        flag = arg.lower().lstrip("-/")
         if flag == "ec" or (flag and "encodedcommand".startswith(flag)):
             return None
-        if flag == "k" or (flag and ("command".startswith(flag) or flag.startswith("command"))):
-            return [_slashes(" ".join(args[i + 1 :]))]
-    return [
-        _slashes(" ".join(args[i:])) for i, arg in enumerate(args) if arg[:1] not in ("-", "/")
-    ]
+        if flag and ("command".startswith(flag) or flag.startswith("command")):
+            return _joined(args[i + 1 :], _powershell_text)
+        if flag and "file".startswith(flag):
+            return []
+        takes_value = flag in _PS_VALUE_ALIASES or (
+            len(flag) >= 3 and any(name.startswith(flag) for name in _PS_VALUE_FLAGS)
+        )
+        i += 2 if takes_value else 1
+    return []
 
 
-def _slashes(code):
-    return code.replace("\\", "/")
+def _joined(tokens, to_posix):
+    """Return the command texts that `tokens` make. A plain join keeps a whole
+    quoted command (`"a & gh pr merge"`) readable as commands. A shell-quoted
+    join keeps a quoted path with a space (`"C:/Program Files/x.exe"`) one
+    word. A guard scans both."""
+    tokens = [to_posix(t) for t in tokens]
+    if len(tokens) <= 1:
+        return tokens
+    return [" ".join(tokens), shlex.join(tokens)]

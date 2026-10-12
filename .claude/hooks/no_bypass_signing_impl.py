@@ -245,7 +245,7 @@ def check_segment(toks, depth=0, inherited_gpgsign_off=False):
             m += 1
         return False
     if word in WINDOWS_SHELLS:
-        codes = windows_shell_code(toks[head + 1 :])
+        codes = windows_shell_code(word, toks[head + 1 :])
         if codes is None:
             return True  # an encoded command cannot be read: fail closed
         return any(scan(code, depth + 1) is not None for code in codes)

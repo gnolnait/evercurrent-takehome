@@ -166,7 +166,7 @@ def check_bash(cmd, depth=0):
                     check_bash(rest[idx + 1], depth + 1)
             continue
         if cmdword in WINDOWS_SHELLS:
-            codes = windows_shell_code(rest)
+            codes = windows_shell_code(cmdword, rest)
             if codes is None:
                 block("encoded PowerShell command (cannot be read)", seg)
             for code in codes:
