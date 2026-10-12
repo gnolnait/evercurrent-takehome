@@ -62,6 +62,12 @@ needed to hit the acceptance criteria. Adding a vector store would be the kind o
 resume-driven complexity a strong reviewer penalizes. Embeddings can be added behind the
 blocking step later (sqlite-vec or Voyage) without touching the schema.
 
+Amended 2026-10-12 (status): the built schema (`src/digest/schema.sql`) has five tables:
+meta, events, stage_runs, items and triage, with an FTS5 index over events only. Evidence,
+claims and task links are JSON columns of items. Threads, item sources, item links,
+project state, profiles, impressions and feedback are designed, not built. Cassettes are
+JSON files under `data/cassettes/`, with no index table.
+
 ## D5. Extraction unit and citation discipline
 
 Decision. The unit of work is the thread delta. The model receives the new messages, the
