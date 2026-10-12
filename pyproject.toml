@@ -99,6 +99,7 @@ type = "layers"
 layers = [
     "digest.cli",
     "digest.eval",
+    "digest.daily",
     "digest.corpus",
     "digest.replay | digest.extract | digest.absence",
     "digest.store | digest.llm | digest.world",

@@ -45,7 +45,9 @@ def _root(
 
 
 @app.command()
-def demo() -> None:
+def demo(
+    day: int = typer.Option(6, "--day", help="World day of the digests (1 is the first day)."),
+) -> None:
     """Produce digests for three roles from the bundled synthetic corpus (offline)."""
     raise typer.Exit(code=_not_yet("demo"))
 
@@ -54,6 +56,12 @@ def demo() -> None:
 def run(
     user: str = typer.Option(..., help="User id from the corpus or workspace."),
     as_of: str = typer.Option(..., "--as-of", help="Digest date, YYYY-MM-DD."),
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+    db: Path | None = typer.Option(
+        None, "--db", help="Store path; default DIGEST_DB, then data/<world>.sqlite."
+    ),
 ) -> None:
     """Produce one user's digest as of a date."""
     raise typer.Exit(code=_not_yet("run"))
