@@ -130,11 +130,16 @@ def post(
     client = _webhook_client(url)
     for selection, message in zip(selections, messages, strict=True):
         reader = selection.profile.name
+        # A refusal raised in an except block would chain the caught exception, so each
+        # handler stores the reason and the refusal comes after the try statement.
+        failure: str | None = None
         try:
             response = client.send(text=message["text"], blocks=message["blocks"])
         # The message of an exception can hold the URL, so the refusal shows the type only.
         except Exception as error:
-            _refuse(f"cannot post the digest for {reader}: {type(error).__name__}")
+            failure = f"cannot post the digest for {reader}: {type(error).__name__}"
+        if failure is not None:
+            _refuse(failure)
         if response.status_code != 200:
             # Show only a Slack error code that is not part of the URL. Another body, such
             # as a proxy page, can echo the URL.
@@ -173,16 +178,22 @@ def _post_dm(day: int, user_id: str) -> None:
     messages = [slack_message(loaded, selection) for selection in selections]
     client = _slack_web_client(token)
     # The message of an exception can hold the token, so a refusal shows _slack_failure only.
+    # Each refusal comes after its try statement, so no exception chains to it.
+    failure: str | None = None
     try:
         channel = client.conversations_open(users=user_id)["channel"]["id"]
     except Exception as error:
-        _refuse(f"cannot open the DM with {user_id}: {_slack_failure(error)}")
+        failure = f"cannot open the DM with {user_id}: {_slack_failure(error)}"
+    if failure is not None:
+        _refuse(failure)
     for selection, message in zip(selections, messages, strict=True):
         reader = selection.profile.name
         try:
             client.chat_postMessage(channel=channel, text=message["text"], blocks=message["blocks"])
         except Exception as error:
-            _refuse(f"cannot post the digest for {reader}: {_slack_failure(error)}")
+            failure = f"cannot post the digest for {reader}: {_slack_failure(error)}"
+        if failure is not None:
+            _refuse(failure)
         typer.echo(f"posted the digest for {reader}")
 
 
@@ -530,20 +541,26 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
     """
     world_dir = Path("data") / "world" / _DEMO_WORLD
     source = world_dir / "world.yaml"
+    # Each refusal comes after its try statement, so no exception chains to it.
+    failure: str | None = None
     try:
         loaded = load_world(source)
     except OSError as error:
-        _refuse(f"{source}: {error.strerror or error}")
+        failure = f"{source}: {error.strerror or error}"
     except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
-        _refuse(f"{source}: {error}")
+        failure = f"{source}: {error}"
+    if failure is not None:
+        _refuse(failure)
     if not 1 <= day <= loaded.days:
         _refuse(f"--day must be from 1 to {loaded.days}, got {day}")
     try:
         priors = load_priors(DEFAULT_PRIORS_PATH)
     except OSError as error:
-        _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
+        failure = f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}"
     except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
-        _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
+        failure = f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}"
+    if failure is not None:
+        _refuse(failure)
     # Settings would load API keys from the environment and `.env`. The demo reads only
     # DIGEST_CASSETTES, and the client has no backend, so the mode is always replay.
     cassettes = Path(
@@ -575,7 +592,9 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
                 selections.append(select_digest(store, loaded, priors, user_id, today))
         # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
         except (CassetteMiss, ValueError, OSError) as error:
-            _refuse(str(error))
+            failure = str(error)
+    if failure is not None:
+        _refuse(failure)
     return loaded, selections
 
 
@@ -597,17 +616,24 @@ def _env_value(key: str) -> str | None:
     value = os.environ.get(key)
     if value:
         return value
+    # Each refusal comes after its try statement, so no exception chains to it. A
+    # UnicodeDecodeError holds the bytes of `.env`, which can hold a secret.
+    failure: str | None = None
     try:
         data = Path(".env").read_bytes()
     except FileNotFoundError:
         return None
     except OSError as error:
-        _refuse(f".env: {error.strerror or error}")
+        failure = f".env: {error.strerror or error}"
+    if failure is not None:
+        _refuse(failure)
     encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
     try:
         text = data.decode(encoding)
     except UnicodeDecodeError as error:
-        _refuse(f".env: cannot decode as {encoding}: {error.reason}")
+        failure = f".env: cannot decode as {encoding}: {error.reason}"
+    if failure is not None:
+        _refuse(failure)
     for raw in text.splitlines():
         name, sep, rest = raw.strip().removeprefix("export ").partition("=")
         if sep and name.strip() == key:
@@ -624,9 +650,14 @@ def _webhook_client(url: str) -> WebhookClient:
     """A Slack webhook client that writes no log line, so no log line holds the URL."""
     # slack-sdk is in the optional `slack` extra. A top-level import would stop every
     # command when the extra is not installed.
+    # The refusal comes after the try statement, so no exception chains to it.
     try:
         from slack_sdk.webhook import WebhookClient
     except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
         _refuse("digest post needs the slack extra; run uv sync --extra slack")
     # The client logs the URL at DEBUG level, on a send error and on a retry. A disabled
     # logger drops all three. The SDK default retry handlers retry a connection error.
@@ -639,9 +670,14 @@ def _slack_web_client(token: str) -> WebClient:
     """A Slack Web API client that writes no log line, so no log line holds the token."""
     # slack-sdk is in the optional `slack` extra. A top-level import would stop every
     # command when the extra is not installed.
+    # The refusal comes after the try statement, so no exception chains to it.
     try:
         from slack_sdk import WebClient
     except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
         _refuse("digest post needs the slack extra; run uv sync --extra slack")
     # The client logs requests at DEBUG level and failures at ERROR level. A disabled
     # logger drops all of them.
