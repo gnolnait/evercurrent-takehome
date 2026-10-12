@@ -32,8 +32,8 @@ matched rule paths go into the dispatch prompt.
 ## 3. Dispatch and verify: the `review-local` workflow
 
 Run the saved workflow `.claude/workflows/review-local.js` with the Workflow tool, by
-name (`review-local`). The workflow list loads when a session starts; if the name does
-not resolve, pass the file as `scriptPath`. Pass these `args`:
+name (`review-local`). If the name does not resolve, pass the file as `scriptPath`.
+Pass these `args`:
 
 - `base`, `head`: the SHAs from step 1.
 - `lenses`: the lens names from step 2.
@@ -60,7 +60,10 @@ Map the workflow result onto the STEP 5 keys:
 
 - `kept` goes to `findings`. Merge two kept findings that one fix resolves; the grouping
   step can miss a pair. Remove the `anchor`, `from_prior` and `from_lens` keys.
-- A `dropped` entry with a non-empty `prior` goes to `retractions`, with its `reason`.
+- A `dropped` entry with a non-empty `prior` was a finding of the earlier verdict. Read
+  its `refuter` and `anchor`. If the refuter holds, put it in `retractions` with that
+  reason. If it does not hold, keep the finding. One verifier can drop on one run what
+  it kept on the last.
 - `carried`: `still_present` goes to `findings` with `carried_from` set to the original
   file and line; `addressed` goes to `addressed`; `retracted` goes to `retractions`.
 - A lens with `ok: false` did not run. Say so in `coverage`.
