@@ -63,34 +63,74 @@ def test_binary_and_missing_files_do_not_crash(tmp_path: Path) -> None:
 
 
 def _runner(
-    prs: list[dict[str, object]] | None, *, fail: bool = False
+    prs: list[dict[str, object]] | None = None,
+    *,
+    error: Exception | None = None,
+    calls: list[list[str]] | None = None,
 ) -> Callable[[list[str]], subprocess.CompletedProcess[str]]:
     def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        if fail:
-            raise FileNotFoundError("gh")
+        if calls is not None:
+            calls.append(cmd)
+        if error is not None:
+            raise error
         return subprocess.CompletedProcess(cmd, 0, json.dumps(prs), "")
 
     return run
 
 
-def test_push_to_a_branch_whose_pr_merged_is_refused() -> None:
-    assert pr_open.merged_pr("feat", _runner([{"number": 17, "state": "MERGED"}])) == 17
-
-
-def test_push_is_allowed_with_an_open_pr_or_none() -> None:
-    assert (
-        pr_open.merged_pr(
-            "feat", _runner([{"number": 18, "state": "OPEN"}, {"number": 17, "state": "MERGED"}])
-        )
-        is None
-    )
-    assert pr_open.merged_pr("feat", _runner([])) is None
-
-
-def test_missing_gh_lets_the_push_through_with_a_warning(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(
+    ("prs", "expected"),
+    [
+        pytest.param([{"number": 17, "state": "MERGED"}], 17, id="merged"),
+        pytest.param(
+            [{"number": 18, "state": "OPEN"}, {"number": 17, "state": "MERGED"}],
+            None,
+            id="open-and-merged",
+        ),
+        pytest.param([], None, id="no-pr"),
+        pytest.param(
+            [
+                {"number": 17, "state": "MERGED", "isCrossRepository": False},
+                {"number": 18, "state": "OPEN", "isCrossRepository": True},
+            ],
+            17,
+            id="open-fork-pr",
+        ),
+    ],
+)
+def test_merged_pr_is_a_merged_pr_of_this_repo_with_none_open(
+    prs: list[dict[str, object]], expected: int | None
 ) -> None:
-    assert pr_open.merged_pr("feat", _runner(None, fail=True)) is None
+    assert pr_open.merged_pr("feat", _runner(prs)) == expected
+
+
+def test_the_query_asks_for_prs_from_the_branch() -> None:
+    calls: list[list[str]] = []
+    pr_open.merged_pr("feat", _runner([], calls=calls))
+    (cmd,) = calls
+    assert cmd[:3] == ["gh", "pr", "list"]
+    assert cmd[cmd.index("--head") + 1] == "feat"
+    assert cmd[cmd.index("--state") + 1] == "all"
+    assert set(cmd[cmd.index("--json") + 1].split(",")) == {
+        "number",
+        "state",
+        "isCrossRepository",
+    }
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(FileNotFoundError("gh"), id="gh-missing"),
+        pytest.param(
+            subprocess.CalledProcessError(4, ["gh"], stderr="gh auth login"), id="gh-fails"
+        ),
+    ],
+)
+def test_gh_trouble_lets_the_push_through_with_a_warning(
+    error: Exception, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert pr_open.merged_pr("feat", _runner(error=error)) is None
     assert "could not check" in capsys.readouterr().out
 
 
@@ -128,11 +168,3 @@ def test_the_pushed_branch_is_checked_not_head(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(pr_open, "merged_pr", merged)
     assert pr_open.main() == 1
     assert asked == ["feat"]
-
-
-def test_an_open_fork_pr_does_not_mask_a_merged_pr() -> None:
-    prs: list[dict[str, object]] = [
-        {"number": 17, "state": "MERGED", "isCrossRepository": False},
-        {"number": 18, "state": "OPEN", "isCrossRepository": True},
-    ]
-    assert pr_open.merged_pr("feat", _runner(prs)) == 17
