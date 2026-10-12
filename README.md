@@ -56,19 +56,35 @@ name carries the world's last day. Every rate is given with its n.
 | Claim recall | 0.629 | 35 |
 | Claim precision | 0.537 | 41 |
 | Absence recall | 0.516 | 31 |
-| Absence false-alarm rate | 0.304 | 23 |
+| Detected absences that are false | 0.304 | 23 |
 | Citation validity | 1.0 | 73 |
 
 Claim values match exactly on revision, gate date, quantity and owner; other attributes
 match on entity and attribute, and an advisory row reports the share of those that also
-agree on value. The corpus is small and synthetic: 132 messages in 35 threads.
+agree on value. Only claims in golden threads are scored, and a claim the golden labels do
+not list counts as wrong, even a true one. The corpus is small and synthetic: 132
+messages in 35 threads.
+
+The report calls 0.304 the absence false-alarm rate. It is the share of detected absences
+that are false (7 of 23), counted once per day and source, by checklist task or by ask
+thread, before the per-reader filter. SPEC A6 defines the false-alarm rate over simulated
+silences that were not stalls, and the eval does not compute it yet. Silence is counted
+from task links that the extractor writes, so a missed link makes an active task look
+silent.
 
 ## Scope
 
 The belief ledger and stale-belief lines (what each reader was last told about a key)
-are not built yet; the demo slice took the kill-criterion path in `SPEC.md`. See
-`docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md` for
-deferred work.
+are not built yet; the demo slice took the kill-criterion path in `SPEC.md`. SPEC section
+9 set a rule before the build: if claim keying precision is below 0.8, cut the ledger to
+the ranker plus absences. The eval has no direct keying metric. Its claim precision uses
+stricter matching on golden threads only, so it does not establish whether keying
+precision meets 0.8. The cut is a conservative scope decision under that uncertainty.
+
+Designed, not built: the claims ledger and linking, stale beliefs, the per-reader digest
+window, phase re-weighting, feedback, live Slack delivery, the web preview and the MCP
+server. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
+for the ordered next steps and other deferred work.
 
 ## Develop
 
