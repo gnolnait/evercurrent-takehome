@@ -1,8 +1,6 @@
 {
   "kit_commit": "20e724d7898d0a42c321a580517b423fce46a6d4",
-  "exclude": [
-    ".claude/rules/testing.md"
-  ],
+  "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "f353b6910acf8ad716888a10cd6fdef807231e7b5eb7052ef187fb7cba266098",
     ".claude/hooks/conftest.py": "0d8c9595b7b71f78fcf2fba4623d958c19a1e591ae5a2be785b63a86ce56207a",
@@ -60,6 +58,7 @@
     ".claude/rules/instruction-surfaces.md": "2ce48079c9d429b591800fa8abfb302194e9db898819d841e80c2d5862876682",
     ".claude/rules/logging.md": "d869371bc31f3d94233feb3aa104509d916d2a10106b64131aff96c068dd6f2f",
     ".claude/rules/prose-follows-mechanism.md": "4e85313786fbc7132fe98c1075e00c2e76e2639e66848492306d46aa808cb842",
+    ".claude/rules/testing.md": "6d8518c526dcb24f5ad19f2a295a64c5a808963a4a59dd0a34d965d7debc5da7",
     ".claude/workflows/review-local.js": "c5b59a4514fdb764caa86ccec29b29dd8473df411468991f919866d9250a04b9"
   }
 }
