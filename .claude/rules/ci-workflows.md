@@ -39,13 +39,14 @@ starting. No check appears at all: no red, no skip.
   `if:` only when a skip is acceptable (see above).
 
 
-## A new job does not run on an open PR until it is rebased
+## A new job reaches an open PR only on the PR's next run
 
-A `pull_request` run uses the workflow file from the PR's merge ref. An open PR whose
-branch predates a new job may not run that job.
+A `pull_request` run uses the workflow file at the PR's merge ref, which includes the
+base branch. A job added to `main` does not start a run on open PRs by itself; it runs
+on each PR's next event (a push, a reopen).
 
-- **Check:** `git show origin/<branch>:.github/workflows/ci.yml` shows whether the
-  branch carries the job. If not, rebase or merge `main` into the branch.
+- **Check:** read the workflow at the run's merge commit, not at the PR branch. To get
+  the new job on a PR, push to it; a rebase is not required.
 
 
 ## `|| true` in a `run:` step fails open
