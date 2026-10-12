@@ -320,10 +320,12 @@ def test_leading_literal_cd_without_review_names_the_missing_marker(repo, tmp_pa
     assert "needs a second-model review of %s" % _head(repo) in err
 
 
-def test_cd_after_the_creation_does_not_count(repo):
+def test_cd_after_the_creation_blocks(repo):
+    """Only a leading cd is read; any later cd blocks (fail closed)."""
     _verdict(repo, _head(repo))
     rc, err = _run(CREATE + " && cd /", repo)
-    assert rc == 0, err
+    assert rc == 2
+    assert "changes directory or HEAD" in err
 
 
 @pytest.mark.parametrize("template", [
@@ -331,12 +333,29 @@ def test_cd_after_the_creation_does_not_count(repo):
     pytest.param("bash -c 'cd \"{d}\" && " + CREATE + "'", id="nested-cd"),
     pytest.param('pushd "{d}" && ' + CREATE, id="pushd"),
     pytest.param("cd ~ && " + CREATE, id="tilde"),
+    # Bash skips the fallback cd, or runs the cd in the background.
+    pytest.param('cd . || cd "{d}"; ' + CREATE, id="or-fallback-cd"),
+    pytest.param('cd "{d}" & ' + CREATE, id="background-cd"),
+    pytest.param('(pwd; cd "{d}"); ' + CREATE, id="subshell-later-cd"),
+    pytest.param('CDPATH="{d}" cd . && ' + CREATE, id="cdpath-prefix"),
+    pytest.param("cd {d}/$X && " + CREATE, id="unquoted-expansion-in-path"),
 ])
 def test_unreadable_dir_change_blocks(template, repo):
     _verdict(repo, _head(repo))
     rc, err = _run(template.format(d=repo.as_posix()), repo)
     assert rc == 2
     assert "changes directory or HEAD" in err
+
+
+def test_bare_relative_cd_blocks(repo):
+    """CDPATH can send `cd sub` elsewhere; `cd ./sub` is the readable form."""
+    (repo / "sub").mkdir()
+    _verdict(repo, _head(repo))
+    rc, err = _run("cd sub && " + CREATE, repo)
+    assert rc == 2
+    assert "changes directory or HEAD" in err
+    rc, err = _run("cd ./sub && " + CREATE, repo)
+    assert rc == 0, err
 
 
 @pytest.mark.skipif(os.name != "nt", reason="MSYS drive paths exist only on Windows")
