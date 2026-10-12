@@ -28,20 +28,21 @@ allowed attempts, not merged PRs.
 Deletion trigger: remove this guard when more than 5 of the last 10 log lines
 have route "override". The count command is in the github skill.
 
-Detected (scan broadly): `gh pr create` and its alias `gh pr new` (not with
---help), and three API forms: the GraphQL createPullRequest mutation, a GraphQL
+Detected (scan broadly): `gh pr create` and its alias `gh pr new`, and three
+API forms: the GraphQL createPullRequest mutation, a GraphQL
 request read from a file or stdin, and a REST POST to `repos/<o>/<r>/pulls`
 (an explicit POST, or gh field flags or curl data flags with no other method).
 The shared segmenter finds these inside chains and substitutions. The guard
 also reads `eval` strings and `bash -c` strings, including flag clusters such
-as `-lc`. Quoted arguments of other commands and heredoc bodies do not match.
+as `-lc`. Quoted arguments of other commands, heredoc bodies and help
+requests (--help, and -h for gh, curl and wget) do not match.
 
 An API creation names a remote branch, not a local commit, so no review marker
 can match it. Only the override allows it.
 
 Fail closed: a command that also changes directory or moves HEAD (cd, pushd,
 popd, or git checkout/switch/commit/reset/rebase/merge/pull/cherry-pick/am/
-revert/update-ref/symbolic-ref) blocks, because the guard reads HEAD before the
+revert/update-ref, or a symbolic-ref write) blocks, because the guard reads HEAD before the
 command runs. An unresolvable HEAD, `--head` branch or main checkout also
 blocks.
 
@@ -69,10 +70,14 @@ PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 MAY_CREATE = ("gh", "pulls", "PullRequest")
 DIR_CHANGERS = {"cd", "pushd", "popd"}
 HEAD_MOVERS = {"checkout", "switch", "commit", "reset", "rebase", "merge",
-               "pull", "cherry-pick", "am", "revert", "update-ref", "symbolic-ref"}
+               "pull", "cherry-pick", "am", "revert", "update-ref"}
 HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 # A shell's -c option, alone or in a flag cluster such as -lc.
 SHELL_C_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+# A short flag with a file value glued to it: curl -d@body.json.
+GLUED_FILE_ARG = re.compile(r"^-[A-Za-z]@")
+# Help flags. httpie uses -h for --headers, so -h counts for these only.
+SHORT_HELP_TOOLS = {"gh", "curl", "wget"}
 GH_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 CURL_DATA_FLAGS = ("-d", "--data", "--data-raw", "--data-binary",
                    "--data-urlencode", "--json", "--post-data", "--post-file")
@@ -131,9 +136,9 @@ def _opaque_body(rest):
     for tok in rest:
         if tok == "--input" or tok.startswith("--input="):
             return True
-        # -F query=@x.graphql, -d @body.json, --data-binary @-
+        # -F query=@x.graphql, -d @body.json, --data-binary @-, -d@body.json
         value = tok.split("=", 1)[1] if "=" in tok else tok
-        if value.startswith("@"):
+        if value.startswith("@") or GLUED_FILE_ARG.match(tok):
             return True
     return False
 
@@ -154,18 +159,19 @@ def _create_kind(cmdword, rest):
 
     form is "" when the segment creates no PR.
     """
+    if cmdword == "gh" and rest and rest[0] == "help":
+        return "", False
+    if "--help" in rest or (cmdword in SHORT_HELP_TOOLS and "-h" in rest):
+        return "", False
     if cmdword == "gh":
-        if rest and rest[0] == "help":
-            return "", False
         for a, b in zip(rest, rest[1:]):
             if a == "pr" and b in ("create", "new"):
-                if "--help" in rest or "-h" in rest:
-                    return "", False
                 return "gh pr " + b, False
     is_api = (cmdword == "gh" and "api" in rest) or cmdword in HTTP_TOOLS
     if not is_api:
         return "", False
-    graphql = ("graphql" in rest) if cmdword == "gh" else any("/graphql" in t for t in rest)
+    # gh takes the endpoint "graphql" or a full URL; HTTP tools take the URL.
+    graphql = any(t == "graphql" or "/graphql" in t for t in rest)
     if graphql:
         if any(GQL_CREATE.search(t) for t in rest):
             return "GraphQL createPullRequest", True
@@ -178,6 +184,16 @@ def _create_kind(cmdword, rest):
         if method == "POST" or (method is None and _has_flag(rest, flags)):
             return "REST POST .../pulls", True
     return "", False
+
+
+def _writes_symbolic_ref(rest):
+    """True for `git symbolic-ref <name> <ref>` or a delete; reading is safe."""
+    if "symbolic-ref" not in rest:
+        return False
+    args = rest[rest.index("symbolic-ref") + 1:]
+    if "-d" in args or "--delete" in args:
+        return True
+    return len([a for a in args if not a.startswith("-")]) >= 2
 
 
 def _scan(cmd, found, movers, depth=0):
@@ -202,7 +218,8 @@ def _scan(cmd, found, movers, depth=0):
         if cmdword in DIR_CHANGERS:
             movers.append(seg)
             continue
-        if cmdword == "git" and any(t in HEAD_MOVERS for t in rest):
+        if cmdword == "git" and (any(t in HEAD_MOVERS for t in rest)
+                                 or _writes_symbolic_ref(rest)):
             movers.append(seg)
             continue
         kind, through_api = _create_kind(cmdword, rest)
