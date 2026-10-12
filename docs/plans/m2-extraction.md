@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.4, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.5, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -63,8 +63,9 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 - Prompt versions. Each prompt module exports its version constants
   (`EXTRACT_PROMPT_VERSION` and `TRIAGE_PROMPT_VERSION`, `RENDER_PROMPT_VERSION`), short
   strings such as `"m2.1"`. A change to prompt text bumps it. `stage_runs` keys on `EXTRACT_PROMPT_VERSION`,
-  so a bump of it makes every thread pending again (M1 B1.6); the `triage` table keys
-  on `TRIAGE_PROMPT_VERSION`, which re-triages nothing on its own (B1.6). The cassette key already
+  and a store holds one such version, so a bump runs on a fresh store (B1.6); the
+  `triage` table keys on `TRIAGE_PROMPT_VERSION`, which re-triages nothing on its own
+  (B1.6). The cassette key already
   carries the prompt text (M1 B2.1), so a bump also records fresh cassettes.
 - Stage-run model column. `stage_runs.model` and `triage.model` hold the logical model
   name (`extract`, `classify`), not the concrete id, so a store built from gateway
@@ -381,7 +382,7 @@ CREATE TABLE IF NOT EXISTS items (
   confidence     TEXT NOT NULL,
   evidence       TEXT NOT NULL,   -- JSON array of {message_ts, quote, permalink}
   claims         TEXT NOT NULL,   -- JSON array of {entity, attribute, value, message_ts, authority}
-  tasks          TEXT NOT NULL,   -- JSON array of {task, effect}
+  tasks          TEXT NOT NULL,   -- JSON array of {task, effect, message_ts}
   status         TEXT NOT NULL,
   resolved_by    TEXT,
   first_seen     TEXT NOT NULL,
@@ -628,7 +629,7 @@ class GoldenItem(Frozen):
     summary: str
     entities: tuple[str, ...]  # claim entities, deduplicated
     claims: tuple[GoldenClaim, ...]
-    tasks: tuple[TaskLink, ...]
+    tasks: tuple[TaskTouch, ...]   # the world's touches (task, effect); the day is the event's
     owner: str | None          # ask: the persona asked
     affected_roles: tuple[Role, ...]
     must_see_for: tuple[str, ...]
@@ -965,7 +966,9 @@ class ExtractionReport(Frozen):
     evidence_entries: int        # delivered evidence entries, the n of citation_validity
     entity_jaccard: float | None # mean over matched items with golden entities; n reported
     entity_jaccard_n: int
-    entity_recall: float | None  # golden claim entities present in the matched item's entities
+    entities_golden: int         # golden claim entities over the matched items with at least one
+    entities_found: int          # of those, present in the matched item's entities
+    entity_recall: float | None  # entities_found / entities_golden
     citation_validity: float     # verified evidence entries over delivered entries; 1.0 by construction, reported
     drops: dict[str, int]
     triage_golden_kept: int
@@ -1022,8 +1025,8 @@ claims. A thread-matched golden item that is not matched is listed in `objective
 per field (`claims.value`, `owner`). Entity Jaccard is computed for matched items whose
 golden item has at least one entity; `entity_jaccard_n` is that count. Golden entity
 lists are the claim entities, so an item that also names context entities scores below
-1; `entity_recall` (golden entities present in the item's list, over golden entities)
-is reported beside it.
+1; `entity_recall` (`entities_found` over `entities_golden`, counted over the same matched
+items) is reported beside it.
 
 B4.4 Absences: detected and golden absences are keyed `(day, task)` for the checklist
 source and `(day, ask event id)` for the ask source (the ask item's thread maps to the
@@ -1046,7 +1049,8 @@ exists with published figures and their source.
 B4.7 `write_report` writes markdown with one table per section (extraction by type,
 claims, triage, absences, drops, realism, models, not run) and `n` beside every rate,
 read from the report's own counts (`golden`, `extracted`, `claims_golden`,
-`claims_extracted`, `evidence_entries`, `entity_jaccard_n`, the absence counts).
+`claims_extracted`, `evidence_entries`, `entity_jaccard_n`, `entities_golden`, the
+absence counts).
 The report is deterministic for a given store and cassettes.
 
 B4.8 `digest eval` in replay mode with complete cassettes exits 0 and writes the file;
@@ -1136,7 +1140,7 @@ The pull request holds data and the README change only. Both reviewers see it.
 | Ask reply detection | A reply is an event by the person asked after the ask message, not after `last_updated` | An update that folds the reply into the item as evidence moves `last_updated` past the reply. |
 | Revision suffix on an entity mention | Split off and discarded; the id is kept | A mention at a revision is not a claim about the current revision; revisions enter as `rev` claim values, and the stale-action audit that reads mentioned revisions is M3 stretch (D24). |
 | Extraction prompt version per store | One; a different version refuses the run | New item ids are `thread#last_ts#n`, so two versions in one store would overwrite each other's items; a fresh store is how a bump is run, as replay restarts for an earlier day. |
-| Which evidence entry is the ask message | `evidence[0]`, kept first through updates | `first_seen` moves when an update cites an earlier message, such as an unrelated root; the first-cited message does not. |
+| Which evidence entry is the ask message | The first entry whose author is not the person asked; B1.3 and B1.5 keep the asking message first | `first_seen` moves when an update cites an earlier message, such as an unrelated root; the first-cited message does not, and the author rule covers a model that cites the reply first. |
 | Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. U2 offers the mention rule as an alternative. |
 | Task link provenance | Each task link names the message that shows the progress | The silence clock counts from that message, as the golden counts from the scripted day; counting from the item's `last_updated` would let merged chatter reset it. |
 | Entity Jaccard | Reported as SPEC asks, with `entity_recall` beside it | Golden entity lists are claim entities only, so Jaccard penalizes correct context entities. |
