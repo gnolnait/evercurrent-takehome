@@ -10,10 +10,13 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+import digest.cli as cli
 from digest.cli import app
 from digest.daily.profile import Profile
 from digest.daily.render import build_digest, render_digest
 from digest.daily.select import Line, Section, Selection
+from digest.extract.stage import ExtractReport
+from digest.extract.verify import DROP_FIELDS
 from digest.models import AbsenceDetail, Claim, Event, Evidence, Item
 from digest.priors import load_priors
 from digest.settings import Settings
@@ -417,7 +420,17 @@ def has_extract_cassette(root: Path) -> bool:
     return False
 
 
-def test_cli_demo_reports_cassette_miss_without_api_key_or_env_file(
+def test_demo_overlap_line_reports_pairwise_jaccard_to_two_decimals() -> None:
+    overlap = cli.__dict__["_overlap_line"](
+        {"ITEM-1", "ITEM-2"},
+        {"ITEM-2", "ITEM-3"},
+        {"ITEM-1", "ITEM-2", "ITEM-3", "ITEM-4"},
+    )
+
+    assert overlap == ("Item overlap: ME/supply_chain 0.33, ME/EM 0.50, supply_chain/EM 0.50")
+
+
+def test_cli_demo_reports_only_cassette_miss_without_constructing_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     empty_cassettes = tmp_path / "empty-cassettes"
@@ -425,14 +438,43 @@ def test_cli_demo_reports_cassette_miss_without_api_key_or_env_file(
     monkeypatch.chdir(ROOT)
     monkeypatch.setenv("DIGEST_MODE", "replay")
     monkeypatch.setenv("DIGEST_CASSETTES", str(empty_cassettes))
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(Settings, "__init__", partialmethod(Settings.__init__, _env_file=None))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "must-not-be-read")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-be-read")
+
+    def refuse_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError("digest demo constructed Settings")
+
+    monkeypatch.setattr(Settings, "__init__", refuse_settings)
+
+    result = runner.invoke(app, ["demo"])
+
+    assert result.exit_code in (0, 1), result.output
+    if result.exit_code == 1:
+        assert re.search(r"no cassette for key", result.output, re.IGNORECASE), result.output
+
+
+def test_cli_demo_exits_one_and_reports_failed_extract_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed = ExtractReport(
+        threads=1,
+        kept=0,
+        dropped=0,
+        failed=1,
+        items_written=0,
+        drops=dict.fromkeys(DROP_FIELDS, 0),
+    )
+    succeeded = failed.model_copy(update={"threads": 0, "failed": 0})
+    reports = iter([succeeded] * 5 + [failed])
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setenv("DIGEST_CASSETTES", str(tmp_path / "cassettes"))
+    monkeypatch.setattr(cli, "run_extract", lambda *args, **kwargs: next(reports))
 
     result = runner.invoke(app, ["demo"])
 
     assert result.exit_code == 1, result.output
-    assert re.search(r"no cassette for key", result.output, re.IGNORECASE), result.output
+    assert re.search(r"1 failed thread", result.output, re.IGNORECASE), result.output
+    assert "run digest extract first" not in result.output.lower()
 
 
 @pytest.mark.skipif(
