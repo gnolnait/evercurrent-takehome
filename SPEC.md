@@ -439,7 +439,7 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   schema, temperature) and replays when `DIGEST_MODE=replay`; strict replay raises on a
   miss. Tests and CI run in replay mode.
 - `digest say --as <persona> --channel <name> --at <time> --text <msg> --db <scratch>` adds
-  one message to a scratch copy of the store (never the base store) and to an overlay file;
+  one message to a scratch copy of the store (never the base store) and to a script file;
   `digest diff --as-of <date> --db <scratch>` shows, per reader, the digest lines added,
   removed or moved against the base store, each with its reason. Together they drive the
   digest the way a team drives Slack, for scenario tests and the demo
