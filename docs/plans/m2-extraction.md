@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.12, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.13, 2026-10-12. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -601,7 +601,10 @@ revision 1 was judged to carry no project information.
 B1.8 Moved to B0.2: the store methods land in the stubs pull request.
 
 B1.9 `digest extract` on a store replayed to a day, in replay mode with the matching
-cassettes, exits 0 and prints the report. Without `meta.until` it prints the reason and
+cassettes, exits 0 and prints the report. It records the meta key `extract_until` (the
+ISO date of the world day) after a day whose run had no failed thread, and a later run
+starts at the day after it; it refuses a store of another prompt version before it skips
+or runs any day. Without `meta.until` it prints the reason and
 exits 1. In replay mode with no cassette for a pending thread it exits 1 with the
 `CassetteMiss` message (key and model); the thread id is in the `extract_cassette_miss`
 log record.
@@ -1278,6 +1281,38 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Edited evidence | A re-cited message replaces its entry; an entry whose message changed in the delta is re-checked and dropped when stale, with the claims and task links that cited it | The store holds one version per message (M1), so a kept quote must match the current text and a link must cite an entry the item holds; the corpus has no edits in M2. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
+
+## Rulings taken while building the units
+
+The units' tests and reviews met points this plan left open. Each ruling below is pinned
+by a test in the unit named. The ones marked **visible** change what a reader or an
+operator sees.
+
+| Unit | Point | Ruling |
+|---|---|---|
+| 1 | New item id index | `n` is zero-based. |
+| 1 | `extract_failed` field | The error class is under `error_class`. |
+| 1 | Times in the stage | The stage's `as_of` is also the triage `decided_at` and every stage run's `run_at`, so a replayed store is the same on every run. |
+| 1 | Claims and task links on an update | A claim or link may cite any merged evidence message that is in `citable` (root and changed rows); its authority is that message author's. |
+| 1 | Two outputs name one existing item | The second merges against the result of the first, in output order; one item is written. |
+| 1 | **visible** Resume cursor | B1.9's `extract_until` moves only past a day whose run had no failed thread. Known limit: a re-run after a day where one thread passes after an earlier failure while another fails extracts the first thread again from its oldest revision, because `Store.thread_deltas` (M1) reports it pending at the earlier day. The eval runs a fresh store once and is not affected. |
+| 1 | Prompt rules | The extraction prompt holds the exact sentences "For an ask, the owner is the person asked, not the person who asks." and "A question about a task is not evidence, and a status roll-up that lists a task as open is not evidence." |
+| 2 | Absence `due` | A checklist absence's `due` is the gate date; an ask absence keeps the ask's `due`. |
+| 2 | Same-day order | Two events on one day order by their position in `world.yaml`. |
+| 2 | Golden order | `derive_golden` returns items, absences and distractors in the order `write_golden` writes them, so a written and re-read file equals the value. |
+| 2 | `digest absences` input | It reads the meta keys `replay` writes and refuses, with a reason and exit 1, a store of another world, a missing file, a file that is not SQLite, another schema version and a `meta.until` without an offset. `read_golden` names the file and the line for every malformed line. |
+| 3 | Storyline context | `earlier` is the same-scenario events before this one in render order, `(day, position in the file)`. |
+| 3 | Schema order | Poster and reactor Literals list personas in the world's persona order, so the request key is stable. |
+| 3 | **visible** Ask message count | The request says "1 root message plus 1 reply" for an answered ask and "1 root message" for an unanswered one. |
+| 3 | The word "scenario" | The system prompt may contain it in the rule that forbids it; the user message never does. |
+| 3 | **visible** Program description | `World` gains an optional one-line `description`; Kestrel K2 has one. The request prints the program name once, the project name when it differs, then the description. |
+| 3 | **visible** Minutes and order | `minutes_after_start` counts from the event's base time on the message's own day and stays within one day either way; each message is no earlier than the one before it. |
+| 3 | Missing anchor | A manifest with human entries and no anchor file is refused before any write. |
+| 3 | Bundled anchor test | It selects the nine M1 lines by their ts fractions, so the user's added lines do not break it. |
+| 4 | Realism | Keys as the tests name them; p90 is nearest-rank (index `ceil(0.9 * n) - 1` of the sorted list). |
+| 4 | Models | Concrete ids for one logical model are joined with `", "` in sorted order. |
+| 4 | `objective_misses` | A field counts for a thread-matched golden item that is not matched only when no item in its thread carries that field correctly. |
+| 4 | Report layout | Each B4.7 section has a heading that contains its name; every rate has its `n` on the same row; rates print with a decimal point and `None` as `n/a`. |
 
 ## Open items for the user
 
