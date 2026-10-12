@@ -30,11 +30,11 @@ Measured on the recorded corpus (`reports/eval-2026-10-23.md`):
 | Detected absences that are false | 0.304 | 23 | |
 | Absence recall | 0.516 | 31 | |
 
-About 30% of the detected absences are false, counted once per day, source and task
-before the per-reader filter. The report labels this share the false-alarm
-rate, but SPEC A6 defines that rate over simulated silences that were not stalls, and the
-eval does not compute it yet. Silence is counted from task links that the extractor
-writes, so a missed link makes an active task look silent.
+About 30% of the detected absences are false, counted once per day and source, by
+checklist task or by ask thread, before the per-reader filter. The report labels this
+share the false-alarm rate, but SPEC A6 defines that rate over simulated silences that
+were not stalls, and the eval does not compute it yet. Silence is counted from task links
+that the extractor writes, so a missed link makes an active task look silent.
 
 Designed, not built: the claims ledger and linking, stale beliefs, the per-reader digest
 window, phase re-weighting, feedback, live Slack delivery, the web preview and the MCP

@@ -466,8 +466,9 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   fields (rev, date, qty, owner).
 - Citation validity: 100% of delivered items carry verified evidence: a quote found in the
   cited message, or for a referenced claim a file name or URL present in it. Release gate.
-- Faithfulness: binary judge per claim from a different model family where a key is
-  present, with judge agreement on a hand-checked sample of 50.
+- Faithfulness: binary judge per claim from a model family different from both the
+  extractor and the corpus renderer (D12) where a key is present, with judge agreement
+  on a hand-checked sample of 50.
 - Ranking: must-see recall at 5 and nDCG at 5 per persona per day; role separation;
   phase sensitivity.
 - Headline, on simulated personas and labelled as such: stale-belief person-days. For
