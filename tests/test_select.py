@@ -8,7 +8,7 @@ import pytest
 
 from digest.daily.profile import Profile, can_see, profile_for
 from digest.daily.select import SECTION_CAPS, Selection, select
-from digest.models import AbsenceDetail, Evidence, Item, ItemType, Role
+from digest.models import AbsenceDetail, Evidence, Item, ItemType, Role, Severity
 from digest.priors import AbsencePriors, DailyPriors, Priors, TriagePriors, load_priors
 from digest.world.schema import World
 
@@ -95,6 +95,7 @@ def world() -> World:
                 {"id": "PN-OWNED", "type": "part", "description": "Owned part"},
                 {"id": "PN-OTHER", "type": "part", "description": "Other part"},
                 {"id": "G-DVT1", "type": "gate", "description": "DVT build"},
+                {"id": "G-OTHER", "type": "gate", "description": "Other gate"},
             ],
             "events": [],
         }
@@ -235,8 +236,18 @@ def test_can_see_applies_channel_visibility(channel_id: str, expected: bool) -> 
     assert can_see(world(), profile, channel_id) is expected
 
 
-def test_visibility_drops_item_with_only_hidden_evidence() -> None:
-    selection = choose([item("hidden", channel_ids=("CHIDDEN",))])
+def test_visibility_keeps_public_channel_for_non_member() -> None:
+    profile = reader().model_copy(update={"channels": ("CPRIVATE",)})
+
+    selection = choose([item("public", channel_ids=("CPUBLIC",))], profile=profile)
+
+    assert [line.item.item_id for line in selection.lines] == ["public"]
+    assert selection.hidden == 0
+
+
+@pytest.mark.parametrize("channel_id", ["CHIDDEN", "UNKNOWN"], ids=["private", "unknown"])
+def test_visibility_drops_item_without_visible_evidence(channel_id: str) -> None:
+    selection = choose([item("hidden", channel_ids=(channel_id,))])
 
     assert selection.lines == ()
     assert selection.hidden == 1
@@ -290,6 +301,7 @@ def test_each_must_see_rule_is_kept(row: Item, reason_terms: tuple[str, ...]) ->
     selection = choose(
         absences=[row] if row.type == "absence" else [],
         items=[] if row.type == "absence" else [row],
+        table=load_priors(Path("config/priors.yaml")),
     )
 
     assert len(selection.lines) == 1
@@ -297,6 +309,38 @@ def test_each_must_see_rule_is_kept(row: Item, reason_terms: tuple[str, ...]) ->
     assert line.must_see is True
     assert line.score == 0
     assert all(term in line.reason.lower() for term in reason_terms)
+
+
+@pytest.mark.parametrize(
+    ("row", "profile"),
+    [
+        (item("blocker-other", type="blocker", entities=("PN-OTHER",)), reader()),
+        (item("schedule-other-gate", type="schedule_change", entities=("G-OTHER",)), reader()),
+        (
+            item("schedule-owned-part", type="schedule_change", entities=("PN-OWNED",)),
+            reader(owned_entities=("PN-OWNED",)),
+        ),
+        (
+            absence(
+                "ask-third-party",
+                source="ask",
+                asker="UASKER",
+                owner="UEMPTY",
+                affected_roles=(),
+            ),
+            reader(),
+        ),
+    ],
+    ids=["blocker-not-owned", "gate-not-owned", "owned-part-not-gate", "ask-third-party"],
+)
+def test_items_outside_must_see_rules_are_ranked(row: Item, profile: Profile) -> None:
+    selection = choose(
+        absences=[row] if row.type == "absence" else [],
+        items=[] if row.type == "absence" else [row],
+        profile=profile,
+    )
+
+    assert selection.lines[0].must_see is False
 
 
 def test_must_see_line_is_kept_above_section_cap() -> None:
@@ -336,6 +380,47 @@ def test_ranked_score_names_all_terms(
     assert "importance=0.9" in line.reason
     assert "role_prior=0.6" in line.reason
     assert f"personal_relevance={relevance}" in line.reason
+
+
+@pytest.mark.parametrize(
+    ("item_type", "type_weight"),
+    [
+        ("blocker", 1.0),
+        ("decision", 0.9),
+        ("schedule_change", 0.9),
+        ("spec_change", 0.8),
+        ("bom_change", 0.8),
+        ("risk", 0.7),
+        ("ask", 0.6),
+        ("absence", 0.9),
+        ("fyi", 0.3),
+    ],
+)
+@pytest.mark.parametrize(
+    ("severity", "severity_weight"),
+    [("high", 1.0), ("medium", 0.7), ("low", 0.4)],
+)
+def test_ranked_score_uses_type_and_severity_weights(
+    item_type: ItemType,
+    type_weight: float,
+    severity: Severity,
+    severity_weight: float,
+) -> None:
+    row = (
+        absence("weighted", affected_roles=()).model_copy(update={"severity": severity})
+        if item_type == "absence"
+        else item("weighted", type=item_type, severity=severity)
+    )
+
+    selection = choose(
+        absences=[row] if item_type == "absence" else [],
+        items=[] if item_type == "absence" else [row],
+        table=priors(role_priors={"ME": {}}),
+    )
+
+    line = selection.lines[0]
+    importance = type_weight * severity_weight
+    assert line.score == pytest.approx(importance * 0.5 * 0.4)
 
 
 def test_ranked_score_uses_default_role_prior() -> None:
@@ -390,7 +475,15 @@ def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section:
 def test_each_section_caps_only_ranked_lines() -> None:
     rows = [item(f"ask-{index}", type="ask") for index in range(7)]
     rows += [item(f"decision-{index}") for index in range(7)]
-    rows += [item(f"risk-{index}", type="risk") for index in range(7)]
+    rows += [
+        item("risk-low-c", type="risk", severity="low"),
+        item("risk-high-b", type="risk", severity="high"),
+        item("risk-medium-b", type="risk", severity="medium"),
+        item("risk-low-b", type="risk", severity="low"),
+        item("risk-high-a", type="risk", severity="high"),
+        item("risk-medium-a", type="risk", severity="medium"),
+        item("risk-low-a", type="risk", severity="low"),
+    ]
     rows += [item(f"fyi-{index}", type="fyi") for index in range(7)]
     missing = [absence(f"absence-{index}") for index in range(5)]
     rows.append(item("risk-must", type="blocker", entities=("PN-OWNED",)))
@@ -406,7 +499,14 @@ def test_each_section_caps_only_ranked_lines() -> None:
         "fyi": 5,
     }
     risk_lines = [line for line in selection.lines if line.section == "risks"]
-    assert sum(line.must_see for line in risk_lines) == 1
+    assert [line.item.item_id for line in risk_lines] == [
+        "risk-must",
+        "risk-high-a",
+        "risk-high-b",
+        "risk-medium-a",
+        "risk-medium-b",
+        "risk-low-a",
+    ]
 
 
 def test_resolved_and_after_day_items_are_left_out() -> None:
