@@ -65,7 +65,11 @@ def no_gh_env(tool_dir, monkeypatch):
 def _run(mode, cwd, payload=None, env=None, argv=None):
     return subprocess.run(
         (argv or [PYTHON, str(HOOK_PY)]) + [mode],
-        input=json.dumps(payload if payload is not None else {"cwd": str(cwd)}),
+        # Raw UTF-8, as Claude Code sends it: ASCII escapes would hide a
+        # payload read in the wrong encoding.
+        input=json.dumps(
+            payload if payload is not None else {"cwd": str(cwd)}, ensure_ascii=False
+        ),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -214,3 +218,70 @@ def test_print_exits_zero_with_no_files(repo, argv):
     p = _run("print", repo, argv=argv)
     assert p.returncode == 0
     assert p.stdout == ""
+
+
+def _spawn_dir(repo):
+    return repo / "notes" / "handoffs" / "spawn"
+
+
+def _spawn_payload(repo, prompt="Fix the README badge → now.", title="Fix stale README badge"):
+    return {
+        "cwd": str(repo),
+        "hook_event_name": "PreToolUse",
+        "tool_name": "mcp__ccd_session__spawn_task",
+        "tool_input": {"title": title, "tldr": "The badge is stale.", "prompt": prompt},
+    }
+
+
+@pytest.mark.parametrize("argv", [None, launch(FENCE)], ids=["python", "fence"])
+def test_spawn_hook_writes_handoff_and_names_it_in_prompt(repo, argv):
+    """Setup: a spawn_task payload. Action: spawn-hook. Assert: one handoff
+    file with the task and the work state; the prompt ends with its path."""
+    p = _run("spawn-hook", repo, payload=_spawn_payload(repo), argv=argv)
+    assert p.returncode == 0
+    (doc,) = _spawn_dir(repo).glob("*-fix-stale-readme-badge.md")
+    text = doc.read_text(encoding="utf-8")
+    assert "## Prompt\nFix the README badge → now." in text
+    assert "- main -> base: ahead 1" in text
+    out = json.loads(p.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    updated = out["updatedInput"]
+    assert updated["title"] == "Fix stale README badge"
+    assert updated["tldr"] == "The badge is stale."
+    assert updated["prompt"].startswith("Fix the README badge → now.\n\nHandoff: read ")
+    assert updated["prompt"].rstrip().endswith("first.")
+    assert doc.as_posix() in updated["prompt"].replace("\\", "/")
+
+
+def test_spawn_hook_skips_prompt_that_names_a_handoff(repo):
+    """A prompt that already names a spawn handoff gets no second file."""
+    prompt = "Do it.\n\nHandoff: read C:/x/notes/handoffs/spawn/a.md first."
+    p = _run("spawn-hook", repo, payload=_spawn_payload(repo, prompt=prompt))
+    assert p.returncode == 0
+    assert p.stdout == ""
+    assert not _spawn_dir(repo).exists()
+
+
+def test_spawn_cli_writes_handoff_and_prints_line(repo):
+    """The orchestrator's command: prompt on stdin, the handoff line on stdout."""
+    p = subprocess.run(
+        [PYTHON, str(HOOK_PY), "spawn", "--title", "Add a test", "--prompt-file", "-"],
+        input="Write the missing test → now.\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=repo,
+    )
+    assert p.returncode == 0, p.stderr
+    (doc,) = _spawn_dir(repo).glob("*-add-a-test.md")
+    assert "## Prompt\nWrite the missing test → now." in doc.read_text(encoding="utf-8")
+    assert p.stdout.startswith("Handoff: read ")
+    assert doc.as_posix() in p.stdout.replace("\\", "/")
+
+
+def test_spawn_handoff_is_not_the_newest_handwritten_handoff(repo):
+    """A spawn doc belongs to the child session; compaction must not show it."""
+    _notes(repo, "handoffs", 1, prefix="h")
+    _run("spawn-hook", repo, payload=_spawn_payload(repo))
+    assert _run("snapshot", repo).returncode == 0
+    assert "- notes/handoffs/h000.md" in _state(repo).read_text(encoding="utf-8")
