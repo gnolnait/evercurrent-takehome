@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# no-unreviewed-pr - PreToolUse guard: no PR creation without a review of HEAD.
+#
+# Standalone entry for the test suite. Production dispatch is guard_runner,
+# which calls the same no_unreviewed_pr_impl.evaluate. The parser decides
+# every invocation; there is no substring pre-filter.
+set -euo pipefail
+
+INPUT="$(cat)"
+
+# Run the parser as a CHILD and fail CLOSED on any non-verdict exit. Claude
+# Code treats every exit other than 2 as non-blocking.
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+
+set +e
+"$PY" "$(dirname "$0")/no-unreviewed-pr.py" <<<"$INPUT"
+rc=$?
+set -e
+case "$rc" in
+  0|2) exit "$rc" ;;
+  *)
+    printf '%s\n' \
+      "BLOCKED: the no-unreviewed-pr guard could not run (python exit $rc); failing closed." \
+      "Check the python interpreter and .claude/hooks/no-unreviewed-pr.py." >&2 || :
+    exit 2
+    ;;
+esac

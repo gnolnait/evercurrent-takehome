@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""guard_runner - single-spawn PreToolUse dispatch for the three git guards.
+"""guard_runner - single-spawn PreToolUse dispatch for the git and PR guards.
 
 Replaces three bash-wrapper + python-parser spawns with ONE python
 process: read the payload once through hook_payload, then run each guard's pure
@@ -23,6 +23,7 @@ import hook_payload as payload  # noqa: E402  (post-path-insert)
 import no_bypass_signing_impl as signing  # noqa: E402
 import no_merge_pr_impl as merge  # noqa: E402
 import no_commit_to_main_impl as commit  # noqa: E402
+import no_unreviewed_pr_impl as review  # noqa: E402
 
 
 def _hook_cwd(data):
@@ -56,7 +57,7 @@ def main():
 
     # BYPASS_GIT_GUARD is honored ONLY for the signing guard, matching the
     # standalone contract: no-bypass-signing has an escape hatch, but
-    # no-merge-pr and no-commit-to-main have NO bypass by design. A blanket
+    # no-merge-pr, no-commit-to-main and no-unreviewed-pr have NO bypass by design. A blanket
     # runner-level short-circuit would silently widen the bypass to PR merges
     # and protected-branch commits — so the env is scoped here, not in the
     # bash fence.
@@ -72,6 +73,7 @@ def main():
     checks.append(
         lambda: commit.evaluate_commit(cmd, _hook_cwd(data), _project_dir())
     )
+    checks.append(lambda: review.evaluate(cmd, _hook_cwd(data)))
 
     for check in checks:
         blocked, message = check()
