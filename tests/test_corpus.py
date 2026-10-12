@@ -951,7 +951,12 @@ def test_render_requires_anchor_when_manifest_has_human_entries(tmp_path: Path) 
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("day_offset", 10_000_000), ("minutes_after_start", 10**15)],
+    [
+        ("day_offset", 10_000_000),
+        ("day_offset", -10_000_000),
+        ("minutes_after_start", 10**15),
+        ("minutes_after_start", -(10**15)),
+    ],
 )
 def test_render_rejects_out_of_range_model_offsets_without_writes(
     tmp_path: Path, field: str, value: int
@@ -1017,16 +1022,67 @@ def test_render_rejects_messages_that_move_backwards_in_model_order(tmp_path: Pa
     assert not manifest_out.exists()
 
 
-def test_render_request_uses_the_world_description_without_repeating_program() -> None:
+@pytest.mark.parametrize(
+    ("event_index", "offsets"),
+    [
+        (1, ((0, 0), (0, 5), (0, 5))),
+        (0, ((0, 10), (1, 5))),
+    ],
+    ids=["equal-reply-minutes", "next-day-reply-with-lower-minute"],
+)
+def test_render_accepts_valid_message_order_shapes(
+    tmp_path: Path,
+    event_index: int,
+    offsets: tuple[tuple[int, int], ...],
+) -> None:
     data = world_data()
-    data["description"] = "A compact autonomous warehouse mover."
+    data["events"] = [data["events"][event_index]]
+    world = World.model_validate(data)
+    event = world.events[0]
+    messages = deepcopy(rendered_messages(event))
+    for message, (day_offset, minutes_after_start) in zip(messages, offsets, strict=True):
+        message["day_offset"] = day_offset
+        message["minutes_after_start"] = minutes_after_start
+    manifest = Manifest(threads={})
+    llm = replay_llm(tmp_path, world, manifest, overrides={event.id: messages})
+    events_out = tmp_path / "events.jsonl"
+    manifest_out = tmp_path / "manifest.json"
+
+    render_world(
+        world,
+        llm,
+        tmp_path / "missing-anchor.jsonl",
+        manifest,
+        EMPTY_AVOID,
+        events_out,
+        manifest_out,
+    )
+
+    assert len(list(read_events(events_out, world.workspace_url))) == len(messages)
+    assert manifest_out.exists()
+
+
+@pytest.mark.parametrize(
+    "description",
+    [None, "A compact autonomous warehouse mover."],
+    ids=["no-description", "with-description"],
+)
+def test_render_request_uses_the_world_description_without_repeating_program(
+    description: str | None,
+) -> None:
+    data = world_data()
+    if description is not None:
+        data["description"] = description
     data["project"]["name"] = data["program"]
     world = World.model_validate(data)
 
     prompt = request_for(world, world.events[1], EMPTY_AVOID).messages[0].content
 
-    assert data["description"] in prompt
-    assert f"{data['program']}. {data['program']}." not in prompt
+    assert prompt.count(data["program"]) == 1
+    assert "None" not in prompt
+    if description is not None:
+        assert description in prompt
+        assert prompt.index(description) > prompt.index(data["program"])
 
 
 @pytest.mark.parametrize(
