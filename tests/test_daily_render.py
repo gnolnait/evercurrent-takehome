@@ -468,6 +468,7 @@ def test_demo_overlap_line_reports_zero_for_two_empty_digests() -> None:
 
 
 def test_cli_demo_prints_item_overlap_last_without_cassettes(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     item_inputs = (
@@ -502,7 +503,12 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
             drops=dict.fromkeys(DROP_FIELDS, 0),
         )
 
+    cassettes = tmp_path / "cassettes"
+    cassettes.mkdir()
+    # The replaced extract step does not read this cassette.
+    (cassettes / "unused.json").write_text("{}", encoding="utf-8")
     monkeypatch.chdir(ROOT)
+    monkeypatch.setenv("DIGEST_CASSETTES", str(cassettes))
     monkeypatch.setattr(cli, "_extract_days", extract_known_items)
     monkeypatch.setattr("digest.daily.render.detect_absences", lambda *args, **kwargs: [])
 
@@ -556,8 +562,12 @@ def test_cli_demo_exits_one_and_reports_failed_extract_threads(
     )
     succeeded = failed.model_copy(update={"threads": 0, "failed": 0})
     reports = iter([succeeded] * 5 + [failed])
+    cassettes = tmp_path / "cassettes"
+    cassettes.mkdir()
+    # The replaced extract step does not read this cassette.
+    (cassettes / "unused.json").write_text("{}", encoding="utf-8")
     monkeypatch.chdir(ROOT)
-    monkeypatch.setenv("DIGEST_CASSETTES", str(tmp_path / "cassettes"))
+    monkeypatch.setenv("DIGEST_CASSETTES", str(cassettes))
     monkeypatch.setattr(cli, "run_extract", lambda *args, **kwargs: next(reports))
 
     result = runner.invoke(app, ["demo"])
