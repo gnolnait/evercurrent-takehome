@@ -1330,7 +1330,10 @@ claim on `rev`, `gate_date`, `qty` or `owner` is found only with an equal normal
 value; a golden claim on any other attribute (`status`, `spec_param`, `lead_time`,
 `priority`) is found when an item in the thread carries a claim on the same entity and
 attribute. `objective_misses["claims.value"]` counts only the discriminating
-attributes. Claim precision uses the same rule.
+attributes. Claim precision uses the same rule. So that a reader does not take claim
+recall for value accuracy, the report adds an advisory row, "claim value agreement
+(non-discriminating)": of the found golden claims on the other attributes, the share
+whose normalized value equals the value of a matching extracted claim, with its n.
 
 ## Rulings taken while building the units
 
