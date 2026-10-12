@@ -287,9 +287,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    `novelty` measures what is new to the reader, not the age of a message. For an item
    with claims, it is 1 when the reader has no exposure on a claim's key, or when a
    claim's value differs from the reader's `exposed` value for that key (any
-   `exposed.how`); a claim the ledger has since superseded does not count. For an item
-   with no claims, it is 1 when the item is not in `seen` or its `last_updated` is later
-   than its `seen` time. Otherwise it is a floor (default 0.3). Novelty is held at 1 for
+   `exposed.how`); a claim the ledger has since superseded does not count. `exposed`
+   holds one value per key, so a claim of kind target or measured, or with `scope` or
+   `conditions`, is not compared with it. For an item with no compared claims, it is 1
+   when the item is not in `seen`. For any item in `seen`, it is also 1 when its
+   `last_updated` is later than its `seen` time. Otherwise it is a floor (default 0.3). Novelty is held at 1 for
    absences, open blockers, unanswered asks, stale-belief items, open contradictions and
    items that carry a `pending` claim, because these stay true until someone acts and
    their rank rises with age (section 5 step 5). Stretch term
@@ -302,7 +304,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    novelty is held at 1. The ablation reads it on Monday digests (world days are working
    days, so a Monday window spans a weekend) and on one persona whose delivery the eval
    run pauses for three working days. An item's newest evidence is the greatest
-   `message_ts` in its `evidence`. Ranked-lane ties (scores equal to six significant
+   `event_ts` among the current versions of the messages its `evidence` cites, so an edit
+   counts as new evidence. Ranked-lane ties (scores equal to six significant
    figures) break on newest evidence, newest first, then on `item_id` ascending, so the
    order is deterministic. `importance`
    includes type, severity, authority, affected-role count and engagement (replies and
@@ -323,7 +326,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    is not new (ongoing N days, escalated from risk to blocker, resurfaced). The
    consequence clause comes from a template table per role and item type; the fact,
    ids, values and link are identical for every reader. An item the reader was shown
-   while open and that has since resolved appears once more with its closing evidence.
+   while open and that has since resolved appears once more with its closing evidence,
+   whatever its score.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
    with nothing to say sends one line that says so. Rationale on demand.
