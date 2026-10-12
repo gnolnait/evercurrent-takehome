@@ -360,7 +360,7 @@ class TriageOutput(Frozen):
 `digest/extract/prompts.py`
 
 ```python
-EXTRACT_PROMPT_VERSION = "m2.1"  # covers the triage and the extraction prompt
+EXTRACT_PROMPT_VERSION = "m2.2"  # covers the triage and the extraction prompt; m2.2: new roots count as changed
 EXTRACT_SYSTEM: str                # static; rules, output instructions, abstention rule
 TRIAGE_SYSTEM: str
 def extract_request(delta: ThreadDelta, glossary: Glossary, project: ProjectConfig, as_of: date, existing: Sequence[Item], citable: Sequence[Event]) -> LLMRequest
@@ -1285,6 +1285,43 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Edited evidence | A re-cited message replaces its entry; an entry whose message changed in the delta is re-checked and dropped when stale, with the claims and task links that cited it | The store holds one version per message (M1), so a kept quote must match the current text and a link must cite an entry the item holds; the corpus has no edits in M2. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
+
+## Quality round after the first recording (2026-10-12)
+
+The first recording (thread recall 0.8, claim recall 0.229, absence false-alarm rate
+0.55, absence recall 0.29) and the secondary review panel found three causes. These
+rules amend B1.2, B1.3, B1.5, B4.2 and B4.3; each is pinned by a test in the quality
+pull request or in unit 4's.
+
+Q1 A new root is a changed message (B1.2, B1.3). When the thread root is among the
+delta's changed rows (the thread's first revision, or a root edited since the last `ok`
+run), the prompt lists it under "Changed messages" and the root section says it is new
+in this delta; it is not repeated. A root that is not changed stays under the root
+section as context. Before this rule a one-post thread showed no changed message, and
+triage scored the schedule sync, the PLM release, the document-control post and an
+unanswered ask at 0.15 to 0.3.
+
+Q2 Triage counts an fyi (B1.2). The triage prompt's list of project information names
+"an fyi that a program member needs to know", as the extraction prompt does.
+
+Q3 Task wording (B1.3). The prompt calls the task list "the checklist tasks of gates on
+or after today", which is what `_tasks_section` lists; it does not call them open.
+
+Q4 The prompt changes move `EXTRACT_PROMPT_VERSION` to `m2.2`; the cassettes are
+re-recorded, and a recording is committed only when the eval reports zero extract
+failures (a failed call saves no cassette, so replay would raise `CassetteMiss`).
+
+Q5 Claim value forms (B1.5). `verify` normalizes two attributes after resolving the
+entity: a `rev` value drops a leading "Rev", "rev" or "Rev." and surrounding spaces and
+is upper-cased ("Rev B" -> "B"); a `qty` value that starts with a whole number becomes
+that number ("32 counted, 8 short" -> "32"). Other values are kept as given.
+
+Q6 Exact match on discriminating fields only (B4.2, B4.3; SPEC section 7). A golden
+claim on `rev`, `gate_date`, `qty` or `owner` is found only with an equal normalized
+value; a golden claim on any other attribute (`status`, `spec_param`, `lead_time`,
+`priority`) is found when an item in the thread carries a claim on the same entity and
+attribute. `objective_misses["claims.value"]` counts only the discriminating
+attributes. Claim precision uses the same rule.
 
 ## Rulings taken while building the units
 
