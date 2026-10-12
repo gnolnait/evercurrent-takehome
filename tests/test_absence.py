@@ -866,8 +866,15 @@ def test_absences_cli_refuses_unready_store(
     with Store.open(store_path) as store:
         if state == "pending":
             _write_ready_cli_store(store)
-            pending = _item("pending", 1)
-            store.upsert_events([_event(pending, "U0EM01", 1)])
+            pending = _item("pending", 2)
+            store.upsert_events([_event(pending, "U0EM01", 2)])
+            deltas = store.thread_deltas(
+                "extract",
+                "m2.1",
+                "extract",
+                datetime(2026, 10, 16, 6, 59, 59, 999999, tzinfo=UTC),
+            )
+            assert [delta.thread_id for delta in deltas] == [pending.thread_id]
         else:
             for key, value in {
                 "world": "kestrel",
