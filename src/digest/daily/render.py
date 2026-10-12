@@ -1,18 +1,142 @@
-"""Render a reader's selection as plain text, and build a digest from a store (plan B6.1, B6.2)."""
+"""Render a reader's selection as plain text, and select and build a digest from a store.
+
+See plan B6.1 and B6.2.
+"""
 
 from __future__ import annotations
 
-from datetime import date
+from collections.abc import Mapping
+from datetime import UTC, date, datetime, time
+from zoneinfo import ZoneInfo
 
-from digest.daily.select import Selection
+from digest.absence import detect_absences
+from digest.daily.profile import profile_for
+from digest.daily.select import Line, Section, Selection, select
+from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.priors import Priors
+from digest.project import ChecklistTask
 from digest.store import Store
 from digest.world.schema import World
 
+SECTION_TITLES: Mapping[Section, str] = {
+    "needs_you": "Needs you",
+    "not_happened": "Not happened",
+    "decisions": "Decisions",
+    "risks": "Risks",
+    "fyi": "FYI",
+}
+
 
 def render_digest(world: World, selection: Selection) -> str:
-    raise NotImplementedError
+    """The digest as plain text: a header, the non-empty sections, the hidden-items footer."""
+    names = {persona.user_id: persona.name for persona in world.personas}
+    tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
+    profile = selection.profile
+    blocks = [f"Daily digest for {profile.name} ({profile.role}) - {selection.day.isoformat()}"]
+    for section, title in SECTION_TITLES.items():
+        lines = [line for line in selection.lines if line.section == section]
+        if lines:
+            blocks.append("\n".join([title, *(_line(line, names, tasks) for line in lines)]))
+    if not selection.lines:
+        blocks.append(f"Nothing new for {profile.name}.")
+    if selection.hidden > 0:
+        noun = "item" if selection.hidden == 1 else "items"
+        blocks.append(f"{selection.hidden} {noun} hidden by the visibility filter.")
+    return "\n\n".join(blocks)
 
 
 def build_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> str:
-    raise NotImplementedError
+    """Select and render the reader's digest for `day`; see `select_digest` for the refusals."""
+    return render_digest(world, select_digest(store, world, priors, user_id, day))
+
+
+def select_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> Selection:
+    """Select the reader's lines for `day` from a replayed and extracted store.
+
+    Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not
+    exactly the end of `day` in the world's zone, or a store with extract deltas pending.
+    The store keeps only the latest version of each item, so a store replayed past `day`
+    cannot show `day`: its refusal names a fresh store as the remedy. Raise KeyError for an unknown user and ValueError for a bot. The
+    caller checks that the store holds the world: replay stores the world directory name,
+    and `world` does not carry it.
+    """
+    zone = ZoneInfo(world.timezone)
+    as_of = datetime.combine(day, time.max, zone).astimezone(UTC)
+    until = store.get_meta("until")
+    if until is None:
+        raise ValueError(f"store {store.path} has no meta key 'until'; run digest replay first")
+    try:
+        replayed = datetime.fromisoformat(until)
+    except ValueError:
+        replayed = None
+    if replayed is None or replayed.tzinfo is None:
+        raise ValueError(
+            f"store {store.path} meta key 'until' is {until!r}, "
+            "not an ISO timestamp with a UTC offset"
+        )
+    if replayed > as_of:
+        raise ValueError(
+            f"store {store.path} is replayed until {until}, past the end of day {day} "
+            f"({as_of.isoformat()}), and keeps no earlier item versions; use a fresh --db, "
+            f"replay it to day {day}, then run digest extract"
+        )
+    if replayed != as_of:
+        raise ValueError(
+            f"store {store.path} is replayed until {until}, before the end of day {day} "
+            f"({as_of.isoformat()}); run digest replay --until {day}, then digest extract"
+        )
+    if store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of):
+        raise ValueError(
+            f"store {store.path} has extract deltas pending as of day {day}; "
+            "run digest extract first"
+        )
+    try:
+        profile = profile_for(world, user_id)
+    except ValueError as error:
+        raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
+    items = store.items(as_of)
+    absences = detect_absences(store, world.project, priors, as_of, zone)
+    return select(world, profile, items, absences, priors, day)
+
+
+def _line(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> str:
+    """One line, then its indented summary and source links.
+
+    A checklist absence takes the task text and owner role from the world's checklist.
+    """
+    item = line.item
+    detail = item.absence
+    if detail is None:
+        entities = f" ({', '.join(item.entities)})" if item.entities else ""
+        owner = f" - owner {names.get(item.owner, item.owner)}" if item.owner else ""
+        head = f"- {_plain(item.title)}{entities}{owner}"
+        body = [f"  {_plain(item.summary)}"]
+    elif detail.source == "checklist":
+        task = tasks.get((detail.gate or "", detail.task or ""))
+        what = f"{task.task} ({task.owner})" if task else detail.task
+        head = (
+            f"- Not happened: {what} for {detail.gate} - "
+            f"{_days(detail.days_silent)} silent, "
+            f"{detail.buffer_consumed}/{detail.buffer_days} buffer days used"
+        )
+        body = [f"  {_plain(item.summary)}"]
+    else:
+        asker = names.get(detail.asker, detail.asker) if detail.asker else "someone"
+        owner = names.get(item.owner, item.owner) if item.owner else "someone"
+        head = f"- Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
+        body = [f"  {_plain(item.summary)}"]
+    if line.must_see:
+        head += " [must see]"
+    sources = [f"  source: {entry.permalink}" for entry in item.evidence]
+    return "\n".join([head, *body, *sources])
+
+
+def _days(count: int) -> str:
+    return f"{count} working {'day' if count == 1 else 'days'}"
+
+
+def _plain(text: str) -> str:
+    """The text on one line; a line break in model or Slack text would break the layout."""
+    return " ".join(text.split())
