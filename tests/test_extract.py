@@ -398,6 +398,10 @@ def test_triage_request_carries_only_citable_thread_content_and_probability_rule
     assert re.search(r"probabil", f"{request.system}\n{text}", re.IGNORECASE)
 
 
+def test_triage_system_counts_an_fyi_as_project_information() -> None:
+    assert "an fyi that a program member needs to know" in TRIAGE_SYSTEM.lower()
+
+
 def test_triage_replay_rejects_invalid_probability_without_retry(tmp_path: Path) -> None:
     row = event()
     delta_row = delta(row, root=row)
@@ -476,6 +480,16 @@ def test_extract_request_orders_sections_filters_rows_and_states_rules() -> None
     assert any(word in system for word in ("run", "result", "review", "sign-off", "received"))
 
 
+def test_extract_system_names_tasks_by_gate_date_without_calling_them_open() -> None:
+    system = EXTRACT_SYSTEM.lower()
+    assert "the checklist tasks of gates on or after today" in system
+    assert "open checklist tasks" not in system
+
+
+def test_extract_prompt_version_is_m2_2() -> None:
+    assert EXTRACT_PROMPT_VERSION == "m2.2"
+
+
 def test_extract_request_handles_missing_root_and_omits_world_event_ids() -> None:
     reply = event(REPLY, text="Only changed message")
     request = extract_request(
@@ -487,10 +501,41 @@ def test_extract_request_handles_missing_root_and_omits_world_event_ids() -> Non
 
 def test_extract_request_lists_root_once_when_first_revision_includes_it() -> None:
     root = event(text="FIRST-REVISION-ROOT")
-    request = extract_request(
-        delta(root, root=root), glossary(), project(), date(2026, 10, 13), (), (root,)
+    first_delta = delta(root, root=root)
+    reply = event(REPLY, text="LATER-REVISION-REPLY")
+    later_delta = delta(reply, root=root)
+    first_requests = (
+        triage_request(first_delta, "Mechanical work", (root,)),
+        extract_request(first_delta, glossary(), project(), date(2026, 10, 13), (), (root,)),
     )
-    assert request.messages[0].content.count("FIRST-REVISION-ROOT") == 1
+    later_requests = (
+        triage_request(later_delta, "Mechanical work", (root, reply)),
+        extract_request(
+            later_delta,
+            glossary(),
+            project(),
+            date(2026, 10, 13),
+            (),
+            (root, reply),
+        ),
+    )
+
+    for request in first_requests:
+        text = request.messages[0].content
+        root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+        assert heading
+        assert "new in this delta" in root_section.lower()
+        assert "FIRST-REVISION-ROOT" not in root_section
+        assert "FIRST-REVISION-ROOT" in changed_section
+        assert text.count("FIRST-REVISION-ROOT") == 1
+
+    for request in later_requests:
+        text = request.messages[0].content
+        root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+        assert heading
+        assert "FIRST-REVISION-ROOT" in root_section.rsplit("Thread root:", maxsplit=1)[-1]
+        assert "FIRST-REVISION-ROOT" not in changed_section
+        assert text.count("FIRST-REVISION-ROOT") == 1
 
 
 @pytest.mark.parametrize(
@@ -706,6 +751,49 @@ def test_verify_quote_matches_only_its_cited_message_after_space_normalization(
     )
     assert bool(result.items) is kept
     assert result.drops == dict.fromkeys(DROP_FIELDS, 0) | {"evidence.quote": 0 if kept else 1}
+
+
+@pytest.mark.parametrize(
+    ("attribute", "raw", "expected"),
+    [
+        ("rev", "Rev B", "B"),
+        ("rev", "rev c", "C"),
+        ("rev", "Rev. D", "D"),
+        ("rev", " B ", "B"),
+        ("qty", "32 counted, 8 short", "32"),
+        ("qty", "50", "50"),
+        ("qty", "about 32 counted", "about 32 counted"),
+        ("status", "In Progress", "In Progress"),
+    ],
+)
+def test_verify_normalizes_revision_and_leading_quantity_claim_values(
+    attribute: Any, raw: str, expected: str
+) -> None:
+    root = event(text=raw)
+    delta_row = delta(root, root=root)
+    extraction = Extraction(
+        rationale="Check claim value forms.",
+        items=[
+            extracted_item(
+                evidence=[ExtractedEvidence(message_ts=ROOT, quote=raw)],
+                claims=[
+                    ExtractedClaim(
+                        entity="PN-31010",
+                        attribute=attribute,
+                        value=raw,
+                        message_ts=ROOT,
+                    )
+                ],
+            )
+        ],
+    )
+
+    result = verify(extraction, delta_row, {ROOT: root}, glossary(), {}, {})
+
+    (verified_item,) = result.items
+    assert [(claim.attribute, claim.value) for claim in verified_item.claims] == [
+        (attribute, expected)
+    ]
 
 
 @pytest.mark.parametrize("field", DROP_FIELDS)
