@@ -7,7 +7,7 @@ issue: #N | none
 
 # Summary
 
-<!-- One sentence, present tense, no "This PR". It lands in git log. At most two more sentences, no bullets.
+<!-- One sentence, present tense, no "This PR". At most two more sentences, no bullets.
      Put Closes #N here, not in the fence. Put **Caution:** first on a line a reviewer must not miss. No emoji.
      Delete every template comment. -->
 
@@ -22,4 +22,4 @@ issue: #N | none
 # Appendix
 
 <!-- Optional; most PRs delete this heading. The rejected alternative, the blast radius, a deferred follow-up.
-     One sentence per bullet, at most three. Each bullet must stand alone in git log. -->
+     One sentence per bullet, at most three. Each bullet must make sense without the rest of the PR. -->

@@ -93,7 +93,8 @@ At each stage of `docs/process.md`, invoke the skill with the Skill tool; do not
 procedure from memory. The user-level routing table covers the other moments.
 
 - Plan: `grill-me` on a load-bearing unit; `prototype` for one uncertain premise.
-- Tests: `testing` (`property-testing` for invariants); `prove-test` for every new test.
+- Tests: `testing` (`property-testing` for invariants); `prove-test` for every new or
+  modified test.
 - Code: `minimal-diff-ladder` before new structure; `bug-fix` for a reported bug.
 - Review: `/review-local --base main` plus `codex exec -p review`; `ship-review` sets
   the intensity.
