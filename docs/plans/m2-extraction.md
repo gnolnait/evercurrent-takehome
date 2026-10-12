@@ -1020,8 +1020,7 @@ and asserts nothing is found; B5.1 asserts the two generated files exist once th
 pull request lands.
 
 B3.7 `anchor.jsonl` holds the human-authored anchor slice: the nine lines M1 shipped in
-`events.jsonl` (N1-TORQUE, S1-AGREE and S1-CUT) plus the lines that complete the
-anchor slice (U3: nine lines in M2), each thread listed in `manifest.json` with `authored:
+`events.jsonl` (N1-TORQUE, S1-AGREE and S1-CUT); M2 ships these nine (U3), each thread listed in `manifest.json` with `authored:
 human`; unit 3 creates `manifest.json` with those entries and the data pull request
 adds the rendered ones. `events.jsonl` keeps the nine lines until the data pull request regenerates it.
 
@@ -1086,7 +1085,7 @@ class ExtractionReport(Frozen):
     drops: dict[str, int]
     triage_golden_kept: int
     triage_golden_total: int
-    triage_by_event: dict[str, float]  # max probability over the thread's revisions, per golden and distractor event
+    triage_by_event: dict[str, float]  # max probability over the thread's revisions, per golden and distractor event with a triage decision
     triage_dropped_golden: tuple[str, ...]  # dropped by triage at every revision; a failed thread is not here
     extract_failed: int          # threads whose triage or extraction raised LLMOutputError, summed over days
     extract_threads: int         # pending thread deltas seen, summed over days; the n of extract_failed
@@ -1265,7 +1264,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Negative-name check | Whole-word for names, whole-token for ids, bounded phrases; scans the four data files | A substring check flags `June` for `Jun`; the rule must be stated or two implementers diverge. |
 | Eval placement | Its own unit after units 1 to 3 | It runs the other three; folding it into the data pull request would mix code and recordings. |
 | Cost and latency rows | M4 | Section 7 lists them; M4 owns the report; M2 adds no usage counter to the client. |
-| DISCO realism comparison | `not_run` unless reference figures with a source are in the repo | No number is reconstructed from memory. |
+| DISCO realism comparison | `not_run` in M2; no reference file is read (B4.6) | No number is reconstructed from memory. |
 | HERB | Schema reference only | CC BY-NC; its generator is not released; the unanswerable-question idea is covered by distractor threads that look like project chatter. |
 | Deleted messages | Omitted from prompts and the citable set | The corpus has no deletes in M2; retraction is M3's rule. |
 | Claim provenance | Each claim names its evidence `message_ts`; authority and asserted time derive from that message | One item can carry claims by different authors (a CM root, an EE reply); M3's bi-temporal ledger needs the asserted time per claim, and adding it later is a schema change. |
