@@ -26,7 +26,7 @@ SECTION_CAPS: Mapping[Section, int] = {
 }
 
 SECTIONS: Mapping[ItemType, Section] = {
-    "ask": "needs_you",
+    "ask": "fyi",  # needs_you only for the person asked, see _section_of
     "absence": "not_happened",
     "decision": "decisions",
     "schedule_change": "decisions",
@@ -142,8 +142,13 @@ def _thread_channel(item: Item) -> str:
 
 
 def _section_of(item: Item, profile: Profile) -> Section:
-    """The item's section (plan B5.5). An ask absence goes to needs_you for the person asked."""
-    if item.absence is not None and item.absence.source == "ask" and item.owner == profile.user_id:
+    """The item's section (plan B5.5).
+
+    An ask and an ask absence go to needs_you only when the reader is the person asked (the
+    item's `owner`). Any other ask goes to fyi. Any other ask absence goes to not_happened.
+    """
+    asked = item.type == "ask" or (item.absence is not None and item.absence.source == "ask")
+    if asked and item.owner == profile.user_id:
         return "needs_you"
     return SECTIONS[item.type]
 
