@@ -1,5 +1,5 @@
 {
-  "kit_commit": "d2db600007c42f79f2079712be9913bbeec14a1a",
+  "kit_commit": "867fe38f1b21c864ca8a85dfa5567cba96ce12a2",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
@@ -7,7 +7,7 @@
     ".claude/hooks/context-snapshot": "e2ae5fafe77ec2eb847c759ef3ac095f10e94e9655dcf772156420c5d18a3897",
     ".claude/hooks/context_snapshot.py": "a10b3024128a2e03a21620eacc5d0a68687b63beadb08a257449470db521d8cb",
     ".claude/hooks/git_commit_events.py": "cef0dca793259923e71ca97c46021961f3d057ef6670cf2cd5b08c3458d3aa10",
-    ".claude/hooks/guard_runner": "1420a95433fe981d079210e1b11e798270ad398bec8edf066f0791a687b7745a",
+    ".claude/hooks/guard_runner": "c491894b63850940fca790334d0c204ec33886fe8a7e81553be8d58ba335bbca",
     ".claude/hooks/guard_runner.py": "99aa11cdf4d2aae58d680a18e82236fcaddfbaba8b447b296b9c06617b8be804",
     ".claude/hooks/hook_payload.py": "c9bcbd5481465aa37035963a837291803bd9446ae67dab46b7c5ff3bbf19cd19",
     ".claude/hooks/hooktest_support.py": "211bf80f98c25bb649dc14de04bee834c6a6b7101e4818d4b77a1785b7ccd788",
@@ -31,7 +31,7 @@
     ".claude/hooks/test_context_snapshot.py": "733f0c96c0243acd5c35e600e05f6c5f06c10f9a9b719284cbd252512b73ef03",
     ".claude/hooks/test_git_env_scrub.py": "bd5b5bcfde55cbe8b5c81b9abe871395b7e423a753740d445f80785fadb28d81",
     ".claude/hooks/test_guard_launch_fence.py": "f7a49030c5f8df1aa28508b0b30e1856144467dac3deba54800b341bc61b8e9a",
-    ".claude/hooks/test_guard_runner.py": "04fd6d2096b3e0111023121824db19ea0ad0f672e16347617584829e8cc338ab",
+    ".claude/hooks/test_guard_runner.py": "b34e95e66be86048be7ad4743d8b2986e95fe5e928f921a66e7e2e452cfa49d7",
     ".claude/hooks/test_no_bypass_signing.py": "b03726d601a667f56ea9531c95cc2db7f35dfb7607492cbcbd32e2150d72d641",
     ".claude/hooks/test_no_commit_to_main.py": "7120461d7a65720b140a23bcb8e3f73dd5eda63a23d3c8ef523928cb219fda63",
     ".claude/hooks/test_no_merge_pr.py": "f8272290f5efd79dee0bb90526c17e2c673a4bbf092ee8d3bf795812b38675f9",

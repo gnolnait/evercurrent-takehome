@@ -1,5 +1,5 @@
 """guard_runner (single-spawn dispatch) must produce the SAME verdict as the
-three standalone guards it replaces, across the full matrix — that equivalence
+standalone guards it dispatches to, across the full matrix — that equivalence
 is the whole safety argument for the consolidation.
 
 Also pins the two consolidation-specific contracts a fresh design review
