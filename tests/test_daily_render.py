@@ -50,11 +50,12 @@ def profile() -> Profile:
     )
 
 
-def evidence(number: int = 1, quote: str = "source text") -> Evidence:
+def evidence(number: int = 1, quote: str = "source text", channel_id: str = "C0ENGME") -> Evidence:
     return Evidence(
+        channel_id=channel_id,
         message_ts=f"1760000000.{number:06d}",
         quote=quote,
-        permalink=f"{WORKSPACE}/archives/C0ENGME/p1760000000{number:06d}",
+        permalink=f"{WORKSPACE}/archives/{channel_id}/p1760000000{number:06d}",
     )
 
 
@@ -338,6 +339,7 @@ def make_cli_store(
                         entity="G-DVT1",
                         attribute="status",
                         value="open",
+                        channel_id="C0ENGME",
                         message_ts=TS,
                         authority="owner_stated",
                     ),
@@ -439,19 +441,23 @@ def test_demo_overlap_line_reports_zero_for_two_empty_digests() -> None:
 def test_cli_demo_prints_item_overlap_last_without_cassettes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    channels = ("C0ENGME", "C0KPROG", "C0SUPCH")
+    item_inputs = (
+        ("C0KPROG", ("ME", "supply_chain", "EM"), "high"),
+        ("C0ENGME", ("ME",), "low"),
+        ("C0SUPCH", ("supply_chain",), "low"),
+        ("C0LEADS", ("EM",), "high"),
+    )
     items = []
-    for number, channel in enumerate(channels, start=1):
-        source = evidence(number).model_copy(
-            update={"permalink": f"{WORKSPACE}/archives/{channel}/p1760000000{number:06d}"}
-        )
+    for number, (channel, affected_roles, severity) in enumerate(item_inputs, start=1):
         items.append(
             item(
                 item_id=f"ITEM-{number}",
                 thread_id=f"{channel}:{TS}",
                 title=f"Decision {number}",
-                affected_roles=("ME", "supply_chain", "EM"),
-                evidence=(source,),
+                entities=(),
+                affected_roles=affected_roles,
+                severity=severity,
+                evidence=(evidence(number, channel_id=channel),),
             )
         )
 
@@ -475,7 +481,7 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines()[-1] == (
-        "Item overlap: ME/supply_chain 0.33, ME/EM 0.67, supply_chain/EM 0.67"
+        "Item overlap: ME/supply_chain 0.33, ME/EM 0.33, supply_chain/EM 0.33"
     )
 
 
