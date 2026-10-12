@@ -255,7 +255,9 @@ that user; each message's header names its reader. The bot token comes from
 build, naming the variable or the option and never the token. A Slack API error exits 1
 with the reader and Slack's error code only (for example `missing_scope`,
 `channel_not_found`); any other exception exits 1 with the reader and its type only. No
-output, log line or exception text holds the token. Without `--dm`, `post` uses the
+output, log line or exception text holds the token. Every refusal, in B6.4 and here, is raised after the
+handler that caught the error, so no exception chained to it (`__context__` or
+`__cause__`) holds the token or the webhook URL. Without `--dm`, `post` uses the
 webhook of B6.4.
 
 ## Tests
