@@ -1,0 +1,19 @@
+{
+  "threads": {
+    "N1-TORQUE": {
+      "authored": "human",
+      "channel_id": "C0EXTCM",
+      "thread_ts": "1791898872.000100"
+    },
+    "S1-AGREE": {
+      "authored": "human",
+      "channel_id": "C0ENGME",
+      "thread_ts": "1791911662.000400"
+    },
+    "S1-CUT": {
+      "authored": "human",
+      "channel_id": "C0EXTCM",
+      "thread_ts": "1792068738.000800"
+    }
+  }
+}
