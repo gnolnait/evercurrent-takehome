@@ -562,7 +562,26 @@ def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section:
     assert selection.lines[0].section == section
 
 
-def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
+def test_ask_absence_removes_only_ask_named_in_id() -> None:
+    first_ask = item("ask-first", type="ask", owner="UREADER")
+    second_ask = item("ask-second", type="ask", owner="UREADER")
+    missing = absence(
+        f"absence:ask:{first_ask.item_id}",
+        source="ask",
+        asker="UASKER",
+        owner="UREADER",
+        affected_roles=(),
+    ).model_copy(update={"thread_id": first_ask.thread_id})
+
+    selection = choose([first_ask, second_ask], [missing])
+
+    assert [(line.item.item_id, line.section) for line in selection.lines] == [
+        ("absence:ask:ask-first", "needs_you"),
+        ("ask-second", "needs_you"),
+    ]
+
+
+def test_ask_in_another_thread_keeps_line_beside_absence() -> None:
     ask = item("ask", type="ask", owner="UREADER")
     other_ask = item(
         "ask-other-thread",
@@ -571,7 +590,7 @@ def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
         thread_id="CPUBLIC:1791993601.000001",
     )
     missing = absence(
-        "ask-absence",
+        f"absence:ask:{ask.item_id}",
         source="ask",
         asker="UASKER",
         owner="UREADER",
@@ -581,7 +600,7 @@ def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
     selection = choose([ask, other_ask], [missing])
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("ask-absence", "needs_you"),
+        ("absence:ask:ask", "needs_you"),
         ("ask-other-thread", "needs_you"),
     ]
 
@@ -589,7 +608,7 @@ def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
 def test_ask_absence_for_asker_goes_to_not_happened() -> None:
     ask = item("ask", type="ask", owner="UEMPTY")
     missing = absence(
-        "ask-absence",
+        f"absence:ask:{ask.item_id}",
         source="ask",
         asker="UREADER",
         owner="UEMPTY",
@@ -599,14 +618,14 @@ def test_ask_absence_for_asker_goes_to_not_happened() -> None:
     selection = choose([ask], [missing])
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("ask-absence", "not_happened")
+        ("absence:ask:ask", "not_happened")
     ]
 
 
 def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
     ask = item("ask", type="ask", owner="UREADER")
     missing = absence(
-        "ask-absence",
+        f"absence:ask:{ask.item_id}",
         source="ask",
         asker="UASKER",
         owner="UREADER",
@@ -616,7 +635,7 @@ def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
     selection = choose([ask], [missing], profile=profile_for(world(), "UEMPTY"))
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("ask-absence", "not_happened")
+        ("absence:ask:ask", "not_happened")
     ]
     assert selection.lines[0].must_see is False
 
@@ -624,7 +643,7 @@ def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
 def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
     ask = item("ask", type="ask", owner="UEMPTY")
     missing = absence(
-        "ask-absence",
+        f"absence:ask:{ask.item_id}",
         source="ask",
         asker="UASKER",
         owner="UEMPTY",
