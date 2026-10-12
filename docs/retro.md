@@ -19,3 +19,22 @@ did the rebase.
 
 Change. When a diff changes a lookup key, run a mutation pass that reverts each changed
 key to the old key, and add a test for each revert that passes.
+
+## M2 units 1 to 4 (2026-10-12)
+
+Caught. Test reviews found that tests were impossible or blind before any code
+existed: a golden order asserted two incompatible ways, a fixture that extracted an ask
+as an `fyi` so the ask absence source never ran, cassette helpers built from inputs the
+stage would not pass, and an anchor rule (the detector on mentions, the golden labels on
+claims) that the plan itself stated two ways. Code reviews found reachable gaps the
+tests did not reach: overflow from model-supplied offsets, a missing anchor file read as
+empty, two outputs for one item overwriting each other, and a resume cursor that skipped
+a failed thread.
+
+Missed. Fuzzy checks on prompt prose took four rounds to settle; a regex over free
+wording kept accepting a wrong count until the ruling became one exact phrase. One fix
+round wrote a test that contradicted an M1 test, because the brief changed a shared
+store rule without checking the tests that pin it.
+
+Change. Before a brief changes the behaviour of a module outside the unit, grep the
+tests that pin that module and name them in the brief.
