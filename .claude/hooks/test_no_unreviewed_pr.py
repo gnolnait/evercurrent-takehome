@@ -255,7 +255,7 @@ def test_unresolvable_head_flag_blocks(repo):
 @pytest.mark.parametrize("cmd", [
     pytest.param("git commit --allow-empty -m x && " + CREATE, id="commit-first"),
     pytest.param("git switch main && " + CREATE, id="switch-first"),
-    pytest.param("cd sub && " + CREATE, id="cd-first"),
+    pytest.param('cd "$HOME" && ' + CREATE, id="cd-variable-first"),
     pytest.param("git update-ref HEAD HEAD~1 && " + CREATE, id="update-ref-first"),
     pytest.param("git symbolic-ref HEAD refs/heads/main && " + CREATE,
                  id="symbolic-ref-write-first"),
@@ -295,6 +295,59 @@ def test_nul_in_head_flag_blocks_without_crash(repo):
     rc, err = _run('gh pr create --head "\x00"', repo)
     assert rc == 2
     assert "cannot resolve" in err
+
+
+# --- A leading cd -------------------------------------------------------------
+def _cd(path):
+    return 'cd "%s" && ' % path.as_posix()
+
+
+def test_leading_literal_cd_reads_that_checkout(repo, tmp_path):
+    """The usual way to open a PR from another worktree."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _verdict(repo, _head(repo))
+    rc, err = _run(_cd(repo) + CREATE, elsewhere)
+    assert rc == 0, err
+    assert [e["head"] for e in _log(repo)] == [_head(repo)]
+
+
+def test_leading_literal_cd_without_review_names_the_missing_marker(repo, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    rc, err = _run(_cd(repo) + CREATE, elsewhere)
+    assert rc == 2
+    assert "needs a second-model review of %s" % _head(repo) in err
+
+
+def test_cd_after_the_creation_does_not_count(repo):
+    _verdict(repo, _head(repo))
+    rc, err = _run(CREATE + " && cd /", repo)
+    assert rc == 0, err
+
+
+@pytest.mark.parametrize("template", [
+    pytest.param('(cd "{d}") && ' + CREATE, id="subshell-cd"),
+    pytest.param("bash -c 'cd \"{d}\" && " + CREATE + "'", id="nested-cd"),
+    pytest.param('pushd "{d}" && ' + CREATE, id="pushd"),
+    pytest.param("cd ~ && " + CREATE, id="tilde"),
+])
+def test_unreadable_dir_change_blocks(template, repo):
+    _verdict(repo, _head(repo))
+    rc, err = _run(template.format(d=repo.as_posix()), repo)
+    assert rc == 2
+    assert "changes directory or HEAD" in err
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MSYS drive paths exist only on Windows")
+def test_leading_cd_accepts_an_msys_drive_path(repo, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _verdict(repo, _head(repo))
+    posix = repo.as_posix()
+    msys = "/" + posix[0].lower() + posix[2:]
+    rc, err = _run('cd "%s" && %s' % (msys, CREATE), elsewhere)
+    assert rc == 0, err
 
 
 # --- Override -------------------------------------------------------------------
