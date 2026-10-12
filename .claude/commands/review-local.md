@@ -36,7 +36,7 @@ matched rule paths go into the dispatch prompt.
 
 Run `.claude/workflows/review-local.js` with the Workflow tool. Pass it as `scriptPath`,
 as an absolute path under `git rev-parse --show-toplevel` (the current checkout, not
-`<root>`). Do not run it by name: a name can load an older copy from the main checkout.
+`<root>`). Do not run it by name. The name lookup does not read this checkout's file.
 Pass these `args`:
 
 - `base`, `head`: the SHAs from step 1.
@@ -65,9 +65,9 @@ more, and if it fails again, report it as not run.
 
 ## 4. Finish verification
 
-The workflow ends with a task notification. Its `<result>` can be cut short and
-HTML-escapes `<`, `>` and `&`. Read the JSON file named in `<output-file>` and use its
-`result` key. Copy quotes from there.
+If you ran the workflow, take its result from a file. The task notification can omit
+part of `<result>`. It also encodes `<`, `>` and `&` as HTML entities. Read the JSON
+file named in `<output-file>`. Use its `result` key. Copy quotes from that value.
 
 Map that result onto the STEP 5 keys:
 

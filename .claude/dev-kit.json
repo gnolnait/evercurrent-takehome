@@ -1,8 +1,8 @@
 {
-  "kit_commit": "20e724d7898d0a42c321a580517b423fce46a6d4",
+  "kit_commit": "3dac85db5bc860cb8c20ae6ade0fa501f61be7c9",
   "exclude": [],
   "files": {
-    ".claude/commands/review-local.md": "f353b6910acf8ad716888a10cd6fdef807231e7b5eb7052ef187fb7cba266098",
+    ".claude/commands/review-local.md": "9d47eada4c3fd56c1036939d7186546fdd730e9de11b7cb5c384b9f4e7c16be2",
     ".claude/hooks/conftest.py": "0d8c9595b7b71f78fcf2fba4623d958c19a1e591ae5a2be785b63a86ce56207a",
     ".claude/hooks/git_commit_events.py": "cef0dca793259923e71ca97c46021961f3d057ef6670cf2cd5b08c3458d3aa10",
     ".claude/hooks/guard_runner": "1420a95433fe981d079210e1b11e798270ad398bec8edf066f0791a687b7745a",
