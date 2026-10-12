@@ -47,8 +47,10 @@ command runs. An unresolvable HEAD, `--head` branch or main checkout also
 blocks.
 
 Not detected: a user-defined gh alias; an httpie POST that has only key=value
-items; an unquoted `{owner}`/`{repo}` placeholder in an API path, because
-shell_segments splits the word at the braces (the merge guard shares this gap).
+items. Two shell_segments gaps, shared with the merge and signing guards, hide
+a creation until the segmenter fix lands: an unquoted `{owner}`/`{repo}`
+placeholder in an API path, and a substitution inside double quotes
+(`url="$(gh pr create)"`).
 """
 
 import datetime
@@ -65,9 +67,10 @@ OVERRIDE_VAR = "PR_REVIEW_OVERRIDE"
 LOG_NAME = "pr-create.jsonl"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 GQL_CREATE = re.compile(r"createPullRequest")
-# The GraphQL endpoint as an argument: gh's bare "graphql", or a URL whose path
-# is /graphql or /api/graphql. A field value (head=fix/graphql) does not match.
-GQL_ENDPOINT = re.compile(r"^(graphql|(https?://)?[^/\s=]+(/api)?/graphql)/?(\?.*)?$")
+# The GraphQL endpoint as an argument: gh's "graphql" or "/graphql", or a URL
+# whose path is /graphql or /api/graphql. A field value (head=fix/graphql) does
+# not match.
+GQL_ENDPOINT = re.compile(r"^(/?graphql|(https?://)?[^/\s=]+(/api)?/graphql)/?(\?.*)?$")
 PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
 MAY_CREATE = ("gh", "pulls", "PullRequest")
