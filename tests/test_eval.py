@@ -16,7 +16,7 @@ from digest.eval.extraction import ExtractionReport, run_extraction_eval, write_
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION, extract_request, triage_request
 from digest.extract.schema import Extraction, TriageOutput
 from digest.extract.verify import DROP_FIELDS
-from digest.llm import LLMRequest, LLMResponse
+from digest.llm import LLMRequest, LLMResponse, Message
 from digest.llm.cassette import Cassettes, request_key
 from digest.llm.client import LLM
 from digest.models import Event
@@ -33,8 +33,11 @@ START = date(2026, 10, 12)
 SHARED_ROOT = "1791907200.000001"
 SHARED_REPLY = "1791907260.000002"
 ASK_ROOT = "1791824400.000003"
+ASK_REPLY = "1791824460.000008"
 DISTRACTOR_ROOT = "1791828000.000004"
 DISTRACTOR_REPLY = "1791828060.000005"
+DISTRACTOR_REPLY_2 = "1791828120.000006"
+OUTSIDE_ROOT = "1791825000.000007"
 ABSENT_ROOT = "1791908400.000099"
 
 
@@ -122,7 +125,13 @@ def _world(*, include_distractor: bool, absences: bool) -> dict[str, Any]:
                             "task": "Run the cited test",
                             "owner": "ME",
                             "expected_cadence_days": 1 if absences else 10,
-                        }
+                        },
+                        {
+                            "id": "G-CITE.release",
+                            "task": "Release the cited test report",
+                            "owner": "ME",
+                            "expected_cadence_days": 1 if absences else 10,
+                        },
                     ],
                 },
                 {
@@ -193,9 +202,9 @@ def _event(
     )
 
 
-def _events(include_distractor: bool) -> list[Event]:
+def _events(include_distractor: bool, absences: bool) -> list[Event]:
     rows = [
-        _event("CENG", "eng", SHARED_ROOT, "1234567890", "UASKER"),
+        _event("CENG", "eng", SHARED_ROOT, "12345", "UASKER"),
         _event(
             "CENG",
             "eng",
@@ -205,16 +214,36 @@ def _events(include_distractor: bool) -> list[Event]:
             thread_ts=SHARED_ROOT,
         ),
         _event("CENG", "eng", ASK_ROOT, "When review?", "UASKER"),
+        _event("CENG", "eng", OUTSIDE_ROOT, "x" * 20, "UASKER"),
     ]
+    if not absences:
+        rows.append(
+            _event(
+                "CENG",
+                "eng",
+                ASK_REPLY,
+                "The review is complete.",
+                "UOWNER",
+                thread_ts=ASK_ROOT,
+            )
+        )
     if include_distractor:
         rows.extend(
             [
-                _event("CNOISE", "social", DISTRACTOR_ROOT, "ABCDEFGHIJ", "UOWNER"),
+                _event("CNOISE", "social", DISTRACTOR_ROOT, "A" * 15, "UOWNER"),
                 _event(
                     "CNOISE",
                     "social",
                     DISTRACTOR_REPLY,
-                    "klmnopqrst",
+                    "b" * 25,
+                    "UOWNER",
+                    thread_ts=DISTRACTOR_ROOT,
+                ),
+                _event(
+                    "CNOISE",
+                    "social",
+                    DISTRACTOR_REPLY_2,
+                    "c" * 40,
                     "UOWNER",
                     thread_ts=DISTRACTOR_ROOT,
                 ),
@@ -233,6 +262,7 @@ def _manifest(*, include_distractor: bool, absent_golden_thread: bool) -> Manife
         ),
         "B-QTY": shared,
         "ASK-OWNER": ThreadRef(channel_id="CENG", thread_ts=ASK_ROOT, authored="human"),
+        "RENDER-ONLY": ThreadRef(channel_id="CENG", thread_ts=OUTSIDE_ROOT, authored="render"),
     }
     if include_distractor:
         threads["DIST-NOISE"] = ThreadRef(
@@ -248,6 +278,7 @@ def _extracted_item(
     *,
     entities: list[str] | None = None,
     owner: str | None = None,
+    due: str | None = None,
     claims: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -258,7 +289,7 @@ def _extracted_item(
         "summary": "Extracted summary.",
         "entities": entities or [],
         "owner": owner,
-        "due": None,
+        "due": due,
         "affected_roles": [],
         "severity": "medium",
         "confidence": "high",
@@ -285,37 +316,46 @@ def _outputs(*, wrong_objectives: bool) -> dict[str, list[dict[str, Any]]]:
         "spec_change",
         SHARED_REPLY,
         "abcdefghij",
-        entities=["PN-1", "G-CITE"],
-        claims=[
-            _claim("PN-1", "rev", "B", SHARED_REPLY),
-            _claim("PN-1", "qty", quantity, SHARED_REPLY),
-            _claim("G-CITE", "status", "open", SHARED_REPLY),
-        ],
+        entities=["PN-1"],
+        claims=[_claim("PN-1", "rev", "B", SHARED_REPLY)],
     )
     earlier = _extracted_item(
         "risk",
         SHARED_ROOT,
-        "1234567890",
-        entities=["PN-1", "CONTEXT"],
-        claims=[_claim("PN-1", "rev", " B ", SHARED_ROOT)],
+        "12345",
+        entities=["PN-1", "G-CITE", "CONTEXT"],
+        claims=[
+            _claim("PN-1", "rev", " B ", SHARED_ROOT),
+            _claim("PN-1", "qty", quantity, SHARED_ROOT),
+            _claim("G-CITE", "status", "open", SHARED_ROOT),
+        ],
     )
     noise = _extracted_item(
         "decision",
         SHARED_ROOT,
-        "1234567890",
+        "12345",
         entities=["PN-1"],
+        due="next week",
         claims=[_claim("PN-1", "qty", "5", SHARED_ROOT)],
     )
     ask = _extracted_item(
-        "fyi",
+        "ask",
         ASK_ROOT,
         "When review?",
         owner=ask_owner,
     )
-    distractor = _extracted_item("fyi", DISTRACTOR_ROOT, "ABCDEFGHIJ", entities=["CONTEXT"])
+    distractor = _extracted_item("fyi", DISTRACTOR_ROOT, "A" * 15, entities=["CONTEXT"])
+    outside = _extracted_item(
+        "fyi",
+        OUTSIDE_ROOT,
+        "x" * 20,
+        entities=["UNKNOWN-ENTITY"],
+        claims=[_claim("PN-1", "qty", "4", OUTSIDE_ROOT)],
+    )
     return {
         f"CENG:{SHARED_ROOT}": [later, earlier, noise],
         f"CENG:{ASK_ROOT}": [ask],
+        f"CENG:{OUTSIDE_ROOT}": [outside],
         f"CNOISE:{DISTRACTOR_ROOT}": [distractor],
     }
 
@@ -389,8 +429,14 @@ def _script_cassettes(
                 extraction,
                 Extraction.model_json_schema(),
                 {"rationale": "scripted extraction", "items": outputs[delta.thread_id]},
-                "extract-v1",
+                "extract-v2" if delta.thread_ts == OUTSIDE_ROOT else "extract-v1",
             )
+    render_request = LLMRequest(
+        model="render",
+        system="Render the synthetic thread.",
+        messages=(Message(role="user", content="render-only cassette"),),
+    )
+    _put_response(case.cassettes, render_request, {}, {}, "render-v1")
     if not include_distractor:
         assert f"CNOISE:{DISTRACTOR_ROOT}" not in {delta.thread_id for delta in deltas}
 
@@ -408,7 +454,7 @@ def _build_case(
     world_dir.mkdir(parents=True)
     raw_world = _world(include_distractor=include_distractor, absences=absences)
     (world_dir / "world.yaml").write_text(yaml.safe_dump(raw_world), encoding="utf-8")
-    rows = _events(include_distractor)
+    rows = _events(include_distractor, absences)
     (world_dir / "events.jsonl").write_text(
         "".join(event.model_dump_json() + "\n" for event in rows), encoding="utf-8"
     )
@@ -451,8 +497,16 @@ def _run(case: EvalCase, name: str = "eval.sqlite") -> ExtractionReport:
     return run_extraction_eval(case.world_dir, case.llm(), case.priors, case.root / name)
 
 
-def test_eval_rejects_stale_golden_file(eval_case: EvalCase) -> None:
-    stale = eval_case.golden.model_copy(update={"ask_reply_cadence_days": 2})
+@pytest.mark.parametrize("stale_part", ["meta", "item"])
+def test_eval_rejects_stale_golden_file(eval_case: EvalCase, stale_part: str) -> None:
+    if stale_part == "meta":
+        stale = eval_case.golden.model_copy(update={"ask_reply_cadence_days": 2})
+    else:
+        items = list(eval_case.golden.items)
+        claims = list(items[0].claims)
+        claims[0] = claims[0].model_copy(update={"value": "C"})
+        items[0] = items[0].model_copy(update={"claims": tuple(claims)})
+        stale = eval_case.golden.model_copy(update={"items": tuple(items)})
     write_golden(stale, eval_case.world_dir / "golden.jsonl")
 
     with pytest.raises(ValueError, match="digest world golden"):
@@ -463,7 +517,12 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     report = _run(eval_case)
 
     assert (report.world, report.days) == ("tiny", 4)
-    assert report.models == {"classify": "triage-v1", "extract": "extract-v1"}
+    assert report.models["classify"] == "triage-v1"
+    assert {model.strip() for model in report.models["extract"].split(",")} == {
+        "extract-v1",
+        "extract-v2",
+    }
+    assert report.models["render"] == "render-v1"
     assert report.by_type["risk"].model_dump() == {
         "golden": 1,
         "golden_matched": 1,
@@ -474,24 +533,24 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     }
     assert report.by_type["spec_change"].model_dump() == {
         "golden": 1,
-        "golden_matched": 1,
+        "golden_matched": 0,
         "extracted": 1,
-        "extracted_matched": 1,
-        "precision": 1.0,
-        "recall": 1.0,
+        "extracted_matched": 0,
+        "precision": 0.0,
+        "recall": 0.0,
     }
     assert report.by_type["ask"].golden_matched == 1
-    assert report.by_type["ask"].extracted == 0
+    assert report.by_type["ask"].extracted == 1
     assert report.by_type["fyi"].model_dump() == {
         "golden": 0,
         "golden_matched": 0,
-        "extracted": 2,
-        "extracted_matched": 1,
-        "precision": 0.5,
+        "extracted": 1,
+        "extracted_matched": 0,
+        "precision": 0.0,
         "recall": None,
     }
     assert report.thread_recall == 1.0
-    assert report.type_agreement == pytest.approx(2 / 3)
+    assert report.type_agreement == 1.0
     assert report.objective_misses == {"claims.value": 0, "owner": 0}
     assert (
         report.claims_golden,
@@ -501,12 +560,16 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     ) == (4, 4, 5, 4)
     assert report.claim_recall == 1.0
     assert report.claim_precision == 0.8
-    assert report.entity_jaccard == 0.75
-    assert report.entity_jaccard_n == 2
-    assert (report.entities_golden, report.entities_found, report.entity_recall) == (3, 3, 1.0)
-    assert report.evidence_entries == 5
+    assert report.entity_jaccard == pytest.approx(1 / 3)
+    assert report.entity_jaccard_n == 1
+    assert (report.entities_golden, report.entities_found, report.entity_recall) == (1, 1, 1.0)
+    assert report.evidence_entries == 6
     assert report.citation_validity == 1.0
-    assert report.drops == dict.fromkeys(DROP_FIELDS, 0)
+    assert report.drops == {
+        **dict.fromkeys(DROP_FIELDS, 0),
+        "due.format": 1,
+        "entities.unresolved": 1,
+    }
     assert (report.triage_golden_kept, report.triage_golden_total) == (3, 3)
     assert report.triage_by_event == {
         "A-REV": 0.9,
@@ -516,18 +579,28 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     }
     assert report.triage_dropped_golden == ()
     assert report.triage_distractors_kept == ("DIST-NOISE",)
-    assert report.missed == ()
-    assert len(report.unmatched) == 2
+    assert report.missed == ("B-QTY",)
+    assert len(report.unmatched) == 3
     assert any("golden" in item and "#2" in item for item in report.unmatched)
     assert any(
         "distractor" in item and f"CNOISE:{DISTRACTOR_ROOT}" in item for item in report.unmatched
     )
-    assert (report.absence_tp, report.absence_fp, report.absence_fn) == (2, 1, 1)
-    assert report.absence_false_alarm_rate == pytest.approx(1 / 3)
-    assert report.absence_recall == pytest.approx(2 / 3)
-    assert report.uncitable_tasks == ("G-UNCITE.task",)
-    assert len(report.realism) == 6
-    assert sorted(report.realism.values()) == [2.0, 2.0, 2.0, 10.0, 10.0, 10.0]
+    assert (report.absence_tp, report.absence_fp, report.absence_fn) == (3, 1, 2)
+    assert report.absence_false_alarm_rate == pytest.approx(1 / 4)
+    assert report.absence_recall == pytest.approx(3 / 5)
+    assert report.uncitable_tasks == (
+        "G-CITE.release",
+        "G-CITE.task",
+        "G-UNCITE.task",
+    )
+    assert report.realism == {
+        "messages_per_thread.mean": 2.0,
+        "messages_per_thread.median": 2.0,
+        "messages_per_thread.p90": 3.0,
+        "chars_per_message.mean": pytest.approx(115 / 6),
+        "chars_per_message.median": 17.5,
+        "chars_per_message.p90": 40.0,
+    }
     assert any(
         reason == "no reference statistics in the repo" for reason in report.not_run.values()
     )
@@ -575,22 +648,30 @@ def test_eval_handles_no_distractors_or_absences(tmp_path: Path) -> None:
     assert report.absence_false_alarm_rate is None
     assert report.absence_recall is None
     assert report.by_type["fyi"].recall is None
-    assert report.entity_jaccard_n == 2
+    assert report.entity_jaccard_n == 1
 
 
-def _section(text: str, heading: str) -> str:
+def _section(text: str, name: str) -> str:
     match = re.search(
-        rf"^##+\s+{re.escape(heading)}\s*$\n(.*?)(?=^##+\s+|\Z)",
+        rf"^##+\s+[^\n]*{re.escape(name)}[^\n]*$\n(.*?)(?=^##+\s+|\Z)",
         text,
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
-    assert match is not None, heading
+    assert match is not None, name
     return match.group(1)
 
 
-def _assert_rate_n(text: str, label: str, n: int) -> None:
-    row = next((line for line in text.splitlines() if label.lower() in line.lower()), "")
-    assert row, label
+def _assert_rate_n(text: str, labels: tuple[str, ...], n: int) -> None:
+    normalized_labels = tuple(re.sub(r"[_-]+", " ", label.lower()) for label in labels)
+    row = next(
+        (
+            line
+            for line in text.splitlines()
+            if all(label in re.sub(r"[_-]+", " ", line.lower()) for label in normalized_labels)
+        ),
+        "",
+    )
+    assert row, labels
     assert re.search(rf"(?:\bn\s*=\s*{n}\b|\|\s*{n}\s*\|)", row, re.IGNORECASE), row
 
 
@@ -601,12 +682,13 @@ def test_write_report_has_deterministic_tables_and_rate_counts(eval_case: EvalCa
 
     with time_machine.travel("2031-05-06"):
         write_report(report, first)
+    with time_machine.travel("2042-07-08"):
         write_report(report, second)
 
     assert first.read_bytes() == second.read_bytes()
     text = first.read_text(encoding="utf-8")
-    headings = [
-        "Extraction by type",
+    section_names = [
+        "Extraction",
         "Claims",
         "Triage",
         "Absences",
@@ -615,24 +697,34 @@ def test_write_report_has_deterministic_tables_and_rate_counts(eval_case: EvalCa
         "Models",
         "Not run",
     ]
-    for heading in headings:
-        section = _section(text, heading)
+    for name in section_names:
+        section = _section(text, name)
         assert len(re.findall(r"^\|.*\|\s*$", section, re.MULTILINE)) >= 2
         assert len(re.findall(r"^\|\s*:?-+", section, re.MULTILINE)) == 1
-    for label, n in [
-        ("Thread recall", 3),
-        ("Type agreement", 3),
-        ("Claim recall", 4),
-        ("Claim precision", 5),
-        ("Citation validity", 5),
-        ("Entity Jaccard", 2),
-        ("Entity recall", 3),
-        ("Triage recall", 3),
-        ("False-alarm rate", 3),
-        ("Absence recall", 3),
+    for labels, n in [
+        (("thread recall",), 3),
+        (("type agreement",), 2),
+        (("claim recall",), 4),
+        (("claim precision",), 5),
+        (("citation validity",), 6),
+        (("entity jaccard",), 1),
+        (("entity recall",), 1),
+        (("triage recall",), 3),
+        (("false-alarm rate",), 4),
+        (("absence recall",), 5),
     ]:
-        _assert_rate_n(text, label, n)
+        _assert_rate_n(text, labels, n)
+    extraction = _section(text, "extraction")
+    for item_type, precision_n, recall_n in [
+        ("risk", 1, 1),
+        ("spec_change", 1, 1),
+        ("ask", 1, 1),
+        ("fyi", 1, 0),
+    ]:
+        _assert_rate_n(extraction, (item_type, "precision"), precision_n)
+        _assert_rate_n(extraction, (item_type, "recall"), recall_n)
     assert "2031-05-06" not in text
+    assert "2042-07-08" not in text
 
 
 @pytest.mark.parametrize("complete", [True, False], ids=["complete", "missing-cassette"])
@@ -659,3 +751,22 @@ def test_cli_eval_writes_report_or_reports_cassette_miss(
         assert "no cassette for key" in result.output
         assert "model classify" in result.output
         assert not out.exists()
+
+
+def test_cli_eval_default_report_name_uses_world_last_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _build_case(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DIGEST_MODE", "replay")
+    monkeypatch.setenv("DIGEST_WORLD", "tiny")
+    monkeypatch.setenv("DIGEST_CASSETTES", str(case.cassettes.root))
+    monkeypatch.delenv("DIGEST_DB", raising=False)
+
+    with time_machine.travel("2042-07-08"):
+        result = runner.invoke(app, ["eval", "--world", "tiny"])
+
+    expected = tmp_path / "reports" / "eval-2026-10-15.md"
+    assert result.exit_code == 0, result.output
+    assert expected.is_file()
+    assert "2042-07-08" not in result.output
