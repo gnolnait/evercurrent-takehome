@@ -194,22 +194,15 @@ def _create_kind(cmdword, rest):
 
 
 def _shell_string(rest):
-    """The command string a shell runs with -c, or None.
+    """The string after the first -c flag, alone or in a cluster such as -lc.
 
-    Only leading options count. The first operand is a script, and a later
-    -c is an argument of that script (the signing guard reads it the same way).
+    Any -c counts, also one after the script operand (bash script.sh -lc x).
+    Reading too much blocks a harmless command; an option-value parser that
+    stops early lets a creation through (bash --rcfile f -c ...).
     """
-    m = 0
-    while m < len(rest):
-        tok = rest[m]
-        if not tok.startswith(("-", "+")):
-            return None
-        if tok in ("-o", "+o", "-O", "+O"):
-            m += 2  # bash -o pipefail: the option takes a separate value
-            continue
+    for i, tok in enumerate(rest):
         if SHELL_C_FLAG.match(tok):
-            return rest[m + 1] if m + 1 < len(rest) else None
-        m += 1
+            return rest[i + 1] if i + 1 < len(rest) else None
     return None
 
 
