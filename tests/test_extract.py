@@ -464,24 +464,11 @@ def test_extract_request_orders_sections_filters_rows_and_states_rules() -> None
     assert "scenario" not in combined
     for word in ("new", "item_id", "verbatim", "null", "owner", "due", "rationale"):
         assert word in system
-    assert re.search(
-        r"\bask\b.{0,120}\b(owner|asked)\b|\b(owner|asked)\b.{0,120}\bask\b",
-        system,
-        re.DOTALL,
-    )
+    assert "For an ask, the owner is the person asked, not the person who asks." in EXTRACT_SYSTEM
     assert re.search(r"done.*complete|complete.*done", system, re.DOTALL)
-    assert re.search(
-        r"\b(question|query)\b(?=.{0,160}\btask\b)"
-        r"(?=.{0,160}\b(not|no)\b.{0,80}\b(evidence|progress)\b)",
-        system,
-        re.DOTALL,
-    )
-    assert re.search(
-        r"\b(status\s+(roll[\s-]*up|summary)|roll[\s-]*up)\b"
-        r"(?=.{0,160}\btask\b)(?=.{0,160}\bopen\b)"
-        r"(?=.{0,160}\b(not|no)\b.{0,80}\b(evidence|progress)\b)",
-        system,
-        re.DOTALL,
+    assert (
+        "A question about a task is not evidence, and a status roll-up that lists a task as open "
+        "is not evidence." in EXTRACT_SYSTEM
     )
     assert re.search(r"tasks?.*list", system, re.DOTALL)
     assert any(word in system for word in ("run", "result", "review", "sign-off", "received"))
@@ -917,6 +904,108 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
     }
 
 
+def test_verify_two_outputs_for_one_existing_item_merge_in_output_order(tmp_path: Path) -> None:
+    root = event(user_id="B1", text="PN-31010 Rev C released.")
+    reply = event(REPLY, text="PN-31010 review complete.")
+    existing_item = stored_item(
+        evidence=(Evidence(message_ts=ROOT, quote="PN-31010", permalink=root.permalink),),
+        claims=(),
+        tasks=(),
+    )
+    first = extracted_item(
+        item_id="I1",
+        title="First output title",
+        evidence=[ExtractedEvidence(message_ts=ROOT, quote="Rev C released")],
+        claims=[ExtractedClaim(entity="PN-31010", attribute="rev", value="C", message_ts=ROOT)],
+        tasks=[ExtractedTask(task="today.task", effect="evidence", message_ts=ROOT)],
+    )
+    second = extracted_item(
+        item_id="I1",
+        title="Second output title",
+        evidence=[ExtractedEvidence(message_ts=REPLY, quote="review complete")],
+        claims=[
+            ExtractedClaim(
+                entity="PN-31010", attribute="status", value="complete", message_ts=REPLY
+            )
+        ],
+        tasks=[ExtractedTask(task="today.task", effect="done", message_ts=REPLY)],
+    )
+
+    result = verify(
+        Extraction(rationale="Two ordered updates.", items=[first, second]),
+        delta(root, reply, root=root),
+        {ROOT: root, REPLY: reply},
+        glossary(),
+        {"today.task": project().task("today.task")},
+        {"I1": existing_item},
+    )
+
+    with Store.open(tmp_path / "two-outputs.sqlite") as store:
+        items_written = store.upsert_items(
+            result.items, prompt_version=EXTRACT_PROMPT_VERSION, model="extract"
+        )
+
+    assert items_written == 1
+    (updated,) = result.items
+    assert updated.title == "Second output title"
+    assert [(entry.message_ts, entry.quote) for entry in updated.evidence] == [
+        (ROOT, "Rev C released"),
+        (REPLY, "review complete"),
+    ]
+    assert [(claim.attribute, claim.value) for claim in updated.claims] == [
+        ("rev", "C"),
+        ("status", "complete"),
+    ]
+    assert [(link.effect, link.message_ts) for link in updated.tasks] == [
+        ("evidence", ROOT),
+        ("done", REPLY),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("root_is_citable", "expected_claims", "expected_links", "claim_drops", "task_drops"),
+    [(True, [("C", "plm_bot")], [("evidence", ROOT)], 0, 0), (False, [], [], 1, 1)],
+    ids=["citable", "held-not-citable"],
+)
+def test_verify_update_links_may_cite_held_evidence_only_when_citable(
+    root_is_citable: bool,
+    expected_claims: list[tuple[str, str]],
+    expected_links: list[tuple[str, str]],
+    claim_drops: int,
+    task_drops: int,
+) -> None:
+    held_ts = ROOT if root_is_citable else "1759999999.000001"
+    held = event(held_ts, user_id="B1", text="PN-31010 Rev C released.")
+    reply = event(REPLY, text="The update is ready.")
+    existing_item = stored_item(
+        evidence=(Evidence(message_ts=held_ts, quote="PN-31010 Rev C", permalink=held.permalink),),
+        claims=(),
+        tasks=(),
+    )
+    incoming = extracted_item(
+        item_id="I1",
+        evidence=[ExtractedEvidence(message_ts=REPLY, quote="update is ready")],
+        claims=[ExtractedClaim(entity="PN-31010", attribute="rev", value="C", message_ts=held_ts)],
+        tasks=[ExtractedTask(task="today.task", effect="evidence", message_ts=held_ts)],
+    )
+    citable = {REPLY: reply} | ({ROOT: held} if root_is_citable else {})
+
+    result = verify(
+        Extraction(rationale="Cite held evidence.", items=[incoming]),
+        delta(reply, root=held if root_is_citable else None),
+        citable,
+        glossary(),
+        {"today.task": project().task("today.task")},
+        {"I1": existing_item},
+    )
+
+    (updated,) = result.items
+    assert [(claim.value, claim.authority) for claim in updated.claims] == expected_claims
+    assert [(link.effect, link.message_ts) for link in updated.tasks] == expected_links
+    assert result.drops["claims.message"] == claim_drops
+    assert result.drops["tasks.message"] == task_drops
+
+
 def test_verify_empty_extraction_has_zero_drops() -> None:
     result = verify(
         Extraction(rationale="Nothing new.", items=[]), delta(root=None), {}, glossary(), {}, {}
@@ -981,6 +1070,46 @@ def test_run_extract_sets_version_records_triage_and_writes_provenance(tmp_path:
         assert connection.execute("SELECT prompt_version, model FROM items").fetchall() == [
             (EXTRACT_PROMPT_VERSION, "extract")
         ]
+
+
+def test_run_extract_sets_prompt_version_only_with_first_write(tmp_path: Path) -> None:
+    cassette_path = tmp_path / "cassettes"
+    with Store.open(tmp_path / "version-on-write.sqlite") as store:
+        empty_report = run_extract(
+            store,
+            replay_llm(cassette_path),
+            glossary(),
+            project(),
+            priors(),
+            AS_OF,
+            ZONE,
+            CHANNEL_PURPOSES,
+        )
+        version_after_empty_run = store.get_meta("extract_prompt_version")
+        store.upsert_events([event()])
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data=extraction_data(extracted_item()),
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+        write_report = run_extract(
+            store,
+            replay_llm(cassette_path),
+            glossary(),
+            project(),
+            priors(),
+            AS_OF,
+            ZONE,
+            CHANNEL_PURPOSES,
+        )
+
+        assert (empty_report.items_written, version_after_empty_run) == (0, None)
+        assert (write_report.items_written, store.get_meta("extract_prompt_version")) == (
+            1,
+            EXTRACT_PROMPT_VERSION,
+        )
 
 
 def test_run_extract_refuses_different_store_prompt_version(tmp_path: Path) -> None:
@@ -1264,13 +1393,20 @@ def prepare_cli_store(db_path: Path, *, until: bool = True, world: bool = True) 
 def test_cli_extract_prints_json_report(cli_case: tuple[Path, Path]) -> None:
     db_path, cassette_path = cli_case
     prepare_cli_store(db_path)
+    first_ts = "1791831600.000001"
+    second_ts = "1791918000.000001"
     day_one = datetime(2026, 10, 13, 6, 59, 59, 999999, tzinfo=UTC)
     day_two = datetime(2026, 10, 14, 6, 59, 59, 999999, tzinfo=UTC)
     with Store.open(db_path) as store:
         put_stage_cassettes(
             cassette_path,
             store,
-            triage_data={"rationale": "Drop.", "probability": 0.0},
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data=extraction_data(
+                extracted_item(
+                    evidence=[ExtractedEvidence(message_ts=first_ts, quote="FIRST-DAY-THREAD")]
+                )
+            ),
             as_of=day_one,
             channel_purposes=CHANNEL_PURPOSES,
         )
@@ -1284,11 +1420,17 @@ def test_cli_extract_prints_json_report(cli_case: tuple[Path, Path]) -> None:
             ZONE,
             CHANNEL_PURPOSES,
         )
-        assert (first_report.threads, first_report.dropped) == (1, 1)
+        assert (first_report.threads, first_report.kept, first_report.items_written) == (1, 1, 1)
         day_two_requests = put_stage_cassettes(
             cassette_path,
             store,
-            triage_data={"rationale": "Drop.", "probability": 0.0},
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data=extraction_data(
+                extracted_item(
+                    item_id=f"C1:{first_ts}#{first_ts}#0",
+                    evidence=[ExtractedEvidence(message_ts=second_ts, quote="SECOND-DAY-REPLY")],
+                )
+            ),
             as_of=day_two,
             channel_purposes=CHANNEL_PURPOSES,
         )
@@ -1298,6 +1440,7 @@ def test_cli_extract_prints_json_report(cli_case: tuple[Path, Path]) -> None:
     with sqlite3.connect(db_path) as connection:
         connection.execute("DELETE FROM stage_runs")
         connection.execute("DELETE FROM triage")
+        connection.execute("DELETE FROM items")
     result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
@@ -1307,8 +1450,81 @@ def test_cli_extract_prints_json_report(cli_case: tuple[Path, Path]) -> None:
         report["dropped"],
         report["failed"],
         report["items_written"],
-    ) == (2, 0, 2, 0, 0)
+    ) == (2, 2, 0, 0, 2)
     assert report["drops"] == dict.fromkeys(DROP_FIELDS, 0)
+
+
+def test_cli_extract_rerun_resumes_after_last_processed_day(
+    cli_case: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path, cassette_path = cli_case
+    prepare_cli_store(db_path)
+    first_ts = "1791831600.000001"
+    second_ts = "1791918000.000001"
+    day_one = datetime(2026, 10, 13, 6, 59, 59, 999999, tzinfo=UTC)
+    day_two = datetime(2026, 10, 14, 6, 59, 59, 999999, tzinfo=UTC)
+    with Store.open(db_path) as store:
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data={},
+            as_of=day_one,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data=extraction_data(
+                extracted_item(
+                    evidence=[ExtractedEvidence(message_ts=second_ts, quote="SECOND-DAY-REPLY")]
+                )
+            ),
+            as_of=day_two,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+
+    first_result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
+    assert first_result.exit_code == 0, first_result.output
+    first_report = json.loads(first_result.output)
+    assert (first_report["failed"], first_report["items_written"]) == (1, 1)
+    with Store.open(db_path) as store:
+        assert store.get_meta("extract_until") == "2026-10-13"
+        items_after_first_run = store.items_for_thread(f"C1:{first_ts}")
+
+    empty_cassettes = tmp_path / "empty-cassettes"
+    empty_cassettes.mkdir()
+    monkeypatch.setenv("DIGEST_CASSETTES", str(empty_cassettes))
+    second_result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
+
+    assert second_result.exit_code == 0, second_result.output
+    second_report = json.loads(second_result.output)
+    assert (second_report["threads"], second_report["items_written"]) == (0, 0)
+    with Store.open(db_path) as store:
+        assert store.items_for_thread(f"C1:{first_ts}") == items_after_first_run
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        pytest.param("triage: [\n", id="yaml-syntax"),
+        pytest.param(
+            "triage:\n  miss_cost_ratio: 0\nabsence:\n  ask_reply_cadence_days: 2\n",
+            id="validation",
+        ),
+    ],
+)
+def test_cli_extract_priors_error_names_file(cli_case: tuple[Path, Path], contents: str) -> None:
+    db_path, _ = cli_case
+    prepare_cli_store(db_path)
+    priors_path = Path("config/priors.yaml")
+    priors_path.write_text(contents, encoding="utf-8")
+
+    result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
+
+    assert result.exit_code == 1, result.output
+    assert priors_path.as_posix() in result.output
 
 
 def test_cli_extract_refuses_store_without_until(cli_case: tuple[Path, Path]) -> None:
