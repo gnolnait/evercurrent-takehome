@@ -238,7 +238,9 @@ anything over the network in replay mode, and it reads no model API key.
   with a UTF-16 byte-order mark (the PowerShell 5.1 default); an unreadable file exits 1
   naming `.env`. An unquoted value ends at ` #` (an inline comment), as python-dotenv
   reads it. Any exception from a send exits 1 naming the reader and the exception type
-  only, never its message. The client keeps the SDK's connection-error retry with its
+  only, never its message. A refused post prints Slack's response body only when it is a plain
+  error code (lower-case letters and underscores, such as `invalid_blocks`); any other
+  body is withheld, since a proxy page can echo the URL path. The client keeps the SDK's connection-error retry with its
   logger off.
 
 ## Tests
