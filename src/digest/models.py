@@ -79,17 +79,22 @@ class Event(Frozen):
 
     @property
     def at(self) -> datetime:
-        return _EPOCH + timedelta(microseconds=ts_micros(self.ts))
+        return ts_datetime(self.ts)
 
     @property
     def observed_at(self) -> datetime:
-        return _EPOCH + timedelta(microseconds=ts_micros(self.event_ts))
+        return ts_datetime(self.event_ts)
 
 
 def ts_micros(ts: str) -> int:
     """Microseconds since the Unix epoch for a Slack `ts`."""
     seconds, fraction = ts.split(".")
     return int(seconds) * 1_000_000 + int(fraction)
+
+
+def ts_datetime(ts: str) -> datetime:
+    """The UTC instant of a Slack `ts`."""
+    return _EPOCH + timedelta(microseconds=ts_micros(ts))
 
 
 def micros_since_epoch(moment: datetime) -> int:

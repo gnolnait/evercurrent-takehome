@@ -206,8 +206,11 @@ def write_golden(golden: Golden, path: Path) -> None:
 
 
 def read_golden(path: Path) -> Golden:
-    """Read a file `write_golden` wrote; a malformed line raises naming the file and the line."""
-    meta: dict[str, int] = {}
+    """Read a file `write_golden` wrote; a malformed line raises naming the file and the line.
+
+    The first line must be the meta line; an empty file raises naming the file.
+    """
+    cadence: int | None = None
     items: list[GoldenItem] = []
     absences: list[GoldenAbsence] = []
     distractors: list[GoldenDistractor] = []
@@ -215,9 +218,15 @@ def read_golden(path: Path) -> Golden:
         for number, line in enumerate(lines, start=1):
             try:
                 row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError(f"expected a JSON object, got {type(row).__name__}")
                 kind = row.pop("kind")
+                if (kind == "meta") != (number == 1):
+                    raise ValueError(f"kind {kind!r}; the meta line must be line 1 and only line 1")
                 if kind == "meta":
-                    meta = row
+                    cadence = row.get("ask_reply_cadence_days")
+                    if not isinstance(cadence, int):
+                        raise ValueError("meta line has no integer ask_reply_cadence_days")
                 elif kind == "item":
                     items.append(GoldenItem.model_validate(row))
                 elif kind == "absence":
@@ -228,8 +237,10 @@ def read_golden(path: Path) -> Golden:
                     raise ValueError(f"unknown kind {kind!r}")
             except (ValueError, KeyError) as error:  # JSONDecodeError and ValidationError too
                 raise ValueError(f"{path}:{number}: {error}") from error
+    if cadence is None:
+        raise ValueError(f"{path}: empty file, no meta line")
     return Golden(
-        ask_reply_cadence_days=meta["ask_reply_cadence_days"],
+        ask_reply_cadence_days=cadence,
         items=tuple(items),
         absences=tuple(absences),
         distractors=tuple(distractors),

@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from digest.models import AbsenceDetail, Event, Evidence, Item, Severity, ts_micros
+from digest.models import (
+    AbsenceDetail,
+    Event,
+    Evidence,
+    Item,
+    Severity,
+    ts_datetime,
+    ts_micros,
+)
 from digest.priors import Priors
 from digest.project import (
     ChecklistTask,
@@ -19,8 +27,6 @@ from digest.project import (
 from digest.store import Store
 
 log = logging.getLogger(__name__)
-
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def checklist_absences(
@@ -207,6 +213,4 @@ def _entry(item: Item, message_ts: str) -> Evidence:
 
 
 def _local_date(message_ts: str, zone: ZoneInfo) -> date:
-    moment = _EPOCH + timedelta(microseconds=ts_micros(message_ts))
-    moment = moment.astimezone(zone)
-    return moment.date()
+    return ts_datetime(message_ts).astimezone(zone).date()

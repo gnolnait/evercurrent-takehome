@@ -166,13 +166,18 @@ def absences(
         priors = load_priors()
     except (OSError, ValueError, yaml.YAMLError) as error:  # ValueError: ValidationError too
         _refuse(str(error))
-    with Store.open(path) as store:
+    with _open_store(path) as store:
         stored_world, until = store.get_meta("world"), store.get_meta("until")
         if stored_world != name:
             _refuse(f"the store holds world {stored_world!r}, not {name!r}")
         if until is None:
             _refuse(f"store {path} has no meta key 'until'; run digest replay first")
-        as_of = datetime.fromisoformat(until)
+        as_of = _instant(until)
+        if as_of is None:
+            _refuse(
+                f"store {path} meta key 'until' is {until!r}, "
+                "not an ISO timestamp with a UTC offset"
+            )
         if store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of):
             _refuse(
                 f"store {path} has thread deltas pending as of {until}; run digest extract first"
@@ -206,13 +211,7 @@ def replay(
     if not (world_dir / "world.yaml").is_file():
         _refuse(f"no such world: {world_dir / 'world.yaml'}")
     path = db or settings.db or Path("data") / f"{name}.sqlite"
-    try:
-        store = Store.open(path)
-    except ValueError as error:  # another schema version; the message names the store
-        _refuse(str(error))
-    except (OSError, sqlite3.DatabaseError) as error:
-        _refuse(f"cannot open store {path}: {error}")
-    with store:
+    with _open_store(path) as store:
         try:
             report = replay_world(store, world_dir, day)
         except ValueError as error:  # ReplayRefused and ReplayFormatError
@@ -304,6 +303,25 @@ def _stored(store: Store, key: str) -> str:
 def _with_notes(error: BaseException) -> str:
     """The error message, then each note added to the error, one per line."""
     return "\n".join([str(error), *getattr(error, "__notes__", ())])
+
+
+def _open_store(path: Path) -> Store:
+    """Open the store, or refuse for a file that is not SQLite or of another schema version."""
+    try:
+        return Store.open(path)
+    except ValueError as error:  # another schema version; the message names the store
+        _refuse(str(error))
+    except (OSError, sqlite3.DatabaseError) as error:
+        _refuse(f"cannot open store {path}: {error}")
+
+
+def _instant(text: str) -> datetime | None:
+    """The aware datetime of an ISO timestamp with an offset; None for anything else."""
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
 
 
 def _refuse(reason: str) -> NoReturn:
