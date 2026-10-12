@@ -71,12 +71,25 @@ class ProjectConfig(Frozen):
 
 def add_working_days(day: dt.date, n: int) -> dt.date:
     """The date `n` working days (Monday to Friday) after `day`; `n` may be negative."""
-    raise NotImplementedError
+    step = dt.timedelta(days=1 if n > 0 else -1)
+    remaining = abs(n)
+    while remaining:
+        day += step
+        if day.weekday() < 5:
+            remaining -= 1
+    return day
 
 
 def working_days_between(start: dt.date, end: dt.date) -> int:
     """Working days after `start` up to and including `end`; 0 when `end <= start`."""
-    raise NotImplementedError
+    return max(0, _working_days_through(end) - _working_days_through(start))
+
+
+def _working_days_through(day: dt.date) -> int:
+    # Ordinal 1 (0001-01-01) is a Monday, so the remainder is the weekday.
+    weeks, weekday = divmod(day.toordinal() - 1, 7)
+    weekday = min(weekday, 4)  # Saturday and Sunday count as the Friday before
+    return weeks * 5 + weekday + 1
 
 
 def require_unique(kind: str, ids: list[str]) -> None:
