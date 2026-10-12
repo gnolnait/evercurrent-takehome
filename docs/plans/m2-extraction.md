@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.11, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.12, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -759,8 +759,12 @@ gate.date`. For each such gate and each task of its checklist: the task is done 
 item carries a `TaskLink` to the task with `effect="done"` and `message_ts` at or
 before `as_of`; a done
 task yields nothing. Otherwise the last evidence is the `TaskLink` to the task (either effect)
-with the latest `message_ts` at or before `as_of` over every item; with none the task
-yields nothing (SPEC: never an absence without a citation; open item U2). `days_silent =
+with the latest `message_ts` at or before `as_of` over every item. A task with no link
+at all is anchored on the gate: the evidence is the earliest evidence entry (by
+`message_ts`, at or before `as_of`) over every item whose `entities` include the gate
+id, the message that first put the gate on the table; the earliest, not the latest, so a
+later post that names the gate again does not reset the clock. With no such entry
+either the task yields nothing (SPEC: never an absence without a citation). `days_silent =
 working_days_between(evidence date, as_of)` where the evidence date is that
 `message_ts` converted to a date in `zone`; the link's own message, not the item's
 `last_updated`, so later chatter merged into the item does not reset the clock, which is
@@ -769,8 +773,8 @@ the detector emits an `Item` with `type="absence"`, `item_id=f"absence:{task.id}
 `thread_id` of the cited item, `title` naming the gate and the task, `entities` the
 gate id plus the cited item's entities, `owner=None`, `affected_roles=(task.owner,)`,
 `severity` from the task's priority (`critical` and `high` map to `high`, else
-`medium`), `confidence="high"`, `evidence` the cited item's evidence entry for the
-link's `message_ts`, `first_seen` and `last_updated` that ts, and `absence` with
+`medium`), `confidence="high"`, `evidence` the cited entry (the cited item's entry for
+the link's `message_ts`, or the anchor entry), `first_seen` and `last_updated` that ts, and `absence` with
 `source="checklist"`, the gate and task ids, `days_silent`, `buffer_consumed =
 working_days_between(buffer start, as_of)` and `buffer_days`.
 
@@ -797,9 +801,11 @@ B2.4 The checklist source emits nothing for a gate whose date has passed and not
 before its buffer opens; the ask source has no gate and runs on every day. Output is checklist absences in `(gate id, task id)` order, then ask absences
 in ask item id order, so a run is deterministic. On the Kestrel fixture with the
 scripted touches applied as items, the checklist absences by day are: thermal days 5 to
-9, EMC days 6 to 9, FAI days 8 and 9, clear-to-build days 6 to 9, battery day 9, and none for the
-safety and texture tasks, which have no evidence (premise P5; S3-BUFFER's roll-up and
-ASK-SAF's question are not progress); the ask absence for ASK-SAF fires on days 6 to 10
+9, EMC days 6 to 9, FAI days 8 and 9, clear-to-build days 6 to 9, battery day 9, safety
+days 5 to 9 anchored on SCHED-1 (day 1, the first claim on `G-DVT1`; S3-BUFFER's roll-up
+on day 6 and ASK-SAF's question are not progress and do not reset the anchor), and none
+for the texture task (premise P5; its gate `G-TR1` has a zero-day buffer and the only
+claim on it, S3-TEXTURE, is on the gate day); the ask absence for ASK-SAF fires on days 6 to 10
 and none fires for ASK-PO. Unit 2's tests pin these from a hand-built item list, and
 the eval measures them from extracted items.
 
@@ -811,7 +817,9 @@ no manifest entry raises `KeyError` naming it. One `GoldenDistractor` per distra
 event with a manifest entry. Golden absences follow B2.2 and B2.3 on the script: for
 each day `d` in `1..days`, each gate with `gate day - buffer_days <= d <= gate day`
 (day indices), each task not marked done by a `TaskTouch` on or before `d`, the latest
-`TaskTouch` on or before `d` is the evidence; `d - evidence day > cadence` emits an
+`TaskTouch` on or before `d` is the evidence; with no touch at all, the earliest event
+on or before `d` with a claim on the gate entity is the evidence (B2.2's anchor); with
+neither the task has no label. `d - evidence day > cadence` emits an
 absence citing that event with `audience=(task.owner,)`. For each ask event on day `a`
 with `answered_day` None or greater than `d`, `d - a > priors.absence.ask_reply_cadence_days`
 emits an absence citing the ask with `audience=(poster, ask.of)`. Day `d` is converted
@@ -843,7 +851,8 @@ claim pair on `PN-90001 spec_param` (S8-PAYLOAD) and its labels are unchanged;
 two ask events: `ASK-SAF` (day 3, `C0ENGEF`, EM asks FW when TST-SAF-01 reruns on the
 DVT firmware, `answered_day` None, no task touch (a question is not progress, B1.3),
 `must_see_for` `U0FW01`, `known_by` EM and FW on day 3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
-`answered_day` 5, `known_by` EE and SC on day 4). Every other channel stays public.
+`answered_day` 5, `must_see_for` `U0SC01`, `known_by` EE and SC on day 4); an ask is a
+must-see for the persona asked (SPEC section 5 step 6). Every other channel stays public.
 The private channel has at least one human persona outside it (five of seven). No
 existing event changes.
 
@@ -852,8 +861,10 @@ existing event changes.
 `tests/test_absence.py`: B2.1 (with a Hypothesis property), B2.2 to B2.4 from a
 hand-built item list on the bundled project configuration and on a two-gate synthetic
 one; B2.7 for `digest absences` (CliRunner, tmp store). Null cases: a task with no
-evidence; an item with `tasks=()`; an ask with `owner=None` (skipped); a reply by
-someone other than the owner (still silent); `as_of` on a weekend.
+link and no item naming its gate (nothing); a task with no link and two items naming
+its gate (anchored on the earlier one); an item with `tasks=()`; an ask with
+`owner=None` (skipped); a reply by someone other than the owner (still silent); `as_of`
+on a weekend.
 
 `tests/test_golden.py`: B2.5 to B2.7 on a small synthetic world and on the bundled
 world with a hand-written manifest under `tmp_path`. `tests/test_world.py` (appended):
@@ -1073,7 +1084,7 @@ class ExtractionReport(Frozen):
     absence_fn: int
     absence_false_alarm_rate: float | None
     absence_recall: float | None
-    uncitable_tasks: tuple[str, ...]   # tasks inside a buffer with no evidence on any day
+    uncitable_tasks: tuple[str, ...]   # tasks inside a buffer with no link and no gate anchor on any day
     realism: dict[str, float]    # messages per thread and chars per message: mean, median, p90
     not_run: dict[str, str]      # metric -> reason
 
@@ -1127,7 +1138,7 @@ B4.4 Absences: detected and golden absences are keyed `(day, task)` for the chec
 source and `(day, ask event id)` for the ask source (the ask item's thread maps to the
 event through the manifest). `absence_false_alarm_rate = fp / (tp + fp)` and
 `absence_recall = tp / (tp + fn)`, None when the denominator is zero. `uncitable_tasks` lists the
-tasks that were inside a buffer on some day with no evidence on any day.
+tasks that were inside a buffer on some day with no link and no gate anchor (B2.2) on any day.
 
 B4.5 `models` comes from `Cassettes.recorded_models()`, a new method that reads every
 cassette under the root and maps each request's logical model to the set of concrete
@@ -1227,7 +1238,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Dropped thread and the extract stage | Records an `ok` extract run at `last_ts` | Otherwise the thread is pending every day and re-triaged daily; B1.7 states the cost (the next delta omits the dropped revision's messages). |
 | Model column in `stage_runs` and `triage` | Logical name | Stores built from gateway recordings stay valid for the API backend (D15); the concrete id is logged. |
 | Task linkage | The model picks `tasks[{task, effect}]` from the checklist in the prompt; code verifies the id | SPEC gives the detector no other way to find a task's last evidence in M2 core (task `entities` is stretch). Known gap: a hallucinated `done` closes a task; the eval reports absence recall beside the false-alarm rate so over-linking shows. |
-| A task with no evidence at all | No absence (SPEC: never without a citation) | Open item U2 for the user; the eval lists such tasks. |
+| A task with no progress link at all | Anchored on the first message that claims the gate (B2.2, B2.5) | A task nobody started is the absence the thesis names, and the gate post is a citation. The first naming, not the latest, so a repeated gate post does not reset the clock (G-DVT1 is named on days 1, 6 and 9). A task whose gate no item names stays silent (SPEC: never without a citation). Decided with the user on 2026-10-11 (was open item U2). |
 | Ask fields on world events | `ask: {of, answered_day}`, present only on `ask` events | Unanswered asks are a v0.3 core absence source; the user's "only `private`" decision was about v0.4 fields. These two fields are the minimum the renderer and the golden derivation need. |
 | Which channel is private | A new `kestrel-leads` (EM, PM) with one event | Making any existing channel private blocks a scripted must-see for a persona outside it (verified: every channel but `dvt1-build` and `plm-feed`; `dvt1-build` has nobody outside and a private PLM feed would hide the system of record from EM, PM and FW). A new channel adds the M3 test input without changing a golden label. |
 | Rendering the private channel now | Yes, in M2 | The corpus is rendered once; adding the channel in M3 would re-record cassettes. |
@@ -1250,7 +1261,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Revision suffix on an entity mention | Split off and discarded; the id is kept | A mention at a revision is not a claim about the current revision; revisions enter as `rev` claim values, and the stale-action audit that reads mentioned revisions is M3 stretch (D24). |
 | Extraction prompt version per store | One; a different version refuses the run | New item ids are `thread#last_ts#n`, so two versions in one store would overwrite each other's items; a fresh store is how a bump is run, as replay restarts for an earlier day. |
 | Which evidence entry is the ask message | The first entry whose author is not the person asked; B1.3 and B1.5 keep the asking message first | `first_seen` moves when an update cites an earlier message, such as an unrelated root; the first-cited message does not, and the author rule covers a model that cites the reply first. |
-| Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. U2 offers the mention rule as an alternative. |
+| Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. The gate anchor above applies only to a task with no link. |
 | Task link provenance | Each task link names the message that shows the progress | The silence clock counts from that message, as the golden counts from the scripted day; counting from the item's `last_updated` would let merged chatter reset it. |
 | Entity Jaccard | Reported as SPEC asks, with `entity_recall` beside it | Golden entity lists are claim entities only, so Jaccard penalizes correct context entities. |
 | One prompt version for the extract stage | `EXTRACT_PROMPT_VERSION` covers the triage and extraction prompts | A separate triage constant re-ran nothing on its own; one constant gives a prompt edit one visible effect. |
@@ -1266,24 +1277,17 @@ U1. Put `OPENROUTER_API_KEY` in `.env` (never in chat). Needed for the spike and
 data pull request only; stubs, tests and code need no key. The `.env` line exists and is
 blank (checked 2026-10-11).
 
-U2. Checklist tasks with no evidence at all. Evidence means progress (B1.3, the world's
-`TaskTouch`), and SPEC-literal this plan emits no absence for a task with none, so on
-the Kestrel world the safety validation and texture release tasks are silent and A6's
-demo shows neither. Two alternatives: (a) cite the latest message that names the gate
-(the schedule bot's post or the gate review) as the last evidence; (b) let any message
-about a task count as evidence, which makes ASK-SAF cite the safety task from day 3 but
-also lets the EM's day-6 roll-up (S3-BUFFER) reset the thermal clock, so the thermal
-absence fires on days 5 and 9 only. Default if no answer: SPEC-literal, and the eval
-lists the tasks.
+U2. Decided 2026-10-11: a checklist task with no progress link is anchored on the first
+message that claims its gate (decisions table, B2.2, B2.5). On the Kestrel world the
+safety task fires on days 5 to 9 and the texture task stays silent (B2.4).
 
-U3. The anchor slice. SPEC section 6 and D12 say one 40-message slice is human-authored.
-Nine lines exist. Who writes the remaining 31 lines: the user; or the orchestrator model
-drafts them and the user edits and approves, with the README saying "author-reviewed";
-or the slice stays at nine lines, which changes SPEC section 6 and D12. No default: the
-data pull request waits for the answer, and options two and three are contract changes
-that land in SPEC and D12 first.
+U3. Decided 2026-10-11: the user writes the remaining 31 lines of the 40-message anchor
+slice (SPEC section 6, D12). The data pull request waits for them; units 1 to 4 do not.
 
-U4. Confirm the two ask events and the private channel event (B2.9) as world content.
+U4. Decided 2026-10-11: the two ask events and the private channel event stand as world
+content, with `must_see_for` `U0SC01` added to `ASK-PO` (B2.9). M2 records nothing
+about `private` beyond the field; the leak test (a persona outside the channel does not
+see `LEADS-1`) belongs to the M3 filter and its handoff.
 
 ## Premise ledger
 
