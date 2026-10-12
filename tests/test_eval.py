@@ -11,6 +11,7 @@ import time_machine
 import yaml
 from typer.testing import CliRunner
 
+import digest.cli as cli_module
 from digest.cli import app
 from digest.eval.extraction import ExtractionReport, run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION, extract_request, triage_request
@@ -809,3 +810,164 @@ def test_cli_eval_default_report_name_uses_world_last_day(
     assert result.exit_code == 0, result.output
     assert expected.is_file()
     assert "2042-07-08" not in result.output
+
+
+def _set_cli_eval_environment(
+    monkeypatch: pytest.MonkeyPatch, case: EvalCase, cassette_root: Path | None = None
+) -> None:
+    monkeypatch.chdir(case.root)
+    monkeypatch.setenv("DIGEST_MODE", "replay")
+    monkeypatch.setenv("DIGEST_WORLD", "tiny")
+    monkeypatch.setenv("DIGEST_CASSETTES", str(cassette_root or case.cassettes.root))
+    monkeypatch.delenv("DIGEST_DB", raising=False)
+
+
+def _replace_recorded_data(
+    case: EvalCase, *, model: str, prompt_text: str, data: dict[str, Any]
+) -> None:
+    matches: list[Path] = []
+    for path in case.cassettes.root.glob("*.json"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        request = payload["request"]
+        if request["model"] != model or not any(
+            prompt_text in message["content"] for message in request["messages"]
+        ):
+            continue
+        payload["response"]["data"] = data
+        payload["response"]["text"] = json.dumps(data)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        matches.append(path)
+    assert len(matches) == 1
+
+
+def test_eval_counts_failed_calls_and_marks_the_golden_item_missed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _build_case(tmp_path)
+    _replace_recorded_data(
+        case,
+        model="classify",
+        prompt_text="When review?",
+        data={"rationale": "invalid probability", "probability": 2},
+    )
+
+    report = _run(case)
+    report_path = tmp_path / "failed-report.md"
+    write_report(report, report_path)
+
+    assert report.extract_failed >= 1
+    assert "ASK-OWNER" in report.missed
+    triage = _section(report_path.read_text(encoding="utf-8"), "triage")
+    _assert_rate_n(triage, ("extract", "fail"), report.extract_failed)
+
+    _set_cli_eval_environment(monkeypatch, case)
+    cli_report = tmp_path / "failed-cli-report.md"
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(cli_report)])
+
+    assert result.exit_code == 0, result.output
+    assert re.search(r"extract(?:ion)?[ _-]fail(?:ed|ures?):\s*[1-9]", result.output, re.IGNORECASE)
+
+
+def test_eval_rejects_a_golden_thread_that_was_never_run(tmp_path: Path) -> None:
+    case = _build_case(tmp_path, absent_golden_thread=True)
+
+    with pytest.raises(ValueError) as raised:
+        _run(case)
+
+    message = str(raised.value)
+    assert "never run" in message
+    assert "A-REV" in message
+    assert f"CENG:{ABSENT_ROOT}" in message
+
+
+def test_cli_eval_reports_a_manifest_event_that_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _build_case(tmp_path)
+    manifest = _manifest(include_distractor=True, absent_golden_thread=False)
+    threads = dict(manifest.threads)
+    del threads["ASK-OWNER"]
+    write_manifest(Manifest(threads=threads), case.world_dir / "manifest.json")
+    _set_cli_eval_environment(monkeypatch, case)
+
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(tmp_path / "x.md")])
+
+    assert result.exit_code == 1
+    assert "ASK-OWNER" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_eval_reports_no_rendered_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _build_case(tmp_path)
+    manifest = _manifest(include_distractor=True, absent_golden_thread=False)
+    human_threads = {
+        event_id: ref.model_copy(update={"authored": "human"})
+        for event_id, ref in manifest.threads.items()
+    }
+    write_manifest(Manifest(threads=human_threads), case.world_dir / "manifest.json")
+    _set_cli_eval_environment(monkeypatch, case)
+    report_path = tmp_path / "no-render.md"
+
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(report_path)])
+
+    assert result.exit_code == 0, result.output
+    text = report_path.read_text(encoding="utf-8")
+    realism = _section(text, "realism")
+    assert len(re.findall(r"^\|.*\|\s*$", realism, re.MULTILINE)) == 2
+    assert any(
+        "realism" in line.lower() and "no rendered threads" in line.lower()
+        for line in _section(text, "not run").splitlines()
+    )
+
+
+def test_stale_golden_message_distinguishes_labels_from_cadence(eval_case: EvalCase) -> None:
+    items = list(eval_case.golden.items)
+    claims = list(items[0].claims)
+    claims[0] = claims[0].model_copy(update={"value": "C"})
+    items[0] = items[0].model_copy(update={"claims": tuple(claims)})
+    stale = eval_case.golden.model_copy(update={"items": tuple(items)})
+    write_golden(stale, eval_case.world_dir / "golden.jsonl")
+
+    with pytest.raises(ValueError) as raised:
+        _run(eval_case)
+
+    message = str(raised.value).lower()
+    assert "labels differ" in message
+    assert "cadence" not in message
+
+    stale = eval_case.golden.model_copy(update={"ask_reply_cadence_days": 2})
+    write_golden(stale, eval_case.world_dir / "golden.jsonl")
+
+    with pytest.raises(ValueError) as raised:
+        _run(eval_case)
+
+    message = str(raised.value)
+    assert re.search(r"ask_reply_cadence_days[^\n]*2[^\n]*1", message)
+
+
+def test_cli_eval_removes_all_store_files_before_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _build_case(tmp_path)
+    _set_cli_eval_environment(monkeypatch, case)
+    store_path = tmp_path / "data" / "eval-tiny.sqlite"
+    sidecars = [Path(f"{store_path}-wal"), Path(f"{store_path}-shm")]
+    store_path.write_bytes(b"leftover store")
+    for sidecar in sidecars:
+        sidecar.write_bytes(b"leftover sidecar")
+
+    original_run = cli_module.run_extraction_eval
+
+    def run_after_cleanup(
+        world_dir: Path, llm: LLM, priors: Priors, path: Path
+    ) -> ExtractionReport:
+        assert not any(sidecar.exists() for sidecar in sidecars)
+        return original_run(world_dir, llm, priors, path)
+
+    monkeypatch.setattr(cli_module, "run_extraction_eval", run_after_cleanup)
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(tmp_path / "fresh.md")])
+
+    assert result.exit_code == 0, result.output
+    assert not any(path.exists() for path in sidecars)
