@@ -1,0 +1,478 @@
+from collections import Counter
+from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
+from typing import Any, Literal
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from digest.daily.profile import Profile, can_see, profile_for
+from digest.daily.select import SECTION_CAPS, Selection, select
+from digest.models import AbsenceDetail, Evidence, Item, ItemType, Role
+from digest.priors import AbsencePriors, DailyPriors, Priors, TriagePriors, load_priors
+from digest.world.schema import World
+
+DAY = date(2026, 10, 14)
+BASE_TS = "1791993600.000001"
+
+
+def world() -> World:
+    """Build a small world with public, joined private, and hidden private channels."""
+    return World.model_validate(
+        {
+            "name": "selection",
+            "program": "Kestrel K2",
+            "workspace_url": "https://kestrel.slack.com",
+            "timezone": "America/Los_Angeles",
+            "start_date": "2026-10-12",
+            "days": 10,
+            "project": {
+                "project_id": "kestrel",
+                "name": "Kestrel K2",
+                "phases": [{"phase": "EVT", "from_date": "2026-10-12"}],
+                "gates": [
+                    {
+                        "id": "G-DVT1",
+                        "name": "DVT build",
+                        "date": "2026-10-22",
+                        "buffer_days": 7,
+                        "checklist": [
+                            {
+                                "id": "G-DVT1.thermal",
+                                "task": "Complete thermal testing",
+                                "owner": "ME",
+                                "expected_cadence_days": 1,
+                            }
+                        ],
+                    }
+                ],
+            },
+            "channels": [
+                {"id": "CPUBLIC", "name": "program", "purpose": "Program updates"},
+                {
+                    "id": "CPRIVATE",
+                    "name": "mechanical",
+                    "purpose": "Mechanical work",
+                    "private": True,
+                },
+                {
+                    "id": "CHIDDEN",
+                    "name": "leads",
+                    "purpose": "Leadership work",
+                    "private": True,
+                },
+            ],
+            "personas": [
+                {
+                    "user_id": "UREADER",
+                    "name": "Reader",
+                    "role": "ME",
+                    "team": "hardware",
+                    "channels": ["CPUBLIC", "CPRIVATE"],
+                    "owned_entities": ["PN-OWNED", "G-DVT1"],
+                },
+                {
+                    "user_id": "UEMPTY",
+                    "name": "Firmware reader",
+                    "role": "FW",
+                    "channels": ["CPUBLIC"],
+                },
+                {
+                    "user_id": "UASKER",
+                    "name": "Asker",
+                    "role": "EM",
+                    "channels": ["CPUBLIC", "CHIDDEN"],
+                },
+                {
+                    "user_id": "BBOT",
+                    "name": "record_bot",
+                    "kind": "bot",
+                    "channels": ["CPUBLIC"],
+                    "authority": "plm_bot",
+                },
+            ],
+            "entities": [
+                {"id": "PN-OWNED", "type": "part", "description": "Owned part"},
+                {"id": "PN-OTHER", "type": "part", "description": "Other part"},
+                {"id": "G-DVT1", "type": "gate", "description": "DVT build"},
+            ],
+            "events": [],
+        }
+    )
+
+
+def reader(*, owned_entities: tuple[str, ...] = ("PN-OWNED", "G-DVT1")) -> Profile:
+    return Profile(
+        user_id="UREADER",
+        name="Reader",
+        role="ME",
+        team="hardware",
+        owned_entities=owned_entities,
+        channels=("CPUBLIC", "CPRIVATE"),
+    )
+
+
+def priors(
+    *,
+    role_priors: dict[Role, dict[ItemType, float]] | None = None,
+    min_score: float = 0.0,
+) -> Priors:
+    return Priors(
+        triage=TriagePriors(miss_cost_ratio=10),
+        absence=AbsencePriors(ask_reply_cadence_days=2),
+        daily=DailyPriors(role_priors=role_priors or {}, min_score=min_score),
+    )
+
+
+def evidence(channel_id: str, suffix: int = 1) -> Evidence:
+    ts = f"1791993600.{suffix:06d}"
+    return Evidence(
+        message_ts=ts,
+        quote=f"Evidence in {channel_id}",
+        permalink=f"https://kestrel.slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
+    )
+
+
+def item(item_id: str, **changes: Any) -> Item:
+    channel_ids = changes.pop("channel_ids", ("CPUBLIC",))
+    values: dict[str, Any] = {
+        "item_id": item_id,
+        "thread_id": f"{channel_ids[0]}:{BASE_TS}",
+        "type": "decision",
+        "title": f"Title {item_id}",
+        "summary": f"Summary {item_id}",
+        "entities": ("PN-OTHER",),
+        "owner": "UASKER",
+        "due": None,
+        "affected_roles": (),
+        "severity": "medium",
+        "confidence": "high",
+        "evidence": tuple(
+            evidence(channel_id, index) for index, channel_id in enumerate(channel_ids, 1)
+        ),
+        "first_seen": BASE_TS,
+        "last_updated": BASE_TS,
+    }
+    return Item(**(values | changes))
+
+
+def absence(
+    item_id: str,
+    *,
+    source: Literal["checklist", "ask"] = "checklist",
+    channel_ids: tuple[str, ...] = ("CPUBLIC",),
+    asker: str | None = None,
+    owner: str | None = "UASKER",
+    affected_roles: tuple[Role, ...] = ("FW",),
+) -> Item:
+    detail = AbsenceDetail(
+        source=source,
+        gate="G-DVT1" if source == "checklist" else None,
+        task="Complete thermal testing" if source == "checklist" else None,
+        asker=asker if source == "ask" else None,
+        days_silent=3,
+        buffer_consumed=2 if source == "checklist" else None,
+        buffer_days=7 if source == "checklist" else None,
+    )
+    return item(
+        item_id,
+        type="absence",
+        absence=detail,
+        channel_ids=channel_ids,
+        owner=owner,
+        affected_roles=affected_roles,
+    )
+
+
+def choose(
+    items: list[Item] | tuple[Item, ...] = (),
+    absences: list[Item] | tuple[Item, ...] = (),
+    *,
+    profile: Profile | None = None,
+    table: Priors | None = None,
+    day: date = DAY,
+) -> Selection:
+    return select(world(), profile or reader(), items, absences, table or priors(), day)
+
+
+def slack_ts(moment: datetime) -> str:
+    elapsed = moment.astimezone(UTC) - datetime(1970, 1, 1, tzinfo=UTC)
+    micros = elapsed // timedelta(microseconds=1)
+    seconds, fraction = divmod(micros, 1_000_000)
+    return f"{seconds:010d}.{fraction:06d}"
+
+
+def test_profile_for_builds_profile_from_human_persona() -> None:
+    profile = profile_for(world(), "UREADER")
+
+    assert profile == reader()
+
+
+@pytest.mark.parametrize(
+    ("user_id", "error"),
+    [("BBOT", ValueError), ("UNKNOWN", KeyError)],
+    ids=["bot", "unknown"],
+)
+def test_profile_for_refuses_invalid_reader(user_id: str, error: type[Exception]) -> None:
+    with pytest.raises(error):
+        profile_for(world(), user_id)
+
+
+@pytest.mark.parametrize(
+    ("channel_id", "expected"),
+    [
+        ("CPUBLIC", True),
+        ("CPRIVATE", True),
+        ("CHIDDEN", False),
+        ("UNKNOWN", False),
+    ],
+    ids=["public", "private-member", "private-non-member", "unknown"],
+)
+def test_can_see_applies_channel_visibility(channel_id: str, expected: bool) -> None:
+    profile = reader()
+    if channel_id == "CPUBLIC":
+        profile = profile.model_copy(update={"channels": ("CPRIVATE",)})
+    assert can_see(world(), profile, channel_id) is expected
+
+
+def test_visibility_drops_item_with_only_hidden_evidence() -> None:
+    selection = choose([item("hidden", channel_ids=("CHIDDEN",))])
+
+    assert selection.lines == ()
+    assert selection.hidden == 1
+
+
+def test_visibility_trims_hidden_evidence_from_kept_item() -> None:
+    original = item("mixed", channel_ids=("CHIDDEN", "CPUBLIC"))
+
+    selection = choose([original])
+
+    assert len(selection.lines) == 1
+    assert selection.lines[0].item.evidence == (original.evidence[1],)
+    assert selection.lines[0].item is not original
+    assert len(original.evidence) == 2
+    assert selection.hidden == 0
+
+
+def test_visibility_applies_to_absences() -> None:
+    hidden = absence("absence-hidden", channel_ids=("CHIDDEN",))
+    mixed = absence("absence-mixed", channel_ids=("CHIDDEN", "CPUBLIC"))
+
+    selection = choose(absences=[hidden, mixed])
+
+    assert [line.item.item_id for line in selection.lines] == ["absence-mixed"]
+    assert selection.lines[0].item.evidence == (mixed.evidence[1],)
+    assert selection.hidden == 1
+
+
+@pytest.mark.parametrize(
+    ("row", "reason_terms"),
+    [
+        (item("ask", type="ask", owner="UREADER"), ("ask",)),
+        (item("blocker", type="blocker", entities=("PN-OWNED",)), ("blocker", "owned")),
+        (
+            item("schedule", type="schedule_change", entities=("G-DVT1",)),
+            ("schedule", "gate"),
+        ),
+        (absence("checklist", affected_roles=("ME",)), ("checklist",)),
+        (
+            absence("asker", source="ask", asker="UREADER", affected_roles=()),
+            ("ask",),
+        ),
+        (
+            absence("asked", source="ask", asker="UASKER", owner="UREADER", affected_roles=()),
+            ("ask",),
+        ),
+    ],
+    ids=["owned-ask", "owned-blocker", "owned-gate", "checklist", "asker", "asked"],
+)
+def test_each_must_see_rule_is_kept(row: Item, reason_terms: tuple[str, ...]) -> None:
+    selection = choose(
+        absences=[row] if row.type == "absence" else [],
+        items=[] if row.type == "absence" else [row],
+    )
+
+    assert len(selection.lines) == 1
+    line = selection.lines[0]
+    assert line.must_see is True
+    assert line.score == 0
+    assert all(term in line.reason.lower() for term in reason_terms)
+
+
+def test_must_see_line_is_kept_above_section_cap() -> None:
+    must_see = item("must", type="blocker", entities=("PN-OWNED",))
+    ranked = [item(f"risk-{index}", type="risk") for index in range(SECTION_CAPS["risks"] + 2)]
+
+    selection = choose([*ranked, must_see])
+    risks = [line for line in selection.lines if line.section == "risks"]
+
+    assert len(risks) == SECTION_CAPS["risks"] + 1
+    assert [line.item.item_id for line in risks if line.must_see] == ["must"]
+
+
+@pytest.mark.parametrize(
+    ("entities", "affected_roles", "relevance"),
+    [
+        (("PN-OWNED",), (), 1.0),
+        (("PN-OTHER",), ("ME",), 0.8),
+        (("PN-OTHER",), (), 0.4),
+    ],
+    ids=["owned", "affected-role", "neither"],
+)
+def test_ranked_score_names_all_terms(
+    entities: tuple[str, ...], affected_roles: tuple[Role, ...], relevance: float
+) -> None:
+    table = priors(role_priors={"ME": {"decision": 0.6}})
+    row = item(
+        "scored",
+        severity="high",
+        entities=entities,
+        affected_roles=affected_roles,
+    )
+
+    line = choose([row], table=table).lines[0]
+
+    assert line.score == pytest.approx(0.9 * 0.6 * relevance)
+    assert "importance=0.9" in line.reason
+    assert "role_prior=0.6" in line.reason
+    assert f"personal_relevance={relevance}" in line.reason
+
+
+def test_ranked_score_uses_default_role_prior() -> None:
+    line = choose([item("default", severity="high")]).lines[0]
+
+    assert line.score == pytest.approx(0.9 * 0.5 * 0.4)
+    assert "role_prior=0.5" in line.reason
+
+
+def test_ranked_item_below_minimum_score_is_left_out() -> None:
+    table = priors(role_priors={"ME": {"fyi": 0.1}}, min_score=0.02)
+    row = item("small", type="fyi", severity="low")
+
+    assert choose([row], table=table).lines == ()
+
+
+def test_bundled_daily_priors_are_used_for_ranking() -> None:
+    table = load_priors(Path("config/priors.yaml"))
+    row = item("bundled", severity="medium", affected_roles=("ME",))
+
+    line = choose([row], table=table).lines[0]
+
+    assert line.score == pytest.approx(0.9 * 0.7 * 0.9 * 0.8)
+    assert "role_prior=0.9" in line.reason
+
+
+@pytest.mark.parametrize(
+    ("item_type", "section"),
+    [
+        ("ask", "needs_you"),
+        ("absence", "not_happened"),
+        ("decision", "decisions"),
+        ("schedule_change", "decisions"),
+        ("spec_change", "decisions"),
+        ("bom_change", "decisions"),
+        ("blocker", "risks"),
+        ("risk", "risks"),
+        ("fyi", "fyi"),
+    ],
+)
+def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section: str) -> None:
+    row = absence("row") if item_type == "absence" else item("row", type=item_type)
+
+    selection = choose(
+        absences=[row] if item_type == "absence" else [],
+        items=[] if item_type == "absence" else [row],
+    )
+
+    assert selection.lines[0].section == section
+
+
+def test_each_section_caps_only_ranked_lines() -> None:
+    rows = [item(f"ask-{index}", type="ask") for index in range(7)]
+    rows += [item(f"decision-{index}") for index in range(7)]
+    rows += [item(f"risk-{index}", type="risk") for index in range(7)]
+    rows += [item(f"fyi-{index}", type="fyi") for index in range(7)]
+    missing = [absence(f"absence-{index}") for index in range(5)]
+    rows.append(item("risk-must", type="blocker", entities=("PN-OWNED",)))
+
+    selection = choose(rows, missing)
+    counts = Counter(line.section for line in selection.lines)
+
+    assert counts == {
+        "needs_you": 5,
+        "not_happened": 3,
+        "decisions": 5,
+        "risks": 6,
+        "fyi": 5,
+    }
+    risk_lines = [line for line in selection.lines if line.section == "risks"]
+    assert sum(line.must_see for line in risk_lines) == 1
+
+
+def test_resolved_and_after_day_items_are_left_out() -> None:
+    end = datetime.combine(DAY, time.max, ZoneInfo(world().timezone))
+    boundary = slack_ts(end)
+    after = slack_ts(end + timedelta(microseconds=1))
+    rows = [
+        item("open-boundary", last_updated=boundary),
+        item("resolved", status="resolved"),
+        item("future", last_updated=after),
+    ]
+
+    selection = choose(rows)
+
+    assert [line.item.item_id for line in selection.lines] == ["open-boundary"]
+
+
+def test_lines_have_stable_section_and_rank_order() -> None:
+    rows = [
+        item("needs-must", type="ask", owner="UREADER"),
+        item("decision-low-b", severity="low"),
+        item("decision-high", severity="high"),
+        item("decision-low-a", severity="low"),
+        item("risk-must", type="blocker", entities=("PN-OWNED",)),
+        item("risk-ranked", type="risk", severity="high"),
+        item("fyi-ranked", type="fyi", severity="high"),
+    ]
+    missing = [absence("absence-must", affected_roles=("ME",))]
+
+    first = choose(rows, missing)
+    second = choose(rows, missing)
+
+    assert [line.item.item_id for line in first.lines] == [
+        "needs-must",
+        "absence-must",
+        "decision-high",
+        "decision-low-a",
+        "decision-low-b",
+        "risk-must",
+        "risk-ranked",
+        "fyi-ranked",
+    ]
+    assert first == second
+
+
+def test_reader_who_owns_nothing_gets_ranked_lines() -> None:
+    profile = reader(owned_entities=())
+
+    selection = choose([item("unowned", severity="high")], profile=profile)
+
+    assert [line.item.item_id for line in selection.lines] == ["unowned"]
+    assert selection.lines[0].must_see is False
+    assert "personal_relevance=0.4" in selection.lines[0].reason
+
+
+def test_no_items_returns_empty_selection() -> None:
+    selection = choose()
+
+    assert selection.profile == reader()
+    assert selection.day == DAY
+    assert selection.lines == ()
+    assert selection.hidden == 0
+
+
+def test_all_evidence_hidden_returns_only_hidden_count() -> None:
+    selection = choose([item("private", channel_ids=("CHIDDEN",))])
+
+    assert selection.lines == ()
+    assert selection.hidden == 1
