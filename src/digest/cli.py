@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 from collections import Counter
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -18,19 +19,25 @@ from digest import __version__
 from digest.absence import detect_absences
 from digest.corpus.avoid import load_avoid_names
 from digest.corpus.render import render_world
+from digest.daily.render import build_digest
 from digest.eval.extraction import run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
-from digest.llm.cassette import CassetteMiss
-from digest.llm.client import from_settings
-from digest.priors import DEFAULT_PRIORS_PATH, load_priors
+from digest.llm.cassette import CassetteMiss, Cassettes
+from digest.llm.client import LLM, from_settings
+from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
 from digest.world.golden import derive_golden, write_golden
 from digest.world.load import load_world
 from digest.world.manifest import load_manifest
+from digest.world.schema import World
+
+_DEMO_WORLD = "kestrel"
+_DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")  # ME, supply chain, EM
+_RULE = "-" * 40
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -48,8 +55,46 @@ def _root(
 def demo(
     day: int = typer.Option(6, "--day", help="World day of the digests (1 is the first day)."),
 ) -> None:
-    """Produce digests for three roles from the bundled synthetic corpus (offline)."""
-    raise typer.Exit(code=_not_yet("demo"))
+    """Produce digests for three roles from the bundled synthetic corpus (offline).
+
+    The command replays the bundled world into a temporary store one day at a time and runs
+    the extract stage at the end of each day from the recorded cassettes. It reads no API
+    key and no `.env` file, and it writes nothing outside the temporary directory.
+    """
+    world_dir = Path("data") / "world" / _DEMO_WORLD
+    source = world_dir / "world.yaml"
+    try:
+        loaded = load_world(source)
+    except OSError as error:
+        _refuse(f"{source}: {error.strerror or error}")
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
+        _refuse(f"{source}: {error}")
+    if not 1 <= day <= loaded.days:
+        _refuse(f"--day must be from 1 to {loaded.days}, got {day}")
+    try:
+        priors = load_priors(DEFAULT_PRIORS_PATH)
+    except OSError as error:
+        _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
+        _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
+    # No `.env`: a key or a mode in a local file must not reach the demo. The mode is
+    # replay, so the client has no backend and reads no key.
+    llm = LLM(None, Cassettes(Settings(_env_file=None).cassettes), "replay")
+    today = loaded.date_of(day)
+    zone = ZoneInfo(loaded.timezone)
+    digests: list[str] = []
+    with (
+        tempfile.TemporaryDirectory(prefix="digest-demo-") as tmp,
+        Store.open(Path(tmp) / f"{_DEMO_WORLD}.sqlite") as store,
+    ):
+        try:
+            _extract_days(store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir)
+            for user_id in _DEMO_READERS:
+                digests.append(build_digest(store, loaded, priors, user_id, today))
+        # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
+        except (CassetteMiss, ValueError, OSError) as error:
+            _refuse(str(error))
+    typer.echo(f"\n\n{_RULE}\n\n".join(digests))
 
 
 @app.command()
@@ -63,8 +108,32 @@ def run(
         None, "--db", help="Store path; default DIGEST_DB, then data/<world>.sqlite."
     ),
 ) -> None:
-    """Produce one user's digest as of a date."""
-    raise typer.Exit(code=_not_yet("run"))
+    """Produce one user's digest for a date.
+
+    The store must be replayed and extracted to exactly the end of that day.
+    """
+    settings = Settings()
+    name = world or settings.world
+    try:
+        day = date.fromisoformat(as_of)
+    except ValueError:
+        _refuse(f"--as-of must be YYYY-MM-DD, got {as_of!r}")
+    path = db or settings.db or Path("data") / f"{name}.sqlite"
+    if not path.is_file():  # Store.open would create an empty store file
+        _refuse(f"no store at {path}; run digest replay first")
+    try:
+        loaded = load_world(Path("data") / "world" / name / "world.yaml")
+        priors = load_priors()
+    except (OSError, ValueError, yaml.YAMLError) as error:  # ValueError: ValidationError too
+        _refuse(str(error))
+    with _open_store(path) as store:
+        try:
+            digest = build_digest(store, loaded, priors, user, day)
+        except KeyError:
+            _refuse(f"unknown user {user}: no persona with that id in world {name}")
+        except ValueError as error:  # a refused store, or a bot
+            _refuse(str(error))
+    typer.echo(digest)
 
 
 @app.command("eval")
@@ -155,35 +224,12 @@ def extract(
             _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
         except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
             _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
-        done = store.get_meta("extract_until")
         zone = ZoneInfo(timezone)
         end = datetime.fromisoformat(until)
-        glossary = loaded.glossary()
-        purposes = {channel.id: channel.purpose for channel in loaded.channels}
-        total = ExtractReport(
-            threads=0,
-            kept=0,
-            dropped=0,
-            failed=0,
-            items_written=0,
-            drops=dict.fromkeys(DROP_FIELDS, 0),
-        )
         try:
             refuse_other_prompt_version(store)
             llm = from_settings(settings)
-            for day in range(1, loaded.days + 1):
-                today = loaded.date_of(day)
-                if done is not None and today <= date.fromisoformat(done):
-                    continue
-                as_of = datetime.combine(today, time.max, zone).astimezone(UTC)
-                if as_of > end:
-                    break
-                report = run_extract(
-                    store, llm, glossary, loaded.project, priors, as_of, zone, purposes
-                )
-                total = total.plus(report)
-                if report.failed == 0:
-                    store.set_meta("extract_until", today.isoformat())
+            total = _extract_days(store, loaded, llm, priors, zone, end)
         # CassetteMiss: replay found no recording. ValueError: a missing API key, a store of
         # another prompt version or a malformed `extract_until`. OSError: no model ids file.
         except (CassetteMiss, ValueError, OSError) as error:
@@ -360,6 +406,54 @@ def world_golden(
         f"{path}: {len(golden.items)} items, {len(golden.absences)} absences, "
         f"{len(golden.distractors)} distractors"
     )
+
+
+def _extract_days(
+    store: Store,
+    world: World,
+    llm: LLM,
+    priors: Priors,
+    zone: ZoneInfo,
+    end: datetime,
+    *,
+    replay: Path | None = None,
+) -> ExtractReport:
+    """Run the extract stage at the end of each world day up to `end`; return the sum.
+
+    The run starts at the day after the meta key `extract_until`. After a day with no failed
+    thread, the run sets that key to the day. With `replay`, the run first replays that world
+    directory into the store up to the end of each day, as the extraction eval does.
+    """
+    done = store.get_meta("extract_until")
+    glossary = world.glossary()
+    purposes = {channel.id: channel.purpose for channel in world.channels}
+    total = ExtractReport(
+        threads=0,
+        kept=0,
+        dropped=0,
+        failed=0,
+        items_written=0,
+        drops=dict.fromkeys(DROP_FIELDS, 0),
+    )
+    for day in range(1, world.days + 1):
+        today = world.date_of(day)
+        if done is not None and today <= date.fromisoformat(done):
+            continue
+        as_of = _end_of(today, zone)
+        if as_of > end:
+            break
+        if replay is not None:
+            replay_world(store, replay, today)
+        report = run_extract(store, llm, glossary, world.project, priors, as_of, zone, purposes)
+        total = total.plus(report)
+        if report.failed == 0:
+            store.set_meta("extract_until", today.isoformat())
+    return total
+
+
+def _end_of(day: date, zone: ZoneInfo) -> datetime:
+    """The last instant of a day in a timezone, in UTC."""
+    return datetime.combine(day, time.max, zone).astimezone(UTC)
 
 
 def _stored(store: Store, key: str) -> str:
