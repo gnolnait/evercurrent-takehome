@@ -11,7 +11,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from digest.daily.profile import Profile, can_see
-from digest.models import Evidence, Frozen, Item, ItemType, Severity, micros_since_epoch, ts_micros
+from digest.models import Frozen, Item, ItemType, Severity, micros_since_epoch, ts_micros
 from digest.priors import Priors
 from digest.world.schema import World
 
@@ -124,13 +124,13 @@ def _cited_ask(item: Item) -> str | None:
 def _visible(world: World, profile: Profile, item: Item) -> Item | None:
     """The item with only the evidence from its thread's channel, or None when the reader sees none.
 
-    The reader must see the thread's channel (plan B5.2). An evidence entry from another channel
-    is removed. The check fails closed.
+    The reader must see the thread's channel (plan B5.2). An evidence entry whose `channel_id`
+    is another channel is removed. The check fails closed.
     """
     channel_id = _thread_channel(item)
     if not can_see(world, profile, channel_id):
         return None
-    kept = tuple(entry for entry in item.evidence if _channel_of(entry) == channel_id)
+    kept = tuple(entry for entry in item.evidence if entry.channel_id == channel_id)
     if not kept:
         return None
     return item.model_copy(update={"evidence": kept})
@@ -139,14 +139,6 @@ def _visible(world: World, profile: Profile, item: Item) -> Item | None:
 def _thread_channel(item: Item) -> str:
     """The channel id in the item's `thread_id`, which has the form `<channel>:<thread_ts>`."""
     return item.thread_id.partition(":")[0]
-
-
-def _channel_of(entry: Evidence) -> str:
-    """The channel id in the permalink; an empty string, which matches no thread, when absent.
-
-    Evidence carries no `channel_id` yet. When it does, read it here.
-    """
-    return entry.permalink.partition("/archives/")[2].partition("/")[0]
 
 
 def _section_of(item: Item, profile: Profile) -> Section:
