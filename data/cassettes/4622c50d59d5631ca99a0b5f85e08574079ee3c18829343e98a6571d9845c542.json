@@ -1,0 +1,46 @@
+{
+  "key": "4622c50d59d5631ca99a0b5f85e08574079ee3c18829343e98a6571d9845c542",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: RFQs, POs, shipments, allocation and clear-to-build\n\nThread root:\n[ts 1792087200.010059] author U0EE01: <@U0SC01> quick check: was PO-45002211 amended to Rev C? I need to line up the EE AVL note with the PO rev.\nChanged messages, oldest first:\n[ts 1792173840.010060] author U0SC01: Yes, PO-45002211 is amended to Rev C now. I’ll send the updated PDF to the supplier thread too."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message confirms that PO-45002211 has been amended to Rev C and that an updated PDF will be sent to the supplier thread. That is a PO revision status update, which is program information (a BOM/purchasing change a program member needs to know), since the requester is lining up an EE AVL note against the PO rev.\", \"probability\": 0.85}",
+    "data": {
+      "rationale": "The changed message confirms that PO-45002211 has been amended to Rev C and that an updated PDF will be sent to the supplier thread. That is a PO revision status update, which is program information (a BOM/purchasing change a program member needs to know), since the requester is lining up an EE AVL note against the PO rev.",
+      "probability": 0.85
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 643,
+    "output_tokens": 118
+  },
+  "recorded_at": "2026-10-12T19:54:53.519180+00:00"
+}

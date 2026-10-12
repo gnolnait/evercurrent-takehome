@@ -1,0 +1,46 @@
+{
+  "key": "eae46aa9ab086ac1f96e8c365575b9a1be593c22dc29d3e0f091caa5b47e97e5",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: DVT-1 build log, test results, FA tickets and yield\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792426800.010087] author U0CM01: Blocker on the DVT-1 kit: I counted 32x PN-31020, so we’re short 8 signal harnesses.\n[ts 1792426980.010088] author U0SC01: Got it. I’ll check the packout record and carton photos for PN-31020 now.\n[ts 1792427220.010089] author U0EE01: Please hold those builds until we know if the missing signal harnesses are on site somewhere. I don’t want ad hoc cable swaps in DVT-1.\n[ts 1792427520.010090] author U0EM01: Agree. <@U0SC01> can you give an ETA for locate or replacement, and <@U0CM01> keep the shortage logged in the build sheet?\n[ts 1792427760.010091] author U0CM01: Yep, logging it as PN-31020 shortage with current count at 32. I’ll pause the affected units until we get direction."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages report a blocker on the DVT-1 build: 8 signal harnesses (PN-31020) are short, builds are placed on hold, and an ETA for locate or replacement is requested. This is clearly project information (blocker, hold decision, ask for ETA), so the probability is very high.\", \"probability\": 0.97}",
+    "data": {
+      "rationale": "The changed messages report a blocker on the DVT-1 build: 8 signal harnesses (PN-31020) are short, builds are placed on hold, and an ETA for locate or replacement is requested. This is clearly project information (blocker, hold decision, ask for ETA), so the probability is very high.",
+      "probability": 0.97
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 838,
+    "output_tokens": 115
+  },
+  "recorded_at": "2026-10-12T19:54:58.978068+00:00"
+}

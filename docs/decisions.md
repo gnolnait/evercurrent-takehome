@@ -186,8 +186,9 @@ every extra mechanism is cost without signal for a one-week take-home.
 Decision. The world-first simulator renders Slack text with a GPT-class model, while
 Claude does extraction and linking. Amended 2026-10-08 by D15: the renderer calls the
 model through the gateway backend with the logical name `render`; the `openai` package
-is not used and the `corpus` extra leaves `pyproject.toml` in the M1 stubs commit. One 40-message
-slice is human-authored. The eval report states which models rendered and which
+is not used and the `corpus` extra leaves `pyproject.toml` in the M1 stubs commit. A nine-message slice (three
+threads) is human-authored; amended 2026-10-12, growing it to 40 messages is deferred
+(`docs/later.md`). The eval report states which models rendered and which
 extracted.
 
 Why. If the same family writes the chat and reads it back, extraction scores measure
@@ -332,10 +333,11 @@ or question claim never supersedes, a target never supersedes a stated or measur
 resolves it: confirmation supersedes, restatement makes a contradiction routed to the key's
 owner, and silence past a cadence makes an absence.
 
-Amended 2026-10-12 (SPEC v0.4.3): a `spec_param` key also holds the parameter name, taken
-from the words before the value's first numeric token. Without it, two parameters on one
-part share a key and supersede each other. The world file already writes values in that
-form, so it needs no change; the ledger code derives the name.
+Amended 2026-10-12 (SPEC v0.4.3): a claim carries `param`, and a `spec_param` key holds
+it. Without it, two parameters on one part share a key and supersede each other. The
+extractor sets the name and code verifies it in the cited text; a name guessed from the
+value's words collides ("surface finish" and "surface treatment"). The world file keeps
+writing the name before the quantity, and its loader and validator split the value.
 
 ## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
 
@@ -370,7 +372,7 @@ Amended 2026-10-12 (SPEC v0.4.3): the four write actions are one `feedback` tool
 action field, so nine read tools and one write tool fit the cap of ten. The v1 server is
 an administrative interface for the operator of the store: it applies no reader
 visibility check, and `query` reads every row. A reader-scoped server waits for a
-hosted deployment (docs/later.md).
+hosted deployment or a second person using one store (docs/later.md).
 
 ## D21. The objective is stale-belief person-days
 

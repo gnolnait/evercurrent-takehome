@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import yaml
 from pydantic import Field, ValidationError
 
-from digest.models import Frozen
+from digest.models import Frozen, ItemType, Role
 
 DEFAULT_PRIORS_PATH = Path("config/priors.yaml")
+
+RoleWeight = Annotated[float, Field(gt=0, le=1)]  # plan B5.4: above 0 and at most 1
 
 
 class TriagePriors(Frozen):
@@ -24,9 +27,16 @@ class AbsencePriors(Frozen):
     ask_reply_cadence_days: int = Field(ge=1)  # working days before an unanswered ask is silent
 
 
+class DailyPriors(Frozen):
+    # Each value is above 0 and at most 1. The ranked lane uses 0.5 for a missing entry.
+    role_priors: dict[Role, dict[ItemType, RoleWeight]] = Field(default_factory=dict)
+    min_score: float = Field(default=0.15, ge=0)  # a ranked line below this is left out
+
+
 class Priors(Frozen):
     triage: TriagePriors
     absence: AbsencePriors
+    daily: DailyPriors = DailyPriors()
 
 
 def load_priors(path: Path = DEFAULT_PRIORS_PATH) -> Priors:

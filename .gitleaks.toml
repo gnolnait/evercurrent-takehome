@@ -1,0 +1,15 @@
+# gitleaks config for the CI secrets job: the default rules plus one allowlist.
+[extend]
+useDefault = true
+
+# A cassette names each record by the SHA-256 hash of its request, in a "key" field.
+# The generic-api-key rule reads that hash as a key. The allowlist needs targetRules:
+# without it, gitleaks skips every file that matches `paths`, and ignores the
+# condition. Any other match in a cassette still fails the job.
+[[allowlists]]
+description = "cassette record key (a request hash)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^data/cassettes/[^/]+\.json$''']
+regexTarget = "match"
+regexes = ['''^key": "[0-9a-f]{64}"$''']

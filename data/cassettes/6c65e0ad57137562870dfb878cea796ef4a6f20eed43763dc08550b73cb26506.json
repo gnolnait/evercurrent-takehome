@@ -1,0 +1,46 @@
+{
+  "key": "6c65e0ad57137562870dfb878cea796ef4a6f20eed43763dc08550b73cb26506",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: DVT-1 build log, test results, FA tickets and yield\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792510200.010093] author U0CM01: CM just flagged they want to use 30 leftover PN-51012 Rev A bumper fascias on DVT-1. Risk is DEV-0007 only covered EVT-2, and it expired at the exit review.\n[ts 1792510440.010094] author U0ME01: Agree, PN-51012 Rev A should not roll into DVT-1 under that deviation. Need either a fresh deviation or the Rev A stock stays out of the build.\n[ts 1792510680.010095] author U0SC01: I’ll tell CM to hold those 30 aside for now. Do we want me to ask for a clean count of non-Rev A fascia stock too?\n[ts 1792510860.010096] author U0EM01: Yes, get the count and keep the Rev A lot blocked. <@U0CM01> please open the action against DVT-1 build readiness so it doesn’t disappear in email.\n[ts 1792511100.010097] author U0CM01: Will do. Restating the earlier note here: DEV-0007 closed with EVT-2, so DVT-1 needs its own disposition before any PN-51012 Rev A parts go on units."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The new thread carries clear program information: CM wants to use 30 PN-51012 Rev A bumper fascias on DVT-1, but the deviation DEV-0007 covered only EVT-2 and has expired. Engineering agrees the Rev A stock should not roll into DVT-1 without a fresh deviation, the Rev A lot is being held, a clean count of non-Rev A stock is requested, and an action against DVT-1 build readiness is being opened. This is a blocker and a disposition decision affecting the build, so it is highly relevant project information.\", \"probability\": 0.96}",
+    "data": {
+      "rationale": "The new thread carries clear program information: CM wants to use 30 PN-51012 Rev A bumper fascias on DVT-1, but the deviation DEV-0007 covered only EVT-2 and has expired. Engineering agrees the Rev A stock should not roll into DVT-1 without a fresh deviation, the Rev A lot is being held, a clean count of non-Rev A stock is requested, and an action against DVT-1 build readiness is being opened. This is a blocker and a disposition decision affecting the build, so it is highly relevant project information.",
+      "probability": 0.96
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 919,
+    "output_tokens": 199
+  },
+  "recorded_at": "2026-10-12T19:55:44.923417+00:00"
+}

@@ -85,8 +85,9 @@ In scope
   live mode can be demonstrated end to end.
 - One query and feedback function layer over the store and the ranker, exposed by
   three thin adapters that contain no logic: the CLI, the HTTP endpoints of the web
-  preview, and an MCP server (stdio) so engineers can query the digest from the
-  assistant they already use (Claude, ChatGPT, Cursor). MCP read tools:
+  preview, and an MCP server (stdio) so the operator of the store can query the digest
+  from the assistant they already use (Claude, ChatGPT, Cursor); each engineer querying
+  their own view waits for the reader-scoped server. MCP read tools:
   `search_items`, `get_item`, `get_entity_history`, `list_open_blockers`,
   `list_absences`, `why_ranked`, `get_digest`, `get_project_state`, plus `query`, a
   read-only SQL tool on a read-only connection with a row cap and a timeout, with the
@@ -126,29 +127,35 @@ Item: one extracted unit of information.
 `{item_id, type, title, summary, entities[], owner, due, affected_roles[], phase_tags[],
 severity, confidence, evidence[{channel_id, message_ts, quote}], claims[], first_seen,
 last_updated, status, resolved_by, links[{kind, item_id}], tasks[{task, effect,
-channel_id, message_ts}], absence}`
+channel_id, message_ts}], ask_message, absence}`
 - type: decision | blocker | risk | schedule_change | spec_change | bom_change | ask | fyi | absence
 - entities: part numbers with rev, ECO/ECR/DEV ids, gates, tests, vendors, POs, people
 - evidence entries and task links name their channel, because a Slack `ts` is unique
   only within a channel. Every lookup by message uses `(channel_id, message_ts)`.
-- `owner` is a user id. For an ask, it is the person asked; the asker is the author of
-  the first evidence message that the owner did not write.
+- `owner` is a user id. For an ask, it is the person asked. `ask_message`
+  (`{channel_id, message_ts}`, set only on an ask) is the message that asks; its author
+  is the asker, and its thread and time decide what counts as a reply. A merge keeps the
+  earliest ask message.
 - `tasks` links the item to checklist tasks. `effect` is evidence (progress on the task)
   or done (the task is complete). The model picks the task id from the checklist in the
   prompt, and code verifies that the id exists.
-- `absence` is set exactly when the type is absence: `{source (checklist | ask), gate,
-  task, asker, days_silent, buffer_consumed, buffer_days}`, with days in working days.
+- `absence` is set exactly when the type is absence: `{source, gate, task, asker,
+  days_silent, buffer_consumed, buffer_days}`, with days in working days. `source` is
+  checklist or ask in core; each stretch absence rule (section 5 step 5, c to g) adds
+  its own source value and fields when it is built.
 - status: open | resolved | superseded; `resolved_by` is the item or message that closed
   it, so a reader told while it was open can be shown the closing evidence
 - links.kind: duplicate | update_of | supersedes | contradicts | related
 
-Claim: `{key, value, asserted_ts, observed_ts, invalid_ts, author, channel, authority,
-certainty, kind, conditions, scope}`
+Claim: `{key, value, param, asserted_ts, observed_ts, invalid_ts, author, channel,
+authority, certainty, kind, conditions, scope}`
 where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
 rev, lead_time, gate_date, owner, status, qty, spec_param, priority. For `spec_param`
-the key also holds the parameter name: the words of the value before its first numeric
-token, in lower case (`payload 600 kg` is parameter `payload` with value `600 kg`), so
-two parameters on one entity never share a key. authority is a
+the key also holds `param`, the parameter name in lower case (`payload`, `surface
+finish`), so two parameters on one entity never share a key; `param` is empty for every
+other attribute. The extractor sets `param`, and code verifies that it appears in the
+cited text. The world file writes a `spec_param` value as the name followed by the
+quantity (`payload 600 kg`), and its loader splits it at the first numeric token. authority is a
 small enum (owner_stated, plm_bot, cm_stated, hearsay). `certainty` is decided |
 reported | hedged | question; `kind` is stated (default: a fact such as a rev, owner, status or date) | target |
 measured | referenced (a value carried by a file name or link, which never supersedes);
@@ -225,7 +232,8 @@ stale_beliefs[], not_happened[], decisions[], risks[], fyi[]}, items[],
 rationale{item_id: score_breakdown}}`
 - `coverage` (M4 stretch) states the data the digest was built from: the window it covers, the time
   the store reaches, any channel not ingested, and a partial marker when a stage failed.
-  A digest never looks complete when it is not.
+  A digest never looks complete when it is not. `missing_channels` lists only channels
+  the reader can see; the full list is for the operator.
 
 LandingMap: per decision item, per role: landed | contradicted | unknown, each with
 evidence item ids. Only contradicting evidence may mark a cell contradicted; silence is
@@ -331,11 +339,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
    been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
-   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner.
+   owned entity, a constant below 1 when the project has `depends_on` edges and none joins them (one hop, no path search), and 1 when the project has none; a claim still `pending` confirmation raises urgency for its owner.
    `novelty` measures what is new to the reader, not the age of a message. For an item
    with claims, it is 1 when the reader has no exposure on a claim's key, or when a
    claim's value differs from the reader's `exposed` value for that key (any
-   `exposed.how`); a claim the ledger has since superseded does not count. `exposed`
+   `exposed.how`); a claim the reader's ledger view has since superseded does not count. `exposed`
    holds one value per key, so a claim of kind target or measured, or with `scope` or
    `conditions`, is not compared with it. An item not in `seen` is also 1 when it has no
    compared claim or carries a current claim that is not compared. For any item in `seen`, it is also 1 when its
@@ -377,7 +385,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    ids, values and link are identical for every reader. An item the reader was shown
    while open and that has since resolved appears once more with its closing evidence,
    whatever its score, outside the section caps and the diversity penalty; the
-   visibility check and mute still apply.
+   visibility check and mute still apply, and the line appears only when the reader can
+   see the closing evidence.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
    with nothing to say sends one line that says so. Rationale on demand.
@@ -388,7 +397,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    undoes); an undo reverses exactly the referenced event's effect; profile weights are
    recomputed from the log, a vote moves the item most, its entity less and its item type least,
    and no learned weight leaves a bounded band around the role default. `needs_you` lines carry done (resolves the item when the clicker owns it, else records
-   exposure for that reader only), snooze until a date, not mine (reader removed from the
+   exposure for that reader only; on a checklist absence it records exposure only,
+   section 4), snooze until a date, not mine (reader removed from the
    audience), and, on a contradiction line, confirm (the owner picks a value, which
    writes an `owner_stated` claim).
 9. Delivery: a two-tier policy. Items in the must-see lane whose urgency crosses the
@@ -429,8 +439,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   visibility check is tested, one external channel, and documents with a revision
   history whose file names carry revision tokens, including one stale pack sent to the
   CM and one PO placed against a superseded rev. The renderer's prompt carries a negative list of the
-  names and storylines used by public submissions to the same brief. One 40-message
-  slice is human-authored as an anchor.
+  names and storylines used by public submissions to the same brief. A nine-message slice
+  (three threads) is human-authored as an anchor; growing it to 40 messages is
+  deferred (`docs/later.md`).
 - `data/world/<name>/golden.jsonl`: labels derived from the script, not hand-written:
   items per day, claims and supersession, must-see per persona per day, absences.
 - `digest replay --world <name> --until <date>` and `digest run --user <id> --as-of <date>`
@@ -438,6 +449,12 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   `data/cassettes/<hash>.json` keyed by a canonical hash of (model, system, messages,
   schema, temperature) and replays when `DIGEST_MODE=replay`; strict replay raises on a
   miss. Tests and CI run in replay mode.
+- `digest say --as <persona> --channel <name> --at <time> --text <msg> --db <scratch>` adds
+  one message to a scratch copy of the store (never the base store) and to a script file;
+  `digest diff --as-of <date> --db <scratch>` shows, per reader, the digest lines added,
+  removed or moved against the base store, each with its reason. Together they drive the
+  digest the way a team drives Slack, for scenario tests and the demo
+  (`docs/plans/m3-driver.md`).
 
 ## 7. Evaluation
 
@@ -498,9 +515,11 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   configuration without its key.
 - Ranking ablation: each score term switched off in turn, with stale-belief person-days (M4 stretch), must-see recall and nDCG per persona
   reported. Off means the term is set to 1 with everything else fixed. A term stays when
-  it moves stale-belief person-days or must-see recall by at least `ablation.min_effect`
-  in `config/priors.yaml` (default 0.01, mean across personas); until person-days is
-  built, must-see recall or mean nDCG at 5 decide (D21). Otherwise it is removed.
+  switching it off makes stale-belief person-days higher or must-see recall lower, by at
+  least `ablation.min_effect` of the value with the term on (a fraction in
+  `config/priors.yaml`, default 0.01, mean across personas); until person-days is built,
+  must-see recall or mean nDCG at 5 decide, nDCG by the same rule (D21). Otherwise it is
+  removed.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction
@@ -614,8 +633,8 @@ reads it is built.
   read tools and usage skill. A1 to A8, A10. v0.4 stretch: the headline metrics, the regression gate, the coverage line,
   baselines beside every rate, abstention
   precision, pairwise judging, `digest diff`, `why_ranked` accepting an undelivered
-  item. The scrutability check (A12), the classifier comparison (Laya on Linux) and MCP
-  write tools stay stretch.
+  item. The scrutability check (A12), the classifier comparison (Laya on Linux) and the
+  MCP `feedback` tool stay stretch.
 - M5 (day 5): live Slack mode, Block Kit, failure handling, profile bootstrap from
   Slack with the onboarding DM, batch seeding of the corpus into a workspace. A9.
   Docker, devcontainer check, README design doc, ANSWERS.md, demo screenshots.

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# context-snapshot - PreCompact, SessionStart and PreToolUse(spawn_task)
+# launcher for context_snapshot.py. The handoff must never block a compaction,
+# a session start or a spawn, so this fence always exits 0 whatever the python
+# child does (missing interpreter, crash, malformed payload). The mode argument
+# passes through.
+set -u
+# Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
+# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
+# PATH but only print an install hint and exit non-zero, so they are skipped.
+# Nothing found -> a name that cannot resolve, so the launch below exits 127
+# and the fence still exits 0.
+PY="${CLAUDE_HOOK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for _c in python3 python; do
+    _p="$(command -v "$_c" 2>/dev/null)" || continue
+    case "$_p" in *WindowsApps*) continue ;; esac
+    PY="$_p"
+    break
+  done
+fi
+[ -n "$PY" ] || PY="python-interpreter-not-found"
+"$PY" "$(dirname "$0")/context_snapshot.py" "$@" || :
+exit 0

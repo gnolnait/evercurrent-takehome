@@ -1,0 +1,46 @@
+{
+  "key": "924b721b1c723394cb87b68e30c172263105e76e82fed74765a6241431594c50",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program status, schedule, gate reviews and decisions\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792423800.010077] author U0EM01: G-DVT1 is on day 9 and we're 4 days into the 7-day buffer. TST-THM-02 is still open, and the top-cover DFM review is still open too.\n[ts 1792423980.010078] author U0EE01: I still owe the thermal review closeout. The rerun with the new vent layout is queued, and I'll post the readout as soon as it finishes.\n[ts 1792424160.010079] author U0ME01: Top-cover DFM is waiting on the snap detail feedback. I can pull that into the same closeout path so we do not burn another day.\n[ts 1792424340.010080] author U0PM01: Please keep the buffer view current today. If either review slips past close of day, I'll flag the G-DVT1 schedule risk in the status note.\n[ts 1792424520.010081] author U0EM01: Thanks. Let's treat TST-THM-02 and top-cover DFM as the only blockers for the next G-DVT1 call unless someone sees another one."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages are a new thread on the program status channel about G-DVT1 schedule. They report buffer consumption (day 9, 4 of 7 buffer days used), two open items (TST-THM-02 and top-cover DFM review) and a thermal rerun still pending, and the PM states a schedule risk will be flagged if reviews slip, and that these two items are the blockers for the next call. This is schedule and blocker information a program member needs, so it carries project information. Only the thanks message is social, and the rest is substantive.\", \"probability\": 0.95}",
+    "data": {
+      "rationale": "The changed messages are a new thread on the program status channel about G-DVT1 schedule. They report buffer consumption (day 9, 4 of 7 buffer days used), two open items (TST-THM-02 and top-cover DFM review) and a thermal rerun still pending, and the PM states a schedule risk will be flagged if reviews slip, and that these two items are the blockers for the next call. This is schedule and blocker information a program member needs, so it carries project information. Only the thanks message is social, and the rest is substantive.",
+      "probability": 0.95
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 867,
+    "output_tokens": 187
+  },
+  "recorded_at": "2026-10-12T19:55:16.840643+00:00"
+}

@@ -1,0 +1,46 @@
+{
+  "key": "5d51bb16905abd81029b1640d0ce839b13aef569978374807a7ee449df1ee64d",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program status, schedule, gate reviews and decisions\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792084200.010053] author U0SC01: Reposting the DHL note from earlier: the SICK scanners still show the same tracking update as this morning.\n[ts 1792084320.010054] author U0PM01: Thanks <@U0SC01>. Sounds like no new info, just keeping it visible here.\n[ts 1792084440.010055] author U0EM01: Yep, noted. No program action from this unless DHL moves again."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages concern a DHL shipment tracking update for SICK scanners that is unchanged from earlier. The replies explicitly state there is no new information and no program action required unless DHL moves again. This is logistics chatter with no decision, blocker, risk, schedule change, spec or BOM change, or ask. It is only a weak status fyi about a shipment, so project relevance is low.\", \"probability\": 0.15}",
+    "data": {
+      "rationale": "The changed messages concern a DHL shipment tracking update for SICK scanners that is unchanged from earlier. The replies explicitly state there is no new information and no program action required unless DHL moves again. This is logistics chatter with no decision, blocker, risk, schedule change, spec or BOM change, or ask. It is only a weak status fyi about a shipment, so project relevance is low.",
+      "probability": 0.15
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 671,
+    "output_tokens": 143
+  },
+  "recorded_at": "2026-10-12T19:53:47.135117+00:00"
+}

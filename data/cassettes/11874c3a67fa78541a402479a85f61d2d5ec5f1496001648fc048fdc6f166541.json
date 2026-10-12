@@ -1,0 +1,46 @@
+{
+  "key": "11874c3a67fa78541a402479a85f61d2d5ec5f1496001648fc048fdc6f166541",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: RFQs, POs, shipments, allocation and clear-to-build\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792087200.010059] author U0EE01: <@U0SC01> quick check: was PO-45002211 amended to Rev C? I need to line up the EE AVL note with the PO rev."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message asks whether PO-45002211 was amended to Rev C, tied to aligning an EE AVL note with the PO revision. This is a direct question about a purchase order revision in a channel for POs and clear-to-build, so it is an ask about the program that a member needs to answer. It is not small talk.\", \"probability\": 0.9}",
+    "data": {
+      "rationale": "The changed message asks whether PO-45002211 was amended to Rev C, tied to aligning an EE AVL note with the PO revision. This is a direct question about a purchase order revision in a channel for POs and clear-to-build, so it is an ask about the program that a member needs to answer. It is not small talk.",
+      "probability": 0.9
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 597,
+    "output_tokens": 117
+  },
+  "recorded_at": "2026-10-12T19:54:17.618014+00:00"
+}

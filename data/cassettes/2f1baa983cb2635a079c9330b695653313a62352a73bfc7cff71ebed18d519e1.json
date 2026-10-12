@@ -1,0 +1,46 @@
+{
+  "key": "2f1baa983cb2635a079c9330b695653313a62352a73bfc7cff71ebed18d519e1",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program leads only: customer asks, budget and staffing\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792085700.010056] author U0PM01: <@U0EM01> pilot customer is pushing again for 600 kg payload. I’m worried this turns into a PRD churn risk if we let it in now.\n[ts 1792085880.010057] author U0EM01: Agree. We should keep the PRD at 500 kg through DVT-1 and treat 600 kg as a post-DVT-1 evaluation item.\n[ts 1792086060.010058] author U0PM01: Works for me. I’ll message it as: no PRD change before DVT-1, but we’ll capture the customer ask and revisit with data."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages discuss a customer request for a 600 kg payload versus the current 500 kg PRD. They record a decision to keep the PRD at 500 kg through DVT-1 and to treat the 600 kg ask as a post-DVT-1 evaluation item. This is a spec/PRD decision plus a customer ask about the program, directly relevant to program leads in a channel for customer asks. Not small talk.\", \"probability\": 0.96}",
+    "data": {
+      "rationale": "The changed messages discuss a customer request for a 600 kg payload versus the current 500 kg PRD. They record a decision to keep the PRD at 500 kg through DVT-1 and to treat the 600 kg ask as a post-DVT-1 evaluation item. This is a spec/PRD decision plus a customer ask about the program, directly relevant to program leads in a channel for customer asks. Not small talk.",
+      "probability": 0.96
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 729,
+    "output_tokens": 153
+  },
+  "recorded_at": "2026-10-12T19:53:51.151685+00:00"
+}

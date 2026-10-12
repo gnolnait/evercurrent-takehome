@@ -1,0 +1,177 @@
+{
+  "key": "2b160bb8c264181e503dd14084ab2527c5deec5a0b1626445e1ddfb2e5ead941",
+  "request": {
+    "model": "render",
+    "system": "You write Slack threads for a synthetic hardware engineering program. Each request describes one event. Write the thread in which the team discusses that event.\n\nStyle:\n- Write short, informal engineering chat. Most messages are one or two sentences.\n- Mention a person as <@USERID>, with the user id from the member list.\n- Write part numbers and revisions in the forms the glossary lists: the entity id or one of its aliases, and a revision as \"Rev B\".\n- Do not narrate the event or the story behind it. Do not invent people, parts or numbers that the request does not give.\n- The poster states a claim, or a member who would know it from their role states it.\n- When the noise knob indirection is on, each claim value is implied. Do not state it directly.\n- When the noise knob delayed_crosspost is on, the thread restates a post that was made earlier in another place.\n- Never write an event id, the scenario name or the word \"scenario\".\n\nOutput:\n- Return one JSON object that matches the output schema.\n- messages is the thread in order. The first message is the thread root. The poster of the event writes it.\n- poster is the user id of the member who writes the message.\n- day_offset is 0 for each message. The only exception is the answer to an answered ask: it has the day_offset that the request gives.\n- minutes_after_start is the number of minutes from the event's base time to the message. The base time is on the message's own day, and day_offset picks that day.\n- No message is earlier than the message before it.\n- files lists the names of the files that the message attaches.\n- reactions lists the emoji reactions to the message. Each has the emoji name and the user id of the member who reacts.\n- Write the number of messages that the request gives.\n\nNever use these names, ids or phrases:\n- Names: Atlas, Project Atlas, Sarah Chen, Priya Nair, Raj Patel, Marcus Lee, Lena Torres, David, Mei, Alex, Jun, Alice, Bob, Carol\n- Identifiers: MM-2100, MD-4820-X, BP-2400, PB-4800, CN-3100, HV-2400, E204, HC-SR04, GATE1, GATE2, M005\n- Phrases: Daily Digester, Communicator, Knowledge Cards, Engineering Intelligence Hub, warehouse docking robot, docking robot, autonomous trailer loading, late-delivery penalty, severity floor, why ranked, unresolved difference, top-k stories, 24V vs 48V, 12V motor, followings, scope prompt, content_index, dirty hours, digest invite-all, 10-week motor controller lead time, board bring-up, atlas-general, atlas-mechanical, atlas-electrical, atlas-testing, atlas-supply-chain, atlas-leadership, hw-electrical, mech-design, ee-hardware, project-general",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Program: Kestrel K2. A compact autonomous mobile robot that moves totes between racks and packing stations in a warehouse.\nChannel: #eng-elec-fw. Purpose: PCBA, harness, EMC, BMS, firmware releases and the safety chain.\nMembers:\n- U0ME01: Nadia Brenner, ME; also called Nadia, @nadia\n- U0EE01: Tobias Lindqvist, EE; also called Tobias, @tobias, Tobi\n- U0FW01: Ana Folau, FW; also called Ana, @ana\n- U0EM01: Grace Okonkwo, EM; also called Grace, @grace\nPoster: U0FW01 (Ana Folau).\nDay: Wednesday 2026-10-21.\nKind: spec_change.\nSummary: FW adds a 50 ms software filter on the bumper input, in parallel with the ME bracket fix.\nClaims:\n- PN-21040 (aliases: safety IO board): spec_param is bumper input filter 50 ms\nTarget message count: 3 to 8.\nEarlier posts on the same topic:\n- Tuesday 2026-10-20: The ME designs a stiffer bumper-switch bracket to stop false triggers."
+      }
+    ],
+    "output_schema": {
+      "$defs": {
+        "RenderedMessage": {
+          "additionalProperties": false,
+          "properties": {
+            "poster": {
+              "enum": [
+                "U0ME01",
+                "U0EE01",
+                "U0FW01",
+                "U0EM01"
+              ],
+              "title": "Poster",
+              "type": "string"
+            },
+            "day_offset": {
+              "title": "Day Offset",
+              "type": "integer"
+            },
+            "minutes_after_start": {
+              "title": "Minutes After Start",
+              "type": "integer"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            },
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Files",
+              "type": "array"
+            },
+            "reactions": {
+              "items": {
+                "$ref": "#/$defs/RenderedReaction"
+              },
+              "title": "Reactions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "poster",
+            "day_offset",
+            "minutes_after_start",
+            "text",
+            "files",
+            "reactions"
+          ],
+          "title": "RenderedMessage",
+          "type": "object"
+        },
+        "RenderedReaction": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "user_id": {
+              "enum": [
+                "U0ME01",
+                "U0EE01",
+                "U0FW01",
+                "U0EM01"
+              ],
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "user_id"
+          ],
+          "title": "RenderedReaction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/RenderedMessage"
+          },
+          "title": "Messages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "title": "RenderedThread",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"messages\":[{\"poster\":\"U0FW01\",\"day_offset\":0,\"minutes_after_start\":0,\"text\":\"Following up on yesterday's bracket note: FW is adding a bumper input filter on PN-21040. Spec param is 50 ms, in parallel with <@U0ME01>'s stiffer switch bracket fix.\",\"files\":[],\"reactions\":[{\"name\":\"eyes\",\"user_id\":\"U0EE01\"}]},{\"poster\":\"U0ME01\",\"day_offset\":0,\"minutes_after_start\":4,\"text\":\"Yep, ME fix is still moving. This shouldn't block the bracket update; it just gives us more margin on chatter.\",\"files\":[],\"reactions\":[]},{\"poster\":\"U0EE01\",\"day_offset\":0,\"minutes_after_start\":8,\"text\":\"Works for EE. Please keep it scoped to the bumper input only on PN-21040 so we don't mask any other safety IO edges.\",\"files\":[],\"reactions\":[{\"name\":\"+1\",\"user_id\":\"U0FW01\"}]},{\"poster\":\"U0FW01\",\"day_offset\":0,\"minutes_after_start\":12,\"text\":\"Confirmed, bumper input only. I'll put it behind the existing safety IO config path and tag the FW release note.\",\"files\":[],\"reactions\":[]},{\"poster\":\"U0EM01\",\"day_offset\":0,\"minutes_after_start\":18,\"text\":\"Thanks. Add a quick bench log when it's in, and note that the mechanical bracket fix is still required.\",\"files\":[],\"reactions\":[{\"name\":\"white_check_mark\",\"user_id\":\"U0FW01\"}]}]}",
+    "data": {
+      "messages": [
+        {
+          "poster": "U0FW01",
+          "day_offset": 0,
+          "minutes_after_start": 0,
+          "text": "Following up on yesterday's bracket note: FW is adding a bumper input filter on PN-21040. Spec param is 50 ms, in parallel with <@U0ME01>'s stiffer switch bracket fix.",
+          "files": [],
+          "reactions": [
+            {
+              "name": "eyes",
+              "user_id": "U0EE01"
+            }
+          ]
+        },
+        {
+          "poster": "U0ME01",
+          "day_offset": 0,
+          "minutes_after_start": 4,
+          "text": "Yep, ME fix is still moving. This shouldn't block the bracket update; it just gives us more margin on chatter.",
+          "files": [],
+          "reactions": []
+        },
+        {
+          "poster": "U0EE01",
+          "day_offset": 0,
+          "minutes_after_start": 8,
+          "text": "Works for EE. Please keep it scoped to the bumper input only on PN-21040 so we don't mask any other safety IO edges.",
+          "files": [],
+          "reactions": [
+            {
+              "name": "+1",
+              "user_id": "U0FW01"
+            }
+          ]
+        },
+        {
+          "poster": "U0FW01",
+          "day_offset": 0,
+          "minutes_after_start": 12,
+          "text": "Confirmed, bumper input only. I'll put it behind the existing safety IO config path and tag the FW release note.",
+          "files": [],
+          "reactions": []
+        },
+        {
+          "poster": "U0EM01",
+          "day_offset": 0,
+          "minutes_after_start": 18,
+          "text": "Thanks. Add a quick bench log when it's in, and note that the mechanical bracket fix is still required.",
+          "files": [],
+          "reactions": [
+            {
+              "name": "white_check_mark",
+              "user_id": "U0FW01"
+            }
+          ]
+        }
+      ]
+    },
+    "backend": "openrouter",
+    "model": "openai/gpt-5.5",
+    "input_tokens": 1116,
+    "output_tokens": 577
+  },
+  "recorded_at": "2026-10-12T17:40:21.190438+00:00"
+}

@@ -1,4 +1,4 @@
-"""The triage and extraction prompts and their requests (plan B1.2, B1.3)."""
+"""The triage and extraction prompts and their requests (plan B1.2, B1.3, Q1 to Q3, Q7)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,18 @@ from digest.models import Event, Glossary, Item
 from digest.project import ProjectConfig
 from digest.store import ThreadDelta
 
-EXTRACT_PROMPT_VERSION = "m2.1"  # covers the triage and the extraction prompt
+EXTRACT_PROMPT_VERSION = "m2.3"  # triage and extraction prompts; m2.3 adds plan Q7
 
 # One rule per line: a reader can find each rule of plan B1.3 on its own line.
 EXTRACT_SYSTEM = "\n".join(
     (
         "You read one Slack thread of a hardware engineering program and extract project items.",
-        "The user message lists, in this order: the glossary of entities and people, the open"
-        " checklist tasks, the existing items of this thread, the thread root and the changed"
-        " messages.",
+        "The user message lists, in this order: the glossary of entities and people, the checklist"
+        " tasks of gates on or after today, the existing items of this thread, the thread root"
+        " and the changed messages.",
+        "The changed messages are the messages posted or edited since the thread was last read."
+        " This delta is the set of changed messages.",
+        "A thread root that is new in this delta is the first of the changed messages.",
         "Return items for new information only: a decision, a blocker, a risk, a schedule change,"
         " a spec change, a BOM change, an ask, or an fyi that a program member needs to know.",
         "Do not return an item again when a changed message adds nothing to an existing item.",
@@ -39,8 +42,8 @@ EXTRACT_SYSTEM = "\n".join(
         " progress on the task: a run, a result, a review held, a sign-off, a part received.",
         "Set effect to done only when a message states that the task is complete; else set"
         " effect to evidence. Each task link names the evidence message that shows the progress.",
-        "A question about a task is not evidence, and a status roll-up that lists a task as open"
-        " is not evidence.",
+        "A task link needs a progress report: a question about a task, or a status roll-up that"
+        " lists a task as open, is not a task link. A question can still be an ask item.",
         "Write the rationale first, before every other field, for the output and for each item.",
         "When the changed messages carry no new project information, return an empty items list.",
     )
@@ -51,9 +54,12 @@ TRIAGE_SYSTEM = "\n".join(
         "You read one Slack thread of a hardware engineering program.",
         "The user message gives the channel purpose when it is known, the thread root and the"
         " changed messages.",
+        "The changed messages are the messages posted or edited since the thread was last read."
+        " This delta is the set of changed messages.",
+        "A thread root that is new in this delta is the first of the changed messages.",
         "Give the probability, from 0 to 1, that the changed messages carry project information:"
-        " a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, or an"
-        " ask about the program.",
+        " a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask"
+        " about the program, or an fyi that a program member needs to know.",
         "Small talk, thanks and social messages are not project information.",
         "Write the rationale first, then the probability.",
     )
@@ -144,12 +150,22 @@ def _existing_section(existing: Sequence[Item]) -> str:
 
 
 def _thread_section(delta: ThreadDelta, citable: Sequence[Event], *, with_files: bool) -> str:
-    """The root, then the changed messages in ts order. A deleted row never enters a prompt."""
+    """The root section, then the changed messages in ts order (plan Q1).
+
+    A root among the delta's changed rows is listed once, as the first changed message, and the
+    root section says that it is new in this delta. Any other root is context in the root
+    section. A deleted row never enters a prompt.
+    """
     rows = sorted((row for row in citable if not row.deleted), key=lambda row: row.ts_us)
+    changed_ts = {row.ts for row in delta.changed}
     root = [row for row in rows if row.ts == delta.thread_ts]
-    changed = [row for row in rows if row.ts != delta.thread_ts]
+    new_root = bool(root) and delta.thread_ts in changed_ts
+    changed = [row for row in rows if new_root or row.ts != delta.thread_ts]
     lines = ["Thread root:"]
-    lines += [_message(row, with_files=with_files) for row in root] or ["not available"]
+    if new_root:
+        lines.append("new in this delta: it is the first changed message below")
+    else:
+        lines += [_message(row, with_files=with_files) for row in root] or ["not available"]
     lines.append("Changed messages, oldest first:")
     lines += [_message(row, with_files=with_files) for row in changed] or ["none"]
     return "\n".join(lines)

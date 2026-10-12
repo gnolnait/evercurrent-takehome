@@ -1,0 +1,46 @@
+{
+  "key": "ad65252778150b0b7b240d1236a930d64c17f579cc7dab2738aafcf1b03e05e9",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program status, schedule, gate reviews and decisions\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792683000.010116] author U0EM01: Decision from today: G-DVT1 is a conditional GO. Open conditions are the thermal review and the battery ship plan.\n[ts 1792683120.010117] author U0PM01: Got it. I’ll track those two as gate conditions in the program notes.\n[ts 1792683300.010118] author U0EE01: I’ll own the thermal review inputs from EE. Need the latest run plots before we call it closed.\n[ts 1792683420.010119] author U0SC01: I’ll take the battery ship plan. I’ll confirm carrier constraints and packout timing.\n[ts 1792683600.010120] author U0EM01: Thanks. Please post updates here when each condition is ready for signoff."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread root is a new gate decision: G-DVT1 was declared a conditional GO with two open conditions (thermal review and battery ship plan). Follow-up messages assign owners to each condition and set a reporting expectation. This is a decision plus ownership and schedule-relevant conditions, all core program information. No social-only content.\", \"probability\": 0.97}",
+    "data": {
+      "rationale": "The thread root is a new gate decision: G-DVT1 was declared a conditional GO with two open conditions (thermal review and battery ship plan). Follow-up messages assign owners to each condition and set a reporting expectation. This is a decision plus ownership and schedule-relevant conditions, all core program information. No social-only content.",
+      "probability": 0.97
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 776,
+    "output_tokens": 124
+  },
+  "recorded_at": "2026-10-12T19:56:37.489774+00:00"
+}

@@ -1,0 +1,46 @@
+{
+  "key": "9af32efa76b539155bf132590e8d2ee06960e3a60575f24a2fe9efa1bc336850",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: RFQs, POs, shipments, allocation and clear-to-build\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791909900.010014] author U0SC01: Heads up: the six EVT spare compute units are on PN-42011, and that carrier is LTB passed / NCNR for any new PO.\n[ts 1791910020.010015] author U0EM01: Thanks <@U0SC01>. Do we have enough already on hand to cover the EVT spares, or is this blocking the build plan?\n[ts 1791910200.010016] author U0SC01: Not calling it blocked yet. I’m checking allocation and will flag if the spare pool needs a different path.\n[ts 1791910320.010017] author U0EE01: EE note: Xavier carrier and CTI carrier are the same PN-42011 here, so please keep the PO line tied to the PN and not just the nickname.\n[ts 1791910500.010018] author U0PM01: Got it. Please tag me if the NCNR exposure changes the EVT spare count or timing."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages carry project information: PN-42011 is LTB passed but NCNR for new POs, which bears on EVT spare procurement, and there is an open question about whether it blocks the build plan. The EE note about keeping the PO line tied to the PN rather than the nickname is a BOM/PO instruction, and the PM asks to be tagged if exposure changes count or timing. Some lines are routine acknowledgments, but the thread as a whole is substantive program content in an RFQ/PO/allocation channel.\", \"probability\": 0.9}",
+    "data": {
+      "rationale": "The changed messages carry project information: PN-42011 is LTB passed but NCNR for new POs, which bears on EVT spare procurement, and there is an open question about whether it blocks the build plan. The EE note about keeping the PO line tied to the PN rather than the nickname is a BOM/PO instruction, and the PM asks to be tagged if exposure changes count or timing. Some lines are routine acknowledgments, but the thread as a whole is substantive program content in an RFQ/PO/allocation channel.",
+      "probability": 0.9
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 836,
+    "output_tokens": 185
+  },
+  "recorded_at": "2026-10-12T19:52:34.831033+00:00"
+}

@@ -1,7 +1,8 @@
-"""Verification in code: quotes, ids and links the model returned (plan B1.5, D5)."""
+"""Verification in code: quotes, ids, links and claim value forms (plan B1.5, Q5, D5)."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import date
 
@@ -42,6 +43,11 @@ DROP_FIELDS = (
     "claims.stale",
     "tasks.stale",
 )
+
+# Plan Q5: a revision token with an optional "rev" prefix; a first word that is a whole number,
+# with optional thousands commas and an optional "/" count.
+_REV = re.compile(r"(?:(?i:rev)\.?\s*)?([A-Za-z0-9]+)")
+_QTY = re.compile(r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:/(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+))?")
 
 
 class Verified(Frozen):
@@ -98,7 +104,7 @@ def _evidence(
         if event is None:
             drops["evidence.unknown_message"] += 1
             return None
-        if not _quotes(entry.quote, event):
+        if not quotes(entry.quote, event):
             drops["evidence.quote"] += 1
             return None
         verified[entry.message_ts] = Evidence(
@@ -130,7 +136,8 @@ def _cited_event(
     return event
 
 
-def _quotes(quote: str, event: Event) -> bool:
+def quotes(quote: str, event: Event) -> bool:
+    """True when the quote, spaces normalized, is in the text of the message."""
     # An empty quote is a substring of every text, so it proves nothing.
     span = normalize_space(quote)
     return bool(span) and span in normalize_space(event.text)
@@ -155,13 +162,26 @@ def _claims(
                 Claim(
                     entity=entity,
                     attribute=claim.attribute,
-                    value=claim.value,
+                    value=_claim_value(claim.attribute, claim.value),
                     channel_id=event.channel_id,
                     message_ts=claim.message_ts,
                     authority=_authority(event.user_id, glossary),
                 )
             )
     return claims
+
+
+def _claim_value(attribute: str, value: str) -> str:
+    """The value in its compared form (plan Q5). Only rev and qty change.
+
+    A value that does not match its form is kept as given.
+    """
+    if attribute == "rev" and (match := _REV.fullmatch(value.strip())):
+        return match.group(1).upper()
+    words = value.split()
+    if attribute == "qty" and words and (match := _QTY.fullmatch(words[0])):
+        return match.group(1).replace(",", "")
+    return value
 
 
 def _authority(user_id: str, glossary: Glossary) -> Authority:
@@ -211,7 +231,7 @@ def _merge(
     for entry in old.evidence:
         if _key(entry) in incoming:
             merged.append(incoming.pop(_key(entry)))
-        elif _in_delta(entry, citable) and not _quotes(entry.quote, citable[entry.message_ts]):
+        elif _in_delta(entry, citable) and not quotes(entry.quote, citable[entry.message_ts]):
             drops["evidence.stale"] += 1
         else:
             merged.append(entry)

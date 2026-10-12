@@ -28,6 +28,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "mcp__ccd_session__spawn_task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" spawn-hook || :; fi; exit 0",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -37,6 +47,29 @@
           {
             "type": "command",
             "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-track-edit\"; if [ -x \"$f\" ]; then \"$f\" || :; fi; exit 0",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" snapshot || :; fi; exit 0",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" print || :; fi; exit 0",
             "timeout": 15
           }
         ]

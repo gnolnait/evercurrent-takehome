@@ -53,3 +53,7 @@ prove *ARGS:
 # Regenerate the review-lens agents from .claude/review-lenses (kit script)
 lenses:
     python ~/Documents/dev-kit/bin/gen_review_lens_agents.py
+
+# Copy the shared .claude files from dev-kit; add --check to report drift (kit script)
+sync-kit *ARGS:
+    python ~/Documents/dev-kit/bin/sync_project.py "$@"

@@ -1,0 +1,46 @@
+{
+  "key": "726ea85511cef99da4d95c2ec8e6718a72812011cf0e9c32c5b9e1053095748a",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Posts from PLM, the program schedule and document control\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791820500.010002] author B0SCH01: Schedule sync: PN-51010 T1 is on 2026-10-14, and G-DVT1 is on 2026-10-22."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message is a new thread root from a PLM and program schedule channel that states concrete schedule dates: a T1 build date for PN-51010 and a DVT1 gate date. That is a schedule fact a program member needs to know, so it carries project information. It is not small talk or a social message.\", \"probability\": 0.93}",
+    "data": {
+      "rationale": "The changed message is a new thread root from a PLM and program schedule channel that states concrete schedule dates: a T1 build date for PN-51010 and a DVT1 gate date. That is a schedule fact a program member needs to know, so it carries project information. It is not small talk or a social message.",
+      "probability": 0.93
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 589,
+    "output_tokens": 110
+  },
+  "recorded_at": "2026-10-12T19:51:41.503400+00:00"
+}

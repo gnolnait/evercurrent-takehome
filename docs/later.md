@@ -15,8 +15,8 @@ would promote it.
   store and act through feedback events; that assistant supplies the agent loop, the
   ask-user step and scheduling. What remains for a product-owned agent, built on the
   Claude Agent SDK as a separate component from the pipeline (D3):
-  - `update_profile_field` as an MCP write tool, with `source = agent_proposed` until
-    the user confirms.
+  - `update_profile_field` as an action of the MCP `feedback` tool, so the tool list
+    stays at ten, with `source = agent_proposed` until the user confirms.
   - A product-owned ask-user step in Slack: one button-answerable question in the
     user's DM, one open question per user, used for "asks back" and low-confidence
     profile edits. Never free-text prompts.
@@ -98,3 +98,7 @@ would promote it.
 - The author's digest showing where their own decision did not land (landing map read
   from the author's side).
 - Transient backoff for 429 and 5xx on the gateway during record runs.
+- Anchor slice to 40 messages. SPEC section 6 asked for a 40-message human-authored
+  slice; M2 ships nine. Add 31 human-written lines in two or three threads to
+  `data/world/kestrel/anchor.jsonl` with their `authored: human` manifest entries, then
+  re-render. Trigger: after the 2026-10-14 interview.
