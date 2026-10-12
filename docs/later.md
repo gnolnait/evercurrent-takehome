@@ -108,9 +108,12 @@ would promote it.
 In order. Each item names its trigger. Measured numbers are from
 `reports/eval-2026-10-23.md`.
 
-1. Absence false alarms. Per-scenario tests on task-link extraction, because silence is
-   counted from links the extractor writes; ask absences go only to the asker and the
-   owner. Trigger: SPEC A6 fails (0.304, n = 23, against 0.20).
+1. Absence false alarms. Compute the SPEC A6 rate over simulated silences that were not
+   stalls; the report's "false-alarm rate" today is false lines over all absence lines
+   (7 of 23). Score whole episodes, not one row per open task per day, and report the
+   delay in days. Then add per-scenario tests on task-link extraction, because silence
+   is counted from links the extractor writes; ask absences go only to the asker and the
+   owner. Trigger: 30% of the absence lines are false.
 2. Claim value against the cited text (D5). Check each claim value in the cited message
    after Slack-aware normalization (mentions, links, markup, curly quotes); on a miss,
    search the message for a supporting span and check again before the drop. A verbatim
