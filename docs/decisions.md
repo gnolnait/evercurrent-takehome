@@ -142,9 +142,11 @@ part carries the run id in message metadata so retries post only missing parts; 
 invalid tokens stop retries and mark the install inactive; auth failures, and a run with
 scheduled recipients that delivered nothing, raise an admin alert.
 
-Amended 2026-10-12 (design): the event listener writes the raw event to the store before
-it acknowledges. Bolt acknowledges before the listener runs, so a crash after the ack
-loses the event, and Slack does not send it again. The reconciliation read runs before
+Amended 2026-10-12 (design): the raw event is in the store before Slack gets the ack. By
+default Bolt acknowledges an Events API request before the listener runs, so a crash
+after the ack loses the event, and Slack does not send it again. The app runs with
+`process_before_response=True`: the listener writes the raw event, Bolt then acknowledges,
+and slow work reads the event from the store. The reconciliation read runs before
 each digest build, not once a night, and reads `conversations.replies` for threads with
 recent activity, because `conversations.history` returns top-level messages only. A
 commercial app outside the Marketplace gets one history request per minute with 15
@@ -212,7 +214,7 @@ the generator's legibility, not the system. A researcher reviewer will look for 
 Amended 2026-10-12: the judge's model family differs from both the extractor and the
 corpus renderer. A judge from the renderer's family grades text its own family wrote.
 `config/models.yaml` maps `judge` and `render` to the same model; the judge moves to a
-third family before its first run.
+third family before its first run. This replaces the GPT-class judge in D15.
 
 ## D13. Testing the two external boundaries without network
 
@@ -441,7 +443,9 @@ table and one recursive query with a hop limit walks them; a graph database is n
 needed at this scale. Each edge records its source: a system of record (PLM, the
 tracker, the gate plan) or chat extraction. Only system-of-record edges at one hop
 reach the must-see lane. A chat-extracted edge, or a second hop, goes to the ranked
-lane until its precision is measured, because errors multiply per hop.
+lane until its precision is measured, because errors multiply per hop. This narrows the
+dependency rule of D6 and SPEC section 5 step 6. The v1 `depends_on` edges come from the
+world file, which stands in for a system of record, so the v1 rule does not change.
 
 ## D23. Evaluation gates
 

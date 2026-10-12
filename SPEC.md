@@ -246,7 +246,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
 
 1. Ingest: events into SQLite, idempotent on (channel_id, ts). Replay feeds the JSONL
    corpus under a simulated clock. Live uses slack_sdk with resumable backfill, Socket
-   Mode events, event_id dedup and a nightly 26-hour reconciliation read. `digest import plm`
+   Mode events, each raw event written to the store before the ack (D7), event_id dedup,
+   and a reconciliation read before each digest build that also reads thread replies.
+   `digest import plm`
    (stretch) renders each CSV row as a `plm_bot` post into the feed channel named by
    `--channel`, which must already exist in the store with its visibility (else refused),
    `ts` from the row's `asserted_ts` and row order, so it enters this step like any event
@@ -313,7 +315,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
-   owned entities, a change on an entity an owned entity depends on, an open
+   owned entities, a change on an entity an owned entity depends on (one hop, on an edge
+   from a system of record; a chat-extracted edge or a second hop is ranked, D22), an open
    contradiction on an owned key, a stale value on an entity the reader's pending
    checklist task touches, a stale reference to a buildable document posted into an
    external channel for the document's owner, and an action taken against a superseded

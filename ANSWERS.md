@@ -151,8 +151,8 @@ so that every side effect is safe to repeat.
   connections deliver duplicates; make feedback writes upserts.
 - Acknowledge fast, work later. Events and button clicks must be acknowledged within
   three seconds or Slack retries; slow work (LLM calls, extraction) runs after the ack.
-  Write the raw event to the store before the ack: Bolt acknowledges before the
-  listener runs, so a crash after the ack loses the event.
+  Write the raw event to the store before the ack: by default Bolt acknowledges before
+  the listener runs, so a crash after the ack loses the event.
 - Assume live events will be missed. Socket Mode reconnects on its own; a
   reconciliation read before each digest build fills gaps, and it also walks thread
   replies, because channel history does not show a new reply to an old thread; backfill resumes from a stored
