@@ -460,10 +460,20 @@ def test_upsert_items_replaces_fields_and_provenance(tmp_path: Path) -> None:
         assert db.items_for_thread(original.thread_id) == []
         assert db.items_for_thread(replacement.thread_id) == [replacement]
         assert db.items(AS_OF) == [replacement]
+        cutoff = EPOCH + timedelta(seconds=1_760_000_000, microseconds=3)
+        assert db.items(cutoff) == []
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT item_id, prompt_version, model FROM items"
         ).fetchall() == [(original.item_id, "m2.2", "other")]
+    with Store.open(path) as db:
+        earlier = item(
+            item_id="I2",
+            thread_id=replacement.thread_id,
+            first_seen="1760000000.000002",
+        )
+        db.upsert_items([earlier], prompt_version="m2.2", model="other")
+        assert db.items_for_thread(replacement.thread_id) == [earlier, replacement]
 
 
 def test_upsert_items_refuses_absence(store: Store) -> None:
