@@ -14,6 +14,8 @@ import yaml
 from pydantic import ValidationError
 
 from digest import __version__
+from digest.absence import detect_absences
+from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
 from digest.llm.cassette import CassetteMiss
@@ -22,7 +24,9 @@ from digest.priors import DEFAULT_PRIORS_PATH, load_priors
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
+from digest.world.golden import derive_golden, write_golden
 from digest.world.load import load_world
+from digest.world.manifest import load_manifest
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -152,7 +156,35 @@ def absences(
     ),
 ) -> None:
     """Print the absence items as of the store's day, one JSON object per line."""
-    raise typer.Exit(code=_not_yet("absences"))
+    settings = Settings()
+    name = world or settings.world
+    path = db or settings.db or Path("data") / f"{name}.sqlite"
+    if not path.is_file():  # Store.open would create an empty store file
+        _refuse(f"no store at {path}; run digest replay first")
+    try:
+        loaded = load_world(Path("data") / "world" / name / "world.yaml")
+        priors = load_priors()
+    except (OSError, ValueError, yaml.YAMLError) as error:  # ValueError: ValidationError too
+        _refuse(str(error))
+    with _open_store(path) as store:
+        stored_world, until = store.get_meta("world"), store.get_meta("until")
+        if stored_world != name:
+            _refuse(f"the store holds world {stored_world!r}, not {name!r}")
+        if until is None:
+            _refuse(f"store {path} has no meta key 'until'; run digest replay first")
+        as_of = _instant(until)
+        if as_of is None:
+            _refuse(
+                f"store {path} meta key 'until' is {until!r}, "
+                "not an ISO timestamp with a UTC offset"
+            )
+        if store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of):
+            _refuse(
+                f"store {path} has thread deltas pending as of {until}; run digest extract first"
+            )
+        found = detect_absences(store, loaded.project, priors, as_of, ZoneInfo(loaded.timezone))
+    for item in found:
+        typer.echo(item.model_dump_json())
 
 
 @app.command()
@@ -179,13 +211,7 @@ def replay(
     if not (world_dir / "world.yaml").is_file():
         _refuse(f"no such world: {world_dir / 'world.yaml'}")
     path = db or settings.db or Path("data") / f"{name}.sqlite"
-    try:
-        store = Store.open(path)
-    except ValueError as error:  # another schema version; the message names the store
-        _refuse(str(error))
-    except (OSError, sqlite3.DatabaseError) as error:
-        _refuse(f"cannot open store {path}: {error}")
-    with store:
+    with _open_store(path) as store:
         try:
             report = replay_world(store, world_dir, day)
         except ValueError as error:  # ReplayRefused and ReplayFormatError
@@ -247,7 +273,23 @@ def world_golden(
     ),
 ) -> None:
     """Derive golden.jsonl from the world script and the render manifest."""
-    raise typer.Exit(code=_not_yet("world golden"))
+    world_dir = Path("data") / "world" / (world or Settings().world)
+    try:
+        loaded = load_world(world_dir / "world.yaml")
+        manifest = load_manifest(world_dir / "manifest.json")
+        priors = load_priors()
+    except (OSError, ValueError, yaml.YAMLError) as error:  # ValueError: ValidationError too
+        _refuse(str(error))
+    try:
+        golden = derive_golden(loaded, manifest, priors)
+    except KeyError as error:
+        _refuse(f"{world_dir / 'manifest.json'} has no thread for event {error.args[0]}")
+    path = world_dir / "golden.jsonl"
+    write_golden(golden, path)
+    typer.echo(
+        f"{path}: {len(golden.items)} items, {len(golden.absences)} absences, "
+        f"{len(golden.distractors)} distractors"
+    )
 
 
 def _stored(store: Store, key: str) -> str:
@@ -261,6 +303,25 @@ def _stored(store: Store, key: str) -> str:
 def _with_notes(error: BaseException) -> str:
     """The error message, then each note added to the error, one per line."""
     return "\n".join([str(error), *getattr(error, "__notes__", ())])
+
+
+def _open_store(path: Path) -> Store:
+    """Open the store, or refuse for a file that is not SQLite or of another schema version."""
+    try:
+        return Store.open(path)
+    except ValueError as error:  # another schema version; the message names the store
+        _refuse(str(error))
+    except (OSError, sqlite3.DatabaseError) as error:
+        _refuse(f"cannot open store {path}: {error}")
+
+
+def _instant(text: str) -> datetime | None:
+    """The aware datetime of an ISO timestamp with an offset; None for anything else."""
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
 
 
 def _refuse(reason: str) -> NoReturn:

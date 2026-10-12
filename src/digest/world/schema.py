@@ -153,6 +153,7 @@ class World(Frozen):
         self._check_entities()
         self._check_personas()
         self._check_events()
+        self._check_asks()
         self._check_calendar()
         return self
 
@@ -240,6 +241,27 @@ class World(Frozen):
                             f"event {eid}: {target_id} is not another earlier or same-day event "
                             f"with a claim on {claim.entity} {claim.attribute}"
                         )
+
+    def _check_asks(self) -> None:
+        personas = {persona.user_id: persona for persona in self.personas}
+        for event in self.events:
+            eid, ask = event.id, event.ask
+            if (event.kind == "ask") != (ask is not None):
+                raise ValueError(f"event {eid}: ask is set exactly when kind is ask")
+            if ask is None:
+                continue
+            asked = personas.get(ask.of)
+            if asked is None or asked.kind != "human":
+                raise ValueError(f"event {eid}: ask.of {ask.of} is not a human persona")
+            if event.channel not in asked.channels:
+                raise ValueError(f"event {eid}: ask.of {ask.of} is not in {event.channel}")
+            if ask.of == event.poster:
+                raise ValueError(f"event {eid}: ask.of {ask.of} is the poster")
+            if ask.answered_day is not None and not event.day <= ask.answered_day <= self.days:
+                raise ValueError(
+                    f"event {eid}: ask.answered_day {ask.answered_day} is outside "
+                    f"{event.day}..{self.days}"
+                )
 
     def _check_calendar(self) -> None:
         if self.start_date.weekday() != 0:
