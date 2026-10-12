@@ -15,6 +15,9 @@ Arguments: $ARGUMENTS
 - HEAD: `git rev-parse HEAD`.
 - **Dirty tree** — if `git status --porcelain --untracked-files=no` is non-empty, stop and say so: a verdict
   would describe code no commit holds. Commit or stash first. Do not work around it.
+- `<root>`: the first `worktree` path that `git worktree list --porcelain` prints. This is
+  the main checkout, also when you run in a linked worktree. Every `.review/` path in
+  this command and in `ORCHESTRATOR.md` is under `<root>`, never under the current checkout.
 
 To see the change first: `git diff --stat <base>...<head>`.
 
@@ -41,6 +44,9 @@ Pass these `args`:
 - `prior`: the `findings` of an earlier verdict at this head (a re-run), else `[]`.
 - `carried`: the `findings` of verdicts at older heads of this branch, each with that
   verdict's `head` added, else `[]`.
+
+Read the earlier verdicts from `<root>/.review/*/verdict.json` and match on the
+verdict's `branch` key, as in the STEP 4 ratchet of `ORCHESTRATOR.md`.
 - `max_verify`: 8, unless the user asks for another cap.
 
 The workflow does STEP 3 and the per-lead part of STEP 4 of `ORCHESTRATOR.md`. It sends
@@ -79,8 +85,8 @@ Map the workflow result onto the STEP 5 keys:
 
 ## 5. Write the verdict
 
-Write the STEP 5 JSON to `.review/<head-sha>/verdict.json`. `.review/` is local scratch
-and must stay gitignored; never commit it. If verification did not finish, set
+Write the STEP 5 JSON to `<root>/.review/<head-sha>/verdict.json`. `.review/` is local
+scratch and must stay gitignored; never commit it. If verification did not finish, set
 `verification_complete: false` and say the review is incomplete — never present
 partial results as a clean review.
 
@@ -91,4 +97,5 @@ Lead with the DIRECTION judgment. Then group findings by lens, each as
 `file:line — severity — reason`, and state which files each lens read (from its
 `coverage.files_read`). A finding about a file its lens never read is out of that
 lens's evidence — say so rather than presenting it as a gap in the code. List any
-"Unverified leads" (findings no lens raised) separately, then the verdict path.
+"Unverified leads" (findings no lens raised) separately, then the full verdict path
+under `<root>`.
