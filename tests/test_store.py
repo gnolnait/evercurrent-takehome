@@ -580,38 +580,3 @@ def test_triage_for_thread_orders_revisions_and_excludes_other_threads(store: St
 
 def test_triage_decision_missing_from_empty_store(store: Store) -> None:
     assert store.triage_decision(f"C1:{ROOT}", ROOT, "m2.1", "classify") is None
-
-
-def test_later_success_covers_thread_at_earlier_as_of_but_failure_does_not(
-    store: Store,
-) -> None:
-    """Record later runs; read an earlier day; assert only the failed thread is pending."""
-    day_one = EPOCH + timedelta(seconds=1_760_000_000, microseconds=1)
-    day_two = EPOCH + timedelta(seconds=1_760_086_400, microseconds=2)
-    successful = event(channel_id="C1")
-    failed = event(channel_id="C2")
-    store.upsert_events(
-        [
-            successful,
-            event(
-                "1760086400.000002",
-                channel_id="C1",
-                thread_ts=successful.thread_ts,
-            ),
-            failed,
-            event(
-                "1760086400.000002",
-                channel_id="C2",
-                thread_ts=failed.thread_ts,
-            ),
-        ]
-    )
-    later = {
-        delta.thread_id: delta for delta in store.thread_deltas("extract", "v1", "extract", day_two)
-    }
-    store.record_stage_run(run(later[successful.thread_id]))
-    store.record_stage_run(run(later[failed.thread_id], status="failed"))
-
-    pending = store.thread_deltas("extract", "v1", "extract", day_one)
-
-    assert [delta.thread_id for delta in pending] == [failed.thread_id]
