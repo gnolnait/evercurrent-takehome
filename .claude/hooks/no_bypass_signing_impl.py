@@ -25,9 +25,10 @@ old `tr`-split + regex version false-blocked exactly that (a message with a
 `;` before `git ... --no-verify ...` prose).
 
 It also follows transparent wrappers (env / command / sudo / nice / timeout),
-shell-string wrappers (`sh -c '...'`, `eval '...'`, incl. `bash -lc`, and
-`powershell -Command` / `pwsh -c` / `cmd /c`; an encoded PowerShell command
-fails closed), Windows program names (`git.exe`, a full path to git),
+shell-string wrappers (`sh -c '...'`, `eval '...'`, incl. `bash -lc`),
+Windows shells (`powershell`, `pwsh`, `cmd`: their text is not parsed, so git
+plus a bypass hint anywhere in it, or an encoded command, fails closed),
+Windows program names (`git.exe`, a full path to git),
 unambiguous flag abbreviations (--no-gpg-sig), short-option clusters (-nm),
 and inline `-c alias.*=...` definitions. This is an ACCIDENT guard, not an
 adversary guard (an adversary has BYPASS_GIT_GUARD=1): deliberately-obfuscated
@@ -47,7 +48,7 @@ import re
 import shlex
 import sys
 
-from shell_segments import WINDOWS_SHELLS, command_name, split_segments, windows_shell_code
+from shell_segments import WINDOWS_SHELLS, command_name, split_segments, windows_shell_text
 
 # Full long-option triggers. A token also matches by unambiguous PREFIX (git
 # accepts `--no-gpg-sig`, `--no-verif`, ...): any `--no-v*` that is a prefix of
@@ -245,10 +246,10 @@ def check_segment(toks, depth=0, inherited_gpgsign_off=False):
             m += 1
         return False
     if word in WINDOWS_SHELLS:
-        codes = windows_shell_code(word, toks[head + 1 :])
-        if codes is None:
-            return True  # an encoded command cannot be read: fail closed
-        return any(scan(code, depth + 1) is not None for code in codes)
+        # Not parsed (see shell_segments): an encoded command, or git with a
+        # bypass hint anywhere in the text, fails closed.
+        text = windows_shell_text(word, toks[head + 1 :])
+        return text is None or (_mentions_git(text) and any(h in text for h in TRIGGER_HINTS))
     if word != "git":
         return False
     rest = toks[head + 1 :]

@@ -24,14 +24,17 @@ Vectors blocked:
                   mutations, only when sent through an actual GitHub API call
                   (enqueue = add to merge queue = deferred merge)
 
-Also recurses into `eval "..."`, `bash -c "..."`, `powershell -Command "..."`
-and `cmd /c "..."`, so a merge wrapped in a shell string is still caught. An
-encoded PowerShell command cannot be read, so it is blocked. The command word is
-read through `command_name`, so `gh.exe` and a full path to it count as `gh`.
-The PowerShell tool's command is read the same way as a Bash command.
+Also recurses into `eval "..."` and `bash -c "..."`, so a merge wrapped in a
+shell string is still caught. The text that `powershell`, `pwsh` or `cmd` runs
+is not parsed (see shell_segments): it blocks when it names `merge` together
+with gh or a GitHub API path, or a merge mutation, and an encoded PowerShell
+command always blocks. The command word is read through `command_name`, so
+`gh.exe` and a full path to it count as `gh`. The PowerShell tool's command is
+read the same way as a Bash command.
 
 Not blocked (intentional): `git merge` / `git push`; and a merge phrase that is
-merely an argument to a non-merge command. There is no bypass.
+merely an argument to a non-merge command, outside a Windows shell. There is no
+bypass.
 """
 import re
 import shlex
@@ -42,7 +45,7 @@ from shell_segments import (
     command_name,
     split_segments,
     tool_command,
-    windows_shell_code,
+    windows_shell_text,
 )
 
 HTTP_TOOLS = {"curl", "wget", "http", "https", "xh", "httpie"}
@@ -60,6 +63,9 @@ ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 MERGE_PATH = re.compile(r"pulls/[^/\s]+/merge")
 GQL_MUT = re.compile(r"mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest")
 MCP_MERGE = re.compile(r"merge_pull_request|auto_merge", re.I)
+# In Windows shell text: a GitHub client or API path, and the merge mutations.
+GITHUB_WORD = re.compile(r"\bgh\b|api\.github\.com|/graphql|pulls/")
+GQL_MUT_LOWER = re.compile(GQL_MUT.pattern.lower())
 
 
 class _Block(Exception):
@@ -166,11 +172,11 @@ def check_bash(cmd, depth=0):
                     check_bash(rest[idx + 1], depth + 1)
             continue
         if cmdword in WINDOWS_SHELLS:
-            codes = windows_shell_code(cmdword, rest)
-            if codes is None:
+            text = windows_shell_text(cmdword, rest)
+            if text is None:
                 block("encoded PowerShell command (cannot be read)", seg)
-            for code in codes:
-                check_bash(code, depth + 1)
+            if GQL_MUT_LOWER.search(text) or ("merge" in text and GITHUB_WORD.search(text)):
+                block("merge words in a Windows shell command (not parsed)", seg)
             continue
 
         # gh pr merge (pr and merge as consecutive tokens, robust to global flags)

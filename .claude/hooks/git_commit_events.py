@@ -389,7 +389,8 @@ def process_segment(toks, effdir, piped=()):
     if hb in ("eval", "sh", "bash", "zsh", "dash", "ksh", ".", "source") or hb in WINDOWS_SHELLS:
         # With a short -c flag the shell executes its ARGV string; stdin is
         # plain data then (`cat <<EOF | bash -c 'true'` must not go ambiguous).
-        # Windows runs `GIT COMMIT` as git, so the test ignores case.
+        # Windows finds the program `GIT` as git, so the test ignores case. Git
+        # subcommands are case-sensitive, so this can only over-block.
         payload = " ".join(rest)
         if not any(re.match(r"-\w*c$", t) for t in rest):
             payload += " " + stdin_code
@@ -415,7 +416,9 @@ def process_segment(toks, effdir, piped=()):
         return None
 
     for i, tok in enumerate(toks):
-        if command_name(tok) != "git":
+        # Any `git` token counts, but a Windows name or a path (`git.exe`,
+        # `/usr/bin/git`) counts only as the command word.
+        if tok != "git" and (i != h or command_name(tok) != "git"):
             continue
         gdir, verb, j = effdir, None, i + 1
         while j < len(toks):
