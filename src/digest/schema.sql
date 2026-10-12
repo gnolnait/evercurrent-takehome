@@ -48,3 +48,42 @@ CREATE TABLE IF NOT EXISTS stage_runs (
   status         TEXT NOT NULL,
   PRIMARY KEY (stage, thread_id, last_ts, prompt_version, model)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS items (
+  item_id         TEXT PRIMARY KEY,
+  thread_id       TEXT NOT NULL,
+  type            TEXT NOT NULL,
+  title           TEXT NOT NULL,
+  summary         TEXT NOT NULL,
+  entities        TEXT NOT NULL,   -- JSON array of entity ids
+  owner           TEXT,
+  due             TEXT,            -- ISO date
+  affected_roles  TEXT NOT NULL,   -- JSON array
+  severity        TEXT NOT NULL,
+  confidence      TEXT NOT NULL,
+  evidence        TEXT NOT NULL,   -- JSON array of {message_ts, quote, permalink}
+  claims          TEXT NOT NULL,   -- JSON array of {entity, attribute, value, message_ts, authority}
+  tasks           TEXT NOT NULL,   -- JSON array of {task, effect, message_ts}
+  status          TEXT NOT NULL,
+  resolved_by     TEXT,
+  first_seen      TEXT NOT NULL,
+  first_seen_us   INTEGER NOT NULL,
+  last_updated    TEXT NOT NULL,
+  last_updated_us INTEGER NOT NULL,
+  prompt_version  TEXT NOT NULL,
+  model           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS items_thread ON items (thread_id);
+
+CREATE TABLE IF NOT EXISTS triage (
+  thread_id      TEXT NOT NULL,
+  last_ts        TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  model          TEXT NOT NULL,
+  probability    REAL NOT NULL,
+  threshold      REAL NOT NULL,
+  kept           INTEGER NOT NULL,
+  rationale      TEXT NOT NULL,
+  decided_at     TEXT NOT NULL,
+  PRIMARY KEY (thread_id, last_ts, prompt_version, model)
+) WITHOUT ROWID;

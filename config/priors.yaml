@@ -1,0 +1,8 @@
+# Constants SPEC section 5 names. The role-by-phase table lands here in M3.
+triage:
+  # A thread is kept when the classifier's probability is at least 1 / (1 + miss_cost_ratio):
+  # a missed thread costs ten false keeps. Revisited after the first twenty golden threads.
+  miss_cost_ratio: 10
+absence:
+  # Working days after which an ask with no reply from the person asked is an absence.
+  ask_reply_cadence_days: 2

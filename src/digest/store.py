@@ -11,7 +11,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from digest.models import Event, Frozen, micros_since_epoch, ts_micros
+from digest.models import Event, Frozen, Item, TriageDecision, micros_since_epoch, ts_micros
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,25 @@ _UPSERT = (
 _SET_META = (
     "INSERT INTO meta (key, value) VALUES (?, ?)"
     " ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+)
+_ITEM_FIELDS = tuple(field for field in Item.model_fields if field != "absence")
+_ITEM_JSON_COLUMNS = ("entities", "affected_roles", "evidence", "claims", "tasks")
+_ITEM_WRITTEN = (*_ITEM_FIELDS, "first_seen_us", "last_updated_us", "prompt_version", "model")
+_SELECT_ITEMS = f"SELECT {', '.join(_ITEM_FIELDS)} FROM items"
+_UPSERT_ITEM = (
+    f"INSERT INTO items ({', '.join(_ITEM_WRITTEN)})"
+    f" VALUES ({', '.join(f':{c}' for c in _ITEM_WRITTEN)})"
+    " ON CONFLICT (item_id) DO UPDATE SET "
+    + ", ".join(f"{c} = excluded.{c}" for c in _ITEM_WRITTEN if c != "item_id")
+)
+_TRIAGE_FIELDS = tuple(TriageDecision.model_fields)
+_TRIAGE_KEY = ("thread_id", "last_ts", "prompt_version", "model")
+_SELECT_TRIAGE = f"SELECT {', '.join(_TRIAGE_FIELDS)} FROM triage"
+_UPSERT_TRIAGE = (
+    f"INSERT INTO triage ({', '.join(_TRIAGE_FIELDS)})"
+    f" VALUES ({', '.join(f':{c}' for c in _TRIAGE_FIELDS)})"
+    f" ON CONFLICT ({', '.join(_TRIAGE_KEY)}) DO UPDATE SET "
+    + ", ".join(f"{c} = excluded.{c}" for c in _TRIAGE_FIELDS if c not in _TRIAGE_KEY)
 )
 
 
@@ -199,6 +218,54 @@ class Store:
             )
         return deltas
 
+    def upsert_items(self, items: Iterable[Item], *, prompt_version: str, model: str) -> int:
+        """Write the items with their provenance; return the count. Absence items are refused."""
+        items = list(items)
+        absent = next((item.item_id for item in items if item.type == "absence"), None)
+        if absent is not None:
+            raise ValueError(f"item {absent} is an absence; absence items are not stored")
+        provenance = {"prompt_version": prompt_version, "model": model}
+        rows = [_item_row(item) | provenance for item in items]
+        with self._db:
+            self._db.executemany(_UPSERT_ITEM, rows)
+        return len(rows)
+
+    def items_for_thread(self, thread_id: str) -> list[Item]:
+        rows = self._db.execute(
+            f"{_SELECT_ITEMS} WHERE thread_id = ? ORDER BY first_seen_us, item_id", (thread_id,)
+        )
+        return [_item(row) for row in rows]
+
+    def items(self, as_of: datetime) -> list[Item]:
+        """Items whose `last_updated` is at or before `as_of`, in `first_seen` order."""
+        rows = self._db.execute(
+            f"{_SELECT_ITEMS} WHERE last_updated_us <= ? ORDER BY first_seen_us, item_id",
+            (micros_since_epoch(as_of),),
+        )
+        return [_item(row) for row in rows]
+
+    def record_triage(self, decision: TriageDecision) -> None:
+        row = decision.model_dump() | {"decided_at": decision.decided_at.isoformat()}
+        with self._db:
+            self._db.execute(_UPSERT_TRIAGE, row)
+
+    def triage_decision(
+        self, thread_id: str, last_ts: str, prompt_version: str, model: str
+    ) -> TriageDecision | None:
+        row = self._db.execute(
+            f"{_SELECT_TRIAGE} WHERE {' AND '.join(f'{c} = ?' for c in _TRIAGE_KEY)}",
+            (thread_id, last_ts, prompt_version, model),
+        ).fetchone()
+        return None if row is None else TriageDecision.model_validate(dict(row))
+
+    def triage_for_thread(self, thread_id: str) -> list[TriageDecision]:
+        """Every revision's decision, in `last_ts` order."""
+        rows = self._db.execute(
+            f"{_SELECT_TRIAGE} WHERE thread_id = ? ORDER BY last_ts, prompt_version, model",
+            (thread_id,),
+        )
+        return [TriageDecision.model_validate(dict(row)) for row in rows]
+
 
 def _check_version(connection: sqlite3.Connection, path: Path | str) -> None:
     """Accept an empty database or a store of this schema version; raise for anything else."""
@@ -225,3 +292,20 @@ def _event(row: sqlite3.Row) -> Event:
     for column in _JSON_COLUMNS:
         values[column] = json.loads(values[column])
     return Event.model_validate(values)
+
+
+def _item_row(item: Item) -> dict[str, Any]:
+    row = item.model_dump(mode="json", exclude={"absence"})
+    for column in _ITEM_JSON_COLUMNS:
+        row[column] = json.dumps(row[column])
+    return row | {
+        "first_seen_us": ts_micros(item.first_seen),
+        "last_updated_us": ts_micros(item.last_updated),
+    }
+
+
+def _item(row: sqlite3.Row) -> Item:
+    values = dict(row)
+    for column in _ITEM_JSON_COLUMNS:
+        values[column] = json.loads(values[column])
+    return Item.model_validate(values)

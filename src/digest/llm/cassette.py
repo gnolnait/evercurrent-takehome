@@ -56,3 +56,7 @@ class Cassettes:
         os.replace(handle.name, path)
         log.info("cassette_written", extra={"key": key, "path": path})
         return path
+
+    def recorded_models(self) -> dict[str, set[str]]:
+        """Logical model name to the concrete ids seen in the cassettes under the root."""
+        raise NotImplementedError

@@ -9,6 +9,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from digest import models
 from digest.models import Event, Reaction
 from digest.store import StageRun, Store, ThreadDelta
 
@@ -358,3 +359,224 @@ def test_recorded_deltas_disappear_without_changing_others(counts: list[int], ch
             assert {
                 d.thread_id: d for d in db.thread_deltas("extract", "v1", "extract", AS_OF)
             } == pending
+
+
+def item(**changes: Any) -> models.Item:
+    values: dict[str, Any] = {
+        "item_id": "I1",
+        "thread_id": f"C1:{ROOT}",
+        "type": "bom_change",
+        "title": "Drive bracket released",
+        "summary": "PN-31010 is released at Rev C.",
+        "entities": ("PN-31010", "ECO-0142"),
+        "owner": "U0ME01",
+        "due": datetime(2026, 10, 22).date(),
+        "affected_roles": ("ME", "supply_chain"),
+        "severity": "high",
+        "confidence": "medium",
+        "evidence": (
+            models.Evidence(
+                message_ts=ROOT,
+                quote="PN-31010 is released at Rev C.",
+                permalink=event().permalink,
+            ),
+        ),
+        "first_seen": ROOT,
+        "last_updated": "1760000000.000002",
+        "claims": (
+            models.Claim(
+                entity="PN-31010",
+                attribute="rev",
+                value="C",
+                message_ts=ROOT,
+                authority="plm_bot",
+            ),
+        ),
+        "tasks": (models.TaskLink(task="G-DVT1.thermal", effect="done", message_ts=ROOT),),
+        "status": "resolved",
+        "resolved_by": "1760000000.000002",
+        "absence": None,
+    }
+    return models.Item(**(values | changes))
+
+
+def triage(**changes: Any) -> models.TriageDecision:
+    values: dict[str, Any] = {
+        "thread_id": f"C1:{ROOT}",
+        "last_ts": ROOT,
+        "prompt_version": "m2.1",
+        "model": "classify",
+        "probability": 0.75,
+        "threshold": 1 / 11,
+        "kept": True,
+        "rationale": "The thread reports a released revision.",
+        "decided_at": AS_OF,
+    }
+    return models.TriageDecision(**(values | changes))
+
+
+@pytest.mark.parametrize("nulls", [False, True], ids=["all-fields", "null-columns"])
+def test_items_round_trip_and_upsert_is_idempotent(store: Store, nulls: bool) -> None:
+    """Setup a complete or nullable item; write it twice; assert one equal item survives."""
+    row = item(owner=None, due=None, resolved_by=None, claims=(), tasks=()) if nulls else item()
+    assert store.upsert_items([row], prompt_version="m2.1", model="extract") == 1
+    assert store.upsert_items([row], prompt_version="m2.1", model="extract") == 1
+    assert store.items_for_thread(row.thread_id) == [row]
+    assert store.items(AS_OF) == [row]
+
+
+def test_upsert_items_replaces_fields_and_provenance(tmp_path: Path) -> None:
+    """Setup a stored item; replace its fields and provenance; assert both reads agree."""
+    original = item()
+    replacement = item(
+        thread_id=f"C2:{ROOT}",
+        type="risk",
+        title="Release delayed",
+        summary="The release needs another review.",
+        entities=("PN-11051",),
+        owner=None,
+        due=None,
+        affected_roles=("EM",),
+        severity="low",
+        confidence="high",
+        evidence=(
+            models.Evidence(
+                message_ts="1760000000.000003",
+                quote="Review needed.",
+                permalink="https://kestrel.slack.com/review",
+            ),
+        ),
+        first_seen="1760000000.000003",
+        last_updated="1760000000.000004",
+        claims=(),
+        tasks=(),
+        status="open",
+        resolved_by=None,
+    )
+    path = tmp_path / "store.sqlite"
+    with Store.open(path) as db:
+        db.upsert_items([original], prompt_version="m2.1", model="extract")
+        assert db.upsert_items([replacement], prompt_version="m2.2", model="other") == 1
+        assert db.items_for_thread(original.thread_id) == []
+        assert db.items_for_thread(replacement.thread_id) == [replacement]
+        assert db.items(AS_OF) == [replacement]
+        cutoff = EPOCH + timedelta(seconds=1_760_000_000, microseconds=3)
+        assert db.items(cutoff) == []
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT item_id, prompt_version, model FROM items"
+        ).fetchall() == [(original.item_id, "m2.2", "other")]
+    with Store.open(path) as db:
+        earlier = item(
+            item_id="I2",
+            thread_id=replacement.thread_id,
+            first_seen="1760000000.000002",
+        )
+        db.upsert_items([earlier], prompt_version="m2.2", model="other")
+        assert db.items_for_thread(replacement.thread_id) == [earlier, replacement]
+
+
+def test_upsert_items_refuses_absence(store: Store) -> None:
+    row = item(
+        type="absence",
+        absence=models.AbsenceDetail(
+            source="ask",
+            gate=None,
+            task=None,
+            asker="U0EM01",
+            days_silent=3,
+            buffer_consumed=None,
+            buffer_days=None,
+        ),
+    )
+    with pytest.raises(ValueError, match="absence"):
+        store.upsert_items([row], prompt_version="m2.1", model="extract")
+    assert store.items(AS_OF) == []
+
+
+def test_items_filter_last_updated_and_order_first_seen(store: Store) -> None:
+    """Setup items with crossed time order; read at a boundary; assert update filtering."""
+    first = item(item_id="I3", first_seen="1760000000.000001", last_updated="1760000000.000004")
+    second = item(item_id="I2", first_seen="1760000000.000002", last_updated="1760000000.000003")
+    future = item(item_id="I1", first_seen="1760000000.000000", last_updated="1760000000.000005")
+    other = item(
+        item_id="I4",
+        thread_id=f"C2:{ROOT}",
+        first_seen="1760000000.000003",
+        last_updated="1760000000.000003",
+    )
+    store.upsert_items([second, other, first, future], prompt_version="m2.1", model="extract")
+    as_of = EPOCH + timedelta(seconds=1_760_000_000, microseconds=4)
+    assert store.items(as_of) == [first, second, other]
+    assert store.items_for_thread(first.thread_id) == [future, first, second]
+    assert store.items_for_thread(other.thread_id) == [other]
+    assert store.items_for_thread("missing") == []
+
+
+def test_triage_round_trip_and_replacement(store: Store) -> None:
+    """Setup a kept decision; replace its payload; assert one complete decision remains."""
+    original = triage()
+    replacement = triage(
+        probability=0.01,
+        threshold=0.2,
+        kept=False,
+        rationale="The thread has no project change.",
+        decided_at=AS_OF + timedelta(microseconds=1),
+    )
+    store.record_triage(original)
+    assert (
+        store.triage_decision(
+            original.thread_id, original.last_ts, original.prompt_version, original.model
+        )
+        == original
+    )
+    store.record_triage(original)
+    store.record_triage(replacement)
+    assert (
+        store.triage_decision(
+            original.thread_id, original.last_ts, original.prompt_version, original.model
+        )
+        == replacement
+    )
+    assert store.triage_for_thread(original.thread_id) == [replacement]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("thread_id", f"C2:{ROOT}"),
+        ("last_ts", "1760000000.000002"),
+        ("prompt_version", "m2.2"),
+        ("model", "other"),
+    ],
+)
+def test_triage_key_uses_each_column(store: Store, field: str, value: str) -> None:
+    """Setup two keys differing in one column; record both; assert independent decisions."""
+    original = triage()
+    other = triage(**{field: value, "rationale": "Another decision."})
+    store.record_triage(original)
+    assert (
+        store.triage_decision(other.thread_id, other.last_ts, other.prompt_version, other.model)
+        is None
+    )
+    store.record_triage(other)
+    for row in (original, other):
+        assert (
+            store.triage_decision(row.thread_id, row.last_ts, row.prompt_version, row.model) == row
+        )
+
+
+def test_triage_for_thread_orders_revisions_and_excludes_other_threads(store: Store) -> None:
+    """Setup unordered decisions in two threads; read one thread; assert revision order."""
+    first = triage()
+    second = triage(last_ts="1760000000.000002", decided_at=AS_OF - timedelta(days=1))
+    third = triage(last_ts="1760000000.000003", decided_at=AS_OF - timedelta(days=2))
+    other = triage(thread_id=f"C2:{ROOT}")
+    for row in (third, other, first, second):
+        store.record_triage(row)
+    assert store.triage_for_thread(first.thread_id) == [first, second, third]
+    assert store.triage_for_thread("missing") == []
+
+
+def test_triage_decision_missing_from_empty_store(store: Store) -> None:
+    assert store.triage_decision(f"C1:{ROOT}", ROOT, "m2.1", "classify") is None
