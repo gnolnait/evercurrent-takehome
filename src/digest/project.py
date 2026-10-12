@@ -69,6 +69,16 @@ class ProjectConfig(Frozen):
         raise KeyError(task_id)
 
 
+def add_working_days(day: dt.date, n: int) -> dt.date:
+    """The date `n` working days (Monday to Friday) after `day`; `n` may be negative."""
+    raise NotImplementedError
+
+
+def working_days_between(start: dt.date, end: dt.date) -> int:
+    """Working days after `start` up to and including `end`; 0 when `end <= start`."""
+    raise NotImplementedError
+
+
 def require_unique(kind: str, ids: list[str]) -> None:
     seen: set[str] = set()
     for item_id in ids:

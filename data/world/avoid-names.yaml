@@ -1,0 +1,63 @@
+# Names, identifiers and phrases used by public submissions to the same brief. The corpus
+# must not reuse them (SPEC section 6, D14). The renderer prompt carries this list and a
+# test scans the world and corpus files for it (plan B3.5, B3.6). Role labels (ME, EE,
+# supply chain, EM, PM) are not listed: the brief mandates them.
+names:
+  - Atlas
+  - Project Atlas
+  - Sarah Chen
+  - Priya Nair
+  - Raj Patel
+  - Marcus Lee
+  - Lena Torres
+  - David
+  - Mei
+  - Alex
+  - Jun
+  - Alice
+  - Bob
+  - Carol
+  - Daily Digester
+  - Communicator
+  - Knowledge Cards
+  - Engineering Intelligence Hub
+identifiers:
+  - MM-2100
+  - MD-4820-X
+  - BP-2400
+  - PB-4800
+  - CN-3100
+  - HV-2400
+  - E204
+  - HC-SR04
+  - GATE1
+  - GATE2
+  - M005
+phrases:
+  - warehouse docking robot
+  - docking robot
+  - autonomous trailer loading
+  - late-delivery penalty
+  - severity floor
+  - why ranked
+  - unresolved difference
+  - top-k stories
+  - 24V vs 48V
+  - 12V motor
+  - followings
+  - scope prompt
+  - content_index
+  - dirty hours
+  - digest invite-all
+  - 10-week motor controller lead time
+  - board bring-up
+  - atlas-general
+  - atlas-mechanical
+  - atlas-electrical
+  - atlas-testing
+  - atlas-supply-chain
+  - atlas-leadership
+  - hw-electrical
+  - mech-design
+  - ee-hardware
+  - project-general

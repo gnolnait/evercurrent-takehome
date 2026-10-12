@@ -46,9 +46,42 @@ def run(
 
 
 @app.command("eval")
-def eval_cmd() -> None:
-    """Run the evaluation suite against the golden corpus."""
+def eval_cmd(
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Report path; default reports/eval-<date>.md."
+    ),
+) -> None:
+    """Run the evaluation suite against the golden corpus and write the report."""
     raise typer.Exit(code=_not_yet("eval"))
+
+
+@app.command()
+def extract(
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+    db: Path | None = typer.Option(
+        None, "--db", help="Store path; default DIGEST_DB, then data/<world>.sqlite."
+    ),
+) -> None:
+    """Triage and extract pending thread deltas, one working day at a time, up to the store's day."""
+    raise typer.Exit(code=_not_yet("extract"))
+
+
+@app.command()
+def absences(
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+    db: Path | None = typer.Option(
+        None, "--db", help="Store path; default DIGEST_DB, then data/<world>.sqlite."
+    ),
+) -> None:
+    """Print the absence items as of the store's day, one JSON object per line."""
+    raise typer.Exit(code=_not_yet("absences"))
 
 
 @app.command()
@@ -124,6 +157,26 @@ def world_check(
     typer.echo("events per channel:")
     for channel in loaded.channels:
         typer.echo(f"  {channel.name} ({channel.id}): {per_channel[channel.id]}")
+
+
+@world_app.command("render")
+def world_render(
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+) -> None:
+    """Render the world's events into events.jsonl through the render model."""
+    raise typer.Exit(code=_not_yet("world render"))
+
+
+@world_app.command("golden")
+def world_golden(
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default DIGEST_WORLD."
+    ),
+) -> None:
+    """Derive golden.jsonl from the world script and the render manifest."""
+    raise typer.Exit(code=_not_yet("world golden"))
 
 
 def _refuse(reason: str) -> NoReturn:

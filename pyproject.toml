@@ -98,9 +98,11 @@ name = "layers"
 type = "layers"
 layers = [
     "digest.cli",
-    "digest.replay",
+    "digest.eval",
+    "digest.corpus",
+    "digest.replay | digest.extract | digest.absence",
     "digest.store | digest.llm | digest.world",
-    "digest.project",
+    "digest.project | digest.priors",
     "digest.models | digest.settings",
 ]
 

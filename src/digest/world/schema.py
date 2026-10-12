@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
 
-from digest.models import Attribute, Authority, Frozen, Role
+from digest.models import (
+    Attribute,
+    Authority,
+    Frozen,
+    Glossary,
+    Role,
+)
 from digest.project import ProjectConfig, require_unique
 
 EntityType = Literal[
@@ -64,6 +70,7 @@ class Channel(Frozen):
     id: str
     name: str
     purpose: str
+    private: bool = False  # visible to members only; the M3 visibility filter reads it
 
 
 class WorldClaim(Frozen):
@@ -78,6 +85,11 @@ class WorldClaim(Frozen):
 class TaskTouch(Frozen):
     task: str  # ChecklistTask.id
     effect: Literal["evidence", "done"]
+
+
+class Ask(Frozen):
+    of: str  # persona user_id the question is addressed to
+    answered_day: int | None  # working day of the reply, None when never answered
 
 
 class WorldEvent(Frozen):
@@ -104,6 +116,7 @@ class WorldEvent(Frozen):
     must_see_for: tuple[str, ...] = ()  # persona user_ids
     known_by: dict[str, int] = Field(default_factory=dict)  # persona user_id -> working day
     noise: dict[str, bool] = Field(default_factory=dict)  # renderer knobs
+    ask: Ask | None = None  # present exactly when kind == "ask"
 
 
 class World(Frozen):
@@ -240,3 +253,7 @@ class World(Frozen):
     def date_of(self, day: int) -> dt.date:
         weeks, weekday = divmod(day - 1, 5)
         return self.start_date + dt.timedelta(weeks=weeks, days=weekday)
+
+    def glossary(self) -> Glossary:
+        """Every entity and persona as the extractor's glossary (plan B0.3)."""
+        raise NotImplementedError

@@ -11,7 +11,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from digest.models import Event, Frozen, micros_since_epoch, ts_micros
+from digest.models import Event, Frozen, Item, TriageDecision, micros_since_epoch, ts_micros
 
 log = logging.getLogger(__name__)
 
@@ -198,6 +198,29 @@ class Store:
                 )
             )
         return deltas
+
+    def upsert_items(self, items: Iterable[Item], *, prompt_version: str, model: str) -> int:
+        """Write the items with their provenance; return the count. Absence items are refused."""
+        raise NotImplementedError
+
+    def items_for_thread(self, thread_id: str) -> list[Item]:
+        raise NotImplementedError
+
+    def items(self, as_of: datetime) -> list[Item]:
+        """Items whose `last_updated` is at or before `as_of`, in `first_seen` order."""
+        raise NotImplementedError
+
+    def record_triage(self, decision: TriageDecision) -> None:
+        raise NotImplementedError
+
+    def triage_decision(
+        self, thread_id: str, last_ts: str, prompt_version: str, model: str
+    ) -> TriageDecision | None:
+        raise NotImplementedError
+
+    def triage_for_thread(self, thread_id: str) -> list[TriageDecision]:
+        """Every revision's decision, in `last_ts` order."""
+        raise NotImplementedError
 
 
 def _check_version(connection: sqlite3.Connection, path: Path | str) -> None:
