@@ -18,6 +18,7 @@ from digest import __version__
 from digest.absence import detect_absences
 from digest.corpus.avoid import load_avoid_names
 from digest.corpus.render import render_world
+from digest.eval.extraction import run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
@@ -67,8 +68,38 @@ def eval_cmd(
         None, "--out", help="Report path; default reports/eval-<date>.md."
     ),
 ) -> None:
-    """Run the evaluation suite against the golden corpus and write the report."""
-    raise typer.Exit(code=_not_yet("eval"))
+    """Run the evaluation suite against the golden corpus and write the report.
+
+    The eval runs in a fresh store at data/eval-<world>.sqlite. The command deletes that file
+    first.
+    """
+    settings = Settings()
+    name = world or settings.world
+    world_dir = Path("data") / "world" / name
+    store_path = Path("data") / f"eval-{name}.sqlite"
+    try:
+        loaded = load_world(world_dir / "world.yaml")
+        priors = load_priors()
+        llm = from_settings(settings)
+        store_path.unlink(missing_ok=True)
+        report = run_extraction_eval(world_dir, llm, priors, store_path)
+    # CassetteMiss: replay found no recording. ValueError: a stale golden.jsonl, a missing
+    # API key or a malformed file. OSError: a missing world, manifest or golden file.
+    except (CassetteMiss, ValueError, OSError, yaml.YAMLError) as error:
+        _refuse(_with_notes(error))
+    path = out or Path("reports") / f"eval-{loaded.date_of(loaded.days)}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_report(report, path)
+    typer.echo(str(path))
+    for label, value in [
+        ("thread recall", report.thread_recall),
+        ("claim recall", report.claim_recall),
+        ("claim precision", report.claim_precision),
+        ("citation validity", report.citation_validity),
+        ("absence false-alarm rate", report.absence_false_alarm_rate),
+        ("absence recall", report.absence_recall),
+    ]:
+        typer.echo(f"{label}: {'n/a' if value is None else round(value, 3)}")
 
 
 @app.command()

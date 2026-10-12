@@ -59,4 +59,8 @@ class Cassettes:
 
     def recorded_models(self) -> dict[str, set[str]]:
         """Logical model name to the concrete ids seen in the cassettes under the root."""
-        raise NotImplementedError
+        models: dict[str, set[str]] = {}
+        for path in self.root.glob("*.json"):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            models.setdefault(payload["request"]["model"], set()).add(payload["response"]["model"])
+        return models
