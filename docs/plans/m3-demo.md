@@ -1,6 +1,6 @@
 # Plan: M3 demo slice, a daily digest per reader
 
-Status: v0.1, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
+Status: v0.2, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
 with the user for the 2026-10-14 deadline: Codex writes the tests, an Opus subagent
 writes the code, every test is RED-GREEN proven, one review lane per commit
 (alternating Codex and the Claude lenses), at most one fix round per commit; findings
@@ -117,7 +117,7 @@ reader is the asker or the person asked. A must-see line is never cut by a secti
 B5.4 Ranked lane: every other visible open item gets
 `score = importance * role_prior * personal_relevance`:
 - `importance`: by type (blocker 1.0, decision 0.9, schedule_change 0.9, spec_change 0.8,
-  bom_change 0.8, risk 0.7, ask 0.6, fyi 0.3), times severity (high 1.0, medium 0.7,
+  bom_change 0.8, risk 0.7, ask 0.6, absence 0.9, fyi 0.3), times severity (high 1.0, medium 0.7,
   low 0.4).
 - `role_prior`: `priors.daily.role_priors[role][type]`, default 0.5 when the table has no
   entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
