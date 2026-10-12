@@ -85,8 +85,9 @@ In scope
   live mode can be demonstrated end to end.
 - One query and feedback function layer over the store and the ranker, exposed by
   three thin adapters that contain no logic: the CLI, the HTTP endpoints of the web
-  preview, and an MCP server (stdio) so engineers can query the digest from the
-  assistant they already use (Claude, ChatGPT, Cursor). MCP read tools:
+  preview, and an MCP server (stdio) so the operator of the store can query the digest
+  from the assistant they already use (Claude, ChatGPT, Cursor); each engineer querying
+  their own view waits for the reader-scoped server. MCP read tools:
   `search_items`, `get_item`, `get_entity_history`, `list_open_blockers`,
   `list_absences`, `why_ranked`, `get_digest`, `get_project_state`, plus `query`, a
   read-only SQL tool on a read-only connection with a row cap and a timeout, with the
@@ -147,8 +148,10 @@ certainty, kind, conditions, scope}`
 where key is `(entity_id, attribute)` and attribute is from the closed vocabulary:
 rev, lead_time, gate_date, owner, status, qty, spec_param, priority. For `spec_param`
 the key also holds the parameter name: the words of the value before its first numeric
-token, in lower case (`payload 600 kg` is parameter `payload` with value `600 kg`), so
-two parameters on one entity never share a key. authority is a
+token, in lower case (`payload 600 kg` is parameter `payload` with value `600 kg`); a
+value with no numeric token takes its first word as the name (`material ABS` is
+parameter `material` with value `ABS`). A value that starts with a number has no name
+and fails verification. Two parameters on one entity never share a key. authority is a
 small enum (owner_stated, plm_bot, cm_stated, hearsay). `certainty` is decided |
 reported | hedged | question; `kind` is stated (default: a fact such as a rev, owner, status or date) | target |
 measured | referenced (a value carried by a file name or link, which never supersedes);
@@ -331,11 +334,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
    been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
-   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner.
+   owned entity, a constant below 1 when the project has `depends_on` edges and none joins them (one hop, no path search), and 1 when the project has none; a claim still `pending` confirmation raises urgency for its owner.
    `novelty` measures what is new to the reader, not the age of a message. For an item
    with claims, it is 1 when the reader has no exposure on a claim's key, or when a
    claim's value differs from the reader's `exposed` value for that key (any
-   `exposed.how`); a claim the ledger has since superseded does not count. `exposed`
+   `exposed.how`); a claim the reader's ledger view has since superseded does not count. `exposed`
    holds one value per key, so a claim of kind target or measured, or with `scope` or
    `conditions`, is not compared with it. An item not in `seen` is also 1 when it has no
    compared claim or carries a current claim that is not compared. For any item in `seen`, it is also 1 when its
@@ -377,7 +380,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    ids, values and link are identical for every reader. An item the reader was shown
    while open and that has since resolved appears once more with its closing evidence,
    whatever its score, outside the section caps and the diversity penalty; the
-   visibility check and mute still apply.
+   visibility check and mute still apply, and the line appears only when the reader can
+   see the closing evidence.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
    with nothing to say sends one line that says so. Rationale on demand.
@@ -388,7 +392,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    undoes); an undo reverses exactly the referenced event's effect; profile weights are
    recomputed from the log, a vote moves the item most, its entity less and its item type least,
    and no learned weight leaves a bounded band around the role default. `needs_you` lines carry done (resolves the item when the clicker owns it, else records
-   exposure for that reader only), snooze until a date, not mine (reader removed from the
+   exposure for that reader only; on a checklist absence it records exposure only,
+   section 4), snooze until a date, not mine (reader removed from the
    audience), and, on a contradiction line, confirm (the owner picks a value, which
    writes an `owner_stated` claim).
 9. Delivery: a two-tier policy. Items in the must-see lane whose urgency crosses the
@@ -498,9 +503,11 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   configuration without its key.
 - Ranking ablation: each score term switched off in turn, with stale-belief person-days (M4 stretch), must-see recall and nDCG per persona
   reported. Off means the term is set to 1 with everything else fixed. A term stays when
-  it moves stale-belief person-days or must-see recall by at least `ablation.min_effect`
-  in `config/priors.yaml` (default 0.01, mean across personas); until person-days is
-  built, must-see recall or mean nDCG at 5 decide (D21). Otherwise it is removed.
+  switching it off makes stale-belief person-days higher or must-see recall lower, by at
+  least `ablation.min_effect` of the value with the term on (a fraction in
+  `config/priors.yaml`, default 0.01, mean across personas); until person-days is built,
+  must-see recall or mean nDCG at 5 decide, nDCG by the same rule (D21). Otherwise it is
+  removed.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction
@@ -614,8 +621,8 @@ reads it is built.
   read tools and usage skill. A1 to A8, A10. v0.4 stretch: the headline metrics, the regression gate, the coverage line,
   baselines beside every rate, abstention
   precision, pairwise judging, `digest diff`, `why_ranked` accepting an undelivered
-  item. The scrutability check (A12), the classifier comparison (Laya on Linux) and MCP
-  write tools stay stretch.
+  item. The scrutability check (A12), the classifier comparison (Laya on Linux) and the
+  MCP `feedback` tool stay stretch.
 - M5 (day 5): live Slack mode, Block Kit, failure handling, profile bootstrap from
   Slack with the onboarding DM, batch seeding of the corpus into a workspace. A9.
   Docker, devcontainer check, README design doc, ANSWERS.md, demo screenshots.
