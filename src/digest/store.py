@@ -15,7 +15,7 @@ from digest.models import Event, Frozen, Item, TriageDecision, micros_since_epoc
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 _EVENT_COLUMNS = (
     "source",
     "channel_id",

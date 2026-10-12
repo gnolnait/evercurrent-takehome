@@ -113,6 +113,7 @@ def permalink_for(workspace_url: str, channel_id: str, ts: str, thread_ts: str) 
 class Evidence(Frozen):
     """A verbatim span of the cited message; the permalink is constructed, never model-written."""
 
+    channel_id: str  # a Slack ts is unique only within a channel
     message_ts: str = Field(pattern=TS_PATTERN)
     quote: str
     permalink: str
@@ -124,6 +125,7 @@ class Claim(Frozen):
     entity: str
     attribute: Attribute
     value: str
+    channel_id: str
     message_ts: str = Field(pattern=TS_PATTERN)
     authority: Authority
 
@@ -133,6 +135,7 @@ class TaskLink(Frozen):
 
     task: str
     effect: TaskEffect
+    channel_id: str
     message_ts: str = Field(pattern=TS_PATTERN)
 
 
