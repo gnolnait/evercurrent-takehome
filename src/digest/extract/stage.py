@@ -53,7 +53,7 @@ def run_extract(
     zone: ZoneInfo,
     channel_purposes: Mapping[str, str],
 ) -> ExtractReport:
-    _claim_prompt_version(store)
+    _refuse_other_prompt_version(store)
     day = as_of.astimezone(zone).date()
     # The prompt lists the tasks of gates on or after the day; a link may name only those.
     tasks = {task.id: task for gate in project.gates if gate.date >= day for task in gate.checklist}
@@ -69,6 +69,7 @@ def run_extract(
             if decision is None:
                 purpose = channel_purposes.get(delta.channel_id)
                 decision = triage(llm, delta, citable, purpose, priors, as_of)
+                _tie_prompt_version(store)
                 store.record_triage(decision)
             if not decision.kept:
                 dropped += 1
@@ -97,6 +98,7 @@ def run_extract(
             tasks,
             {item.item_id: item for item in existing},
         )
+        _tie_prompt_version(store)
         written = store.upsert_items(
             verified.items, prompt_version=EXTRACT_PROMPT_VERSION, model="extract"
         )
@@ -117,16 +119,20 @@ def run_extract(
     )
 
 
-def _claim_prompt_version(store: Store) -> None:
-    """Tie the store to this prompt version, or refuse a store tied to another one."""
+def _refuse_other_prompt_version(store: Store) -> None:
+    """Refuse a store tied to another prompt version."""
     stored = store.get_meta("extract_prompt_version")
-    if stored is None:
-        store.set_meta("extract_prompt_version", EXTRACT_PROMPT_VERSION)
-    elif stored != EXTRACT_PROMPT_VERSION:
+    if stored is not None and stored != EXTRACT_PROMPT_VERSION:
         raise ValueError(
             f"store {store.path} holds extract prompt version {stored}, this code runs"
             f" {EXTRACT_PROMPT_VERSION}; a new prompt version starts from a fresh store"
         )
+
+
+def _tie_prompt_version(store: Store) -> None:
+    """Tie the store to this prompt version. Call before each write; the first call sets it."""
+    if store.get_meta("extract_prompt_version") is None:
+        store.set_meta("extract_prompt_version", EXTRACT_PROMPT_VERSION)
 
 
 def _citable(delta: ThreadDelta) -> tuple[Event, ...]:
@@ -139,6 +145,7 @@ def _citable(delta: ThreadDelta) -> tuple[Event, ...]:
 def _record_run(
     store: Store, delta: ThreadDelta, run_at: datetime, status: Literal["ok", "failed"]
 ) -> None:
+    _tie_prompt_version(store)
     store.record_stage_run(
         StageRun(
             stage="extract",

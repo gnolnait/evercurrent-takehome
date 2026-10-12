@@ -58,7 +58,8 @@ def verify(
     existing: Mapping[str, Item],
 ) -> Verified:
     drops = dict.fromkeys(DROP_FIELDS, 0)
-    items = []
+    # One entry per item id. A later output for the same id merges against the earlier result.
+    items: dict[str, Item] = {}
     for n, raw in enumerate(extraction.items):
         evidence = _evidence(raw.evidence, citable, drops)
         if evidence is None:
@@ -66,18 +67,22 @@ def verify(
         if raw.item_id is not None and raw.item_id not in existing:
             drops["item_id.unknown"] += 1
             continue
-        cited = {entry.message_ts for entry in evidence}
-        claims = _claims(raw.claims, cited, citable, glossary, drops)
-        links = _task_links(raw.tasks, cited, tasks, drops)
+        old_claims: list[Claim] = []
+        old_links: list[TaskLink] = []
         if raw.item_id is None:
             item_id = f"{delta.thread_id}#{delta.last_ts}#{n}"
         else:
             item_id = raw.item_id
-            evidence, claims, links = _merge(
-                existing[item_id], evidence, claims, links, citable, drops
-            )
-        items.append(_item(raw, item_id, delta.thread_id, evidence, claims, links, glossary, drops))
-    return Verified(items=tuple(items), drops=drops)
+            old = items.get(item_id, existing[item_id])
+            evidence, old_claims, old_links = _merge(old, evidence, citable, drops)
+        # A claim or a link cites a message the item holds and the delta carries.
+        cited = {entry.message_ts for entry in evidence if entry.message_ts in citable}
+        claims = old_claims + _claims(raw.claims, cited, citable, glossary, drops)
+        links = old_links + _task_links(raw.tasks, cited, tasks, drops)
+        items[item_id] = _item(
+            raw, item_id, delta.thread_id, evidence, claims, links, glossary, drops
+        )
+    return Verified(items=tuple(items.values()), drops=drops)
 
 
 def _evidence(
@@ -160,13 +165,12 @@ def _task_links(
 def _merge(
     old: Item,
     evidence: list[Evidence],
-    claims: list[Claim],
-    links: list[TaskLink],
     citable: Mapping[str, Event],
     drops: dict[str, int],
 ) -> tuple[list[Evidence], list[Claim], list[TaskLink]]:
-    """Old evidence, then new evidence for messages not cited before; old links on held messages.
+    """The merged evidence, and the old claims and links whose message the merged evidence holds.
 
+    The merged evidence is the old evidence, then the new entries for messages not cited before.
     A new entry for a cited message replaces the old entry in place. An old entry whose message
     the delta carries is checked again against the current text.
     """
@@ -185,7 +189,7 @@ def _merge(
     old_links = [link for link in old.tasks if link.message_ts in held]
     drops["claims.stale"] += len(old.claims) - len(old_claims)
     drops["tasks.stale"] += len(old.tasks) - len(old_links)
-    return merged, old_claims + claims, old_links + links
+    return merged, old_claims, old_links
 
 
 def _item(

@@ -18,7 +18,7 @@ from digest.extract.stage import ExtractReport, run_extract
 from digest.extract.verify import DROP_FIELDS
 from digest.llm.cassette import CassetteMiss
 from digest.llm.client import from_settings
-from digest.priors import load_priors
+from digest.priors import DEFAULT_PRIORS_PATH, load_priors
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
@@ -73,7 +73,10 @@ def extract(
         None, "--db", help="Store path; default DIGEST_DB, then data/<world>.sqlite."
     ),
 ) -> None:
-    """Triage and extract pending thread deltas, one working day at a time, up to the store's day."""
+    """Triage and extract pending thread deltas, one working day at a time, up to the store's day.
+
+    A run starts at the day after the meta key `extract_until` and records that key after each day.
+    """
     settings = Settings()
     path = db or settings.db or Path("data") / f"{world or settings.world}.sqlite"
     # Store.open creates a missing file; checking first keeps a typo from creating one.
@@ -96,6 +99,13 @@ def extract(
             _refuse(f"{source}: {error.strerror or error}")
         except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
             _refuse(f"{source}: {error}")
+        try:
+            priors = load_priors(DEFAULT_PRIORS_PATH)
+        except OSError as error:
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
+        except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
+        done = store.get_meta("extract_until")
         zone = ZoneInfo(timezone)
         end = datetime.fromisoformat(until)
         glossary = loaded.glossary()
@@ -110,17 +120,20 @@ def extract(
         )
         try:
             llm = from_settings(settings)
-            priors = load_priors()
             for day in range(1, loaded.days + 1):
-                as_of = datetime.combine(loaded.date_of(day), time.max, zone).astimezone(UTC)
+                today = loaded.date_of(day)
+                if done is not None and today <= date.fromisoformat(done):
+                    continue
+                as_of = datetime.combine(today, time.max, zone).astimezone(UTC)
                 if as_of > end:
                     break
                 report = run_extract(
                     store, llm, glossary, loaded.project, priors, as_of, zone, purposes
                 )
                 total = total.plus(report)
+                store.set_meta("extract_until", today.isoformat())
         # CassetteMiss: replay found no recording. ValueError: a missing API key, a store of
-        # another prompt version or a malformed priors file. OSError: no priors file.
+        # another prompt version or a malformed `extract_until`. OSError: no model ids file.
         except (CassetteMiss, ValueError, OSError) as error:
             _refuse(str(error))
     typer.echo(total.model_dump_json())
@@ -240,6 +253,11 @@ def _stored(store: Store, key: str) -> str:
     if value is None:
         _refuse(f"store {store.path} has no meta key {key!r}; run `digest replay` first")
     return value
+
+
+def _with_notes(error: BaseException) -> str:
+    """The error message, then each note added to the error, one per line."""
+    return "\n".join([str(error), *getattr(error, "__notes__", ())])
 
 
 def _refuse(reason: str) -> NoReturn:
