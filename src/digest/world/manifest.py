@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -21,8 +22,9 @@ class Manifest(Frozen):
 
 
 def load_manifest(path: Path) -> Manifest:
-    raise NotImplementedError
+    return Manifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def write_manifest(manifest: Manifest, path: Path) -> None:
-    raise NotImplementedError
+    text = json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    path.write_text(text, encoding="utf-8", newline="\n")

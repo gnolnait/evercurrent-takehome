@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from pydantic import Field
 
 from digest.models import Frozen
@@ -29,4 +30,4 @@ class Priors(Frozen):
 
 
 def load_priors(path: Path = DEFAULT_PRIORS_PATH) -> Priors:
-    raise NotImplementedError
+    return Priors.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))

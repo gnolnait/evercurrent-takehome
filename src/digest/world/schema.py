@@ -13,6 +13,8 @@ from digest.models import (
     Authority,
     Frozen,
     Glossary,
+    GlossaryEntity,
+    GlossaryPerson,
     Role,
 )
 from digest.project import ProjectConfig, require_unique
@@ -256,4 +258,19 @@ class World(Frozen):
 
     def glossary(self) -> Glossary:
         """Every entity and persona as the extractor's glossary (plan B0.3)."""
-        raise NotImplementedError
+        return Glossary(
+            entities=tuple(
+                GlossaryEntity(id=e.id, type=e.type, description=e.description, aliases=e.aliases)
+                for e in self.entities
+            ),
+            people=tuple(
+                GlossaryPerson(
+                    user_id=p.user_id,
+                    name=p.name,
+                    role=p.role,
+                    aliases=p.aliases,
+                    authority=p.authority,
+                )
+                for p in self.personas
+            ),
+        )
