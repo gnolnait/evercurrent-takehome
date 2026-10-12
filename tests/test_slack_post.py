@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from slack_sdk.errors import SlackApiError
 from typer.testing import CliRunner
 
 import digest.cli as cli
@@ -28,6 +29,9 @@ DAY = date(2026, 10, 14)
 TS = "1760000000.000001"
 WORKSPACE = "https://kestrel-k2.slack.com"
 WEBHOOK_URL = "https://hooks.slack.com/services/secret-value"
+# Build fake tokens from parts to keep the secret scanner quiet.
+BOT_TOKEN = "xox" + "b-" + "bot-secret-value"
+DM_CHANNEL = "D012ABC"
 runner = CliRunner()
 
 
@@ -225,6 +229,36 @@ class FakeWebhookClient:
         return self.responses[index]
 
 
+class FakeSlackWebClient:
+    def __init__(self, post_errors: dict[int, Exception] | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.post_errors = post_errors or {}
+
+    def conversations_open(self, *, users: str) -> dict[str, dict[str, str]]:
+        self.calls.append({"method": "conversations_open", "users": users})
+        return {"channel": {"id": DM_CHANNEL}}
+
+    def chat_postMessage(
+        self,
+        *,
+        channel: str,
+        text: str,
+        blocks: list[dict[str, Any]],
+    ) -> None:
+        post_number = sum(call["method"] == "chat_postMessage" for call in self.calls) + 1
+        self.calls.append(
+            {
+                "method": "chat_postMessage",
+                "channel": channel,
+                "text": text,
+                "blocks": blocks,
+            }
+        )
+        error = self.post_errors.get(post_number)
+        if error is not None:
+            raise error
+
+
 def successful_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
     end = args[4]
     assert isinstance(end, datetime)
@@ -269,6 +303,167 @@ def prepare_post(
         return client
 
     monkeypatch.setattr(cli, "_webhook_client", client_for, raising=False)
+
+
+def prepare_dm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: FakeSlackWebClient,
+    *,
+    token: str | None = BOT_TOKEN,
+    extract: Callable[..., ExtractReport] = successful_extract,
+) -> FakeWebhookClient:
+    webhook_client = FakeWebhookClient()
+    prepare_post(tmp_path, monkeypatch, webhook_client, extract=extract)
+    if token is None:
+        monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("SLACK_BOT_TOKEN", token)
+
+    def client_for(value: str) -> FakeSlackWebClient:
+        assert value == token
+        return client
+
+    monkeypatch.setattr(cli, "_slack_web_client", client_for, raising=False)
+    return webhook_client
+
+
+def test_cli_post_dm_opens_one_conversation_and_sends_three_readers_in_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+) -> None:
+    client = FakeSlackWebClient()
+    webhook_client = prepare_dm(tmp_path, monkeypatch, client)
+    selections: list[Selection] = []
+    select_digest = cli.select_digest
+
+    def capture_selection(*args: Any, **kwargs: Any) -> Selection:
+        selected = select_digest(*args, **kwargs)
+        selections.append(selected)
+        return selected
+
+    monkeypatch.setattr(cli, "select_digest", capture_selection)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC", "--day", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert [selected.profile.role for selected in selections] == ["ME", "supply_chain", "EM"]
+    assert client.calls == [
+        {"method": "conversations_open", "users": "U012ABC"},
+        *[
+            {
+                "method": "chat_postMessage",
+                "channel": DM_CHANNEL,
+                **slack_message(world, selected),
+            }
+            for selected in selections
+        ],
+    ]
+    assert webhook_client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("token", "withheld_fragments"),
+    [
+        # Build fake tokens from parts to keep the secret scanner quiet.
+        ("not" + "xox" + "b-" + "SENSITIVE-CREDENTIAL", ("SENSITIVE", "CREDENTIAL")),
+        (None, ()),
+    ],
+    ids=["wrong-prefix", "missing"],
+)
+def test_cli_post_dm_rejects_invalid_bot_token_before_build_without_leaking_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    token: str | None,
+    withheld_fragments: tuple[str, ...],
+) -> None:
+    client = FakeSlackWebClient()
+    builds: list[None] = []
+
+    def record_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
+        builds.append(None)
+        return successful_extract(store, *args, **kwargs)
+
+    webhook_client = prepare_dm(
+        tmp_path,
+        monkeypatch,
+        client,
+        token=token,
+        extract=record_extract,
+    )
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "SLACK_BOT_TOKEN" in result.output
+    assert builds == []
+    assert client.calls == []
+    assert webhook_client.calls == []
+    assert all(fragment not in result.output for fragment in withheld_fragments)
+
+
+def test_cli_post_dm_rejects_invalid_user_id_before_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = FakeSlackWebClient()
+    builds: list[None] = []
+
+    def record_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
+        builds.append(None)
+        return successful_extract(store, *args, **kwargs)
+
+    webhook_client = prepare_dm(tmp_path, monkeypatch, client, extract=record_extract)
+
+    result = runner.invoke(app, ["post", "--dm", "U012-ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "--dm" in result.output
+    assert builds == []
+    assert client.calls == []
+    assert webhook_client.calls == []
+
+
+def test_cli_post_dm_stops_after_slack_api_error_and_reports_only_its_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = SlackApiError(
+        f"post failed with {BOT_TOKEN}",
+        {"error": "missing_scope"},
+    )
+    client = FakeSlackWebClient({2: error})
+    webhook_client = prepare_dm(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "Hamid Rostami" in result.output
+    assert "missing_scope" in result.output
+    assert sum(call["method"] == "chat_postMessage" for call in client.calls) == 2
+    assert webhook_client.calls == []
+    exception_text = f"{result.exception!r} {result.exception}"
+    for sensitive in (BOT_TOKEN, "bot-secret-value"):
+        assert sensitive not in result.output
+        assert sensitive not in exception_text
+
+
+def test_cli_post_dm_reports_arbitrary_post_exception_without_leaking_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = FakeSlackWebClient({1: LookupError(f"post failed with {BOT_TOKEN}")})
+    webhook_client = prepare_dm(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "Nadia Brenner" in result.output
+    assert "LookupError" in result.output
+    assert sum(call["method"] == "chat_postMessage" for call in client.calls) == 1
+    assert webhook_client.calls == []
+    exception_text = f"{result.exception!r} {result.exception}"
+    for sensitive in (BOT_TOKEN, "bot-secret-value"):
+        assert sensitive not in result.output
+        assert sensitive not in exception_text
 
 
 def test_cli_post_sends_three_readers_in_order_and_exits_zero(
@@ -451,6 +646,23 @@ def test_cli_post_withholds_non_code_response_body(
     assert str(status_code) in result.output
     assert "body withheld" in result.output.lower()
     assert all(fragment not in result.output for fragment in withheld_fragments)
+    assert len(client.calls) == 1
+
+
+def test_cli_post_withholds_error_code_that_appears_in_webhook_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    webhook_url = "https://hooks.slack.com/services/abc/def/secretword"
+    client = FakeWebhookClient([FakeResponse(400, "secretword")])
+    prepare_post(tmp_path, monkeypatch, client, webhook_url=webhook_url)
+
+    result = runner.invoke(app, ["post"])
+
+    assert result.exit_code == 1, result.output
+    assert "Nadia Brenner" in result.output
+    assert "400" in result.output
+    assert "body withheld" in result.output.lower()
+    assert "secretword" not in result.output
     assert len(client.calls) == 1
 
 
