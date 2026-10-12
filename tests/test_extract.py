@@ -794,15 +794,24 @@ def test_verify_quote_matches_only_its_cited_message_after_space_normalization(
         ("rev", "Rev B", "B"),
         ("rev", "rev c", "C"),
         ("rev", "Rev. D", "D"),
+        ("rev", "REV. D", "D"),
+        ("rev", "RevB", "B"),
+        ("rev", "Rev B and C", "Rev B and C"),
         ("rev", " B ", "B"),
         ("qty", "32 counted, 8 short", "32"),
+        ("qty", "1,200 pcs", "1200"),
+        ("qty", "40/40", "40"),
         ("qty", "50", "50"),
         ("qty", "about 32 counted", "about 32 counted"),
+        ("qty", "32k", "32k"),
+        ("qty", "32-40", "32-40"),
+        ("qty", "3.5 kg", "3.5 kg"),
+        ("qty", "32e3", "32e3"),
         ("gate_date", "2026-10-22", "2026-10-22"),
         ("status", "In Progress", "In Progress"),
     ],
 )
-def test_verify_normalizes_revision_and_leading_quantity_claim_values(
+def test_verify_normalizes_revision_and_quantity_claim_values(
     attribute: Any, raw: str, expected: str
 ) -> None:
     root = event(text=raw)
