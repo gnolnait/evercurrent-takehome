@@ -193,17 +193,14 @@ def _create_kind(cmdword, rest):
     return "", False
 
 
-def _shell_string(rest):
-    """The string after the first -c flag, alone or in a cluster such as -lc.
+def _shell_strings(rest):
+    """Every string that follows a -c flag, alone or in a cluster such as -lc.
 
-    Any -c counts, also one after the script operand (bash script.sh -lc x).
-    Reading too much blocks a harmless command; an option-value parser that
-    stops early lets a creation through (bash --rcfile f -c ...).
+    Each -c counts: one after the script operand (bash script.sh -lc x), and
+    one that is an option value (bash --rcfile -lc -c x). Reading too much
+    blocks a harmless command; reading only the first lets a creation through.
     """
-    for i, tok in enumerate(rest):
-        if SHELL_C_FLAG.match(tok):
-            return rest[i + 1] if i + 1 < len(rest) else None
-    return None
+    return [rest[i + 1] for i, tok in enumerate(rest[:-1]) if SHELL_C_FLAG.match(tok)]
 
 
 def _writes_symbolic_ref(rest):
@@ -229,8 +226,7 @@ def _scan(cmd, found, movers, depth=0):
             _scan(" ".join(rest), found, movers, depth + 1)
             continue
         if cmdword in SHELLS:
-            string = _shell_string(rest)
-            if string is not None:
+            for string in _shell_strings(rest):
                 _scan(string, found, movers, depth + 1)
             continue
         if cmdword in DIR_CHANGERS:
