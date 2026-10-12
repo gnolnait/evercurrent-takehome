@@ -44,6 +44,9 @@ Pass these `args`:
 - `prior`: the `findings` of an earlier verdict at this head (a re-run), else `[]`.
 - `carried`: the `findings` of verdicts at older heads of this branch, each with that
   verdict's `head` added, else `[]`.
+
+Read the earlier verdicts from `<root>/.review/*/verdict.json` and match on the
+verdict's `branch` key, as in the STEP 4 ratchet of `ORCHESTRATOR.md`.
 - `max_verify`: 8, unless the user asks for another cap.
 
 The workflow does STEP 3 and the per-lead part of STEP 4 of `ORCHESTRATOR.md`. It sends
