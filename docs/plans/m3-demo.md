@@ -240,8 +240,23 @@ anything over the network in replay mode, and it reads no model API key.
   reads it. Any exception from a send exits 1 naming the reader and the exception type
   only, never its message. A refused post prints Slack's response body only when it is a plain
   error code (lower-case letters and underscores, such as `invalid_blocks`); any other
-  body is withheld, since a proxy page can echo the URL path. The client keeps the SDK's connection-error retry with its
+  body is withheld, since a proxy page can echo the URL path A code that also
+  appears in the URL is withheld too. The client keeps the SDK's connection-error retry with its
   logger off.
+
+B6.5 `digest post --dm USER_ID` (user ruling, 2026-10-12: the product delivers to each
+reader directly). It builds the same three messages as B6.4 and sends each as a direct
+message from the app's bot to the Slack user `USER_ID`, in reader order: it opens the DM
+with `conversations.open` and posts with `chat.postMessage` (scopes `chat:write`,
+`im:write`). The demo workspace has one real person, so all three readers' digests go to
+that user; each message's header names its reader. The bot token comes from
+`SLACK_BOT_TOKEN` (environment, then `.env`, read as in B6.4) and must start with
+`xoxb-`; `USER_ID` must match `[UW][A-Z0-9]+`. Either check fails with exit 1 before any
+build, naming the variable or the option and never the token. A Slack API error exits 1
+with the reader and Slack's error code only (for example `missing_scope`,
+`channel_not_found`); any other exception exits 1 with the reader and its type only. No
+output, log line or exception text holds the token. Without `--dm`, `post` uses the
+webhook of B6.4.
 
 ## Tests
 
