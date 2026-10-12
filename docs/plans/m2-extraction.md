@@ -1319,7 +1319,7 @@ sees.
 | 4 | Realism | Keys as the tests name them; p90 is nearest-rank (index `ceil(0.9 * n) - 1` of the sorted list). |
 | 4 | Models *(code)* | Concrete ids for one logical model are joined with `", "` in sorted order; the test accepts any separator and order. |
 | 4 | `objective_misses` | A field counts for a thread-matched golden item that is not matched only when no item in its thread carries that field correctly. |
-| 4 | Failed calls | `extract_failed` and `extract_threads` count failed and seen thread deltas over all days; the triage table shows them, and `digest eval` prints them. |
+| 4 | Failed calls | `extract_failed` and `extract_threads` count failed and seen thread deltas over all days; the triage table shows them with `extract_threads` as the `n`, and `digest eval` prints `extract_failed` in its headline. |
 | 4 | Shared rules *(code)* | The eval's citation check calls `verify.quotes`, and `uncitable_tasks` calls `absence.task_citations`, the detector's own rule. |
 | 4 | Report layout | Each B4.7 section has a heading that contains its name; every rate has its `n` on the same row; rates print with a decimal point and `None` as `n/a` *(code)*. |
 
