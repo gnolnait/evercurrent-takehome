@@ -543,7 +543,8 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
 - An `item_id` that is not a key of `existing` drops the item (`item_id.unknown`). A
   null `item_id` makes a new item with id `f"{thread_id}#{last_ts}#{n}"`, `n` the
   item's index in the output (unique because a store holds one extraction prompt
-  version, B1.6). An existing id keeps `item_id`; its `evidence` is the
+  version, B1.6). Amended 2026-10-12: a new id now anchors on the earliest cited
+  message (`docs/plans/stable-item-ids.md`). An existing id keeps `item_id`; its `evidence` is the
   old entries followed by the new ones for messages not already cited (output order
   kept, so `evidence[0]` stays the first message the item cited); a new entry for an
   already cited `message_ts` replaces the old one in place, because it was verified

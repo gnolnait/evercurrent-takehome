@@ -129,6 +129,9 @@ severity, confidence, evidence[{channel_id, message_ts, quote}], claims[], first
 last_updated, status, resolved_by, links[{kind, item_id}], tasks[{task, effect,
 channel_id, message_ts}], ask_message, absence}`
 - type: decision | blocker | risk | schedule_change | spec_change | bom_change | ask | fyi | absence
+- `item_id` of a new item is `{thread_id}#{anchor_ts}#{k}`: `anchor_ts` is the item's
+  earliest cited message, `k` the lowest index not already used in the thread. An updated
+  item keeps its id (`docs/plans/stable-item-ids.md`).
 - entities: part numbers with rev, ECO/ECR/DEV ids, gates, tests, vendors, POs, people
 - evidence entries and task links name their channel, because a Slack `ts` is unique
   only within a channel. Every lookup by message uses `(channel_id, message_ts)`.
