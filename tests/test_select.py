@@ -552,7 +552,7 @@ def test_bundled_daily_priors_are_used_for_ranking() -> None:
 @pytest.mark.parametrize(
     ("item_type", "section"),
     [
-        ("ask", "needs_you"),
+        ("ask", "fyi"),
         ("absence", "not_happened"),
         ("decision", "decisions"),
         ("schedule_change", "decisions"),
@@ -572,6 +572,34 @@ def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section:
     )
 
     assert selection.lines[0].section == section
+
+
+def test_ask_owned_by_reader_is_must_see_in_needs_you() -> None:
+    ask = item("ask-for-reader", type="ask", owner="UREADER")
+
+    selection = choose([ask], table=priors(min_score=1.1))
+
+    assert [(line.item.item_id, line.section, line.must_see) for line in selection.lines] == [
+        ("ask-for-reader", "needs_you", True)
+    ]
+
+
+def test_ask_by_reader_for_someone_else_is_ranked_in_fyi() -> None:
+    ask = item(
+        "ask-by-reader",
+        type="ask",
+        owner="UEMPTY",
+        severity="high",
+        title="Reader asks the firmware owner for an update",
+    )
+    table = priors(role_priors={"ME": {"ask": 1.0}}, min_score=0.2)
+
+    selection = choose([ask], table=table)
+
+    assert [(line.item.item_id, line.section, line.must_see) for line in selection.lines] == [
+        ("ask-by-reader", "fyi", False)
+    ]
+    assert selection.lines[0].score > table.daily.min_score
 
 
 def test_ask_absence_removes_only_ask_named_in_id() -> None:
@@ -634,7 +662,7 @@ def test_ask_absence_for_asker_goes_to_not_happened() -> None:
     ]
 
 
-def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
+def test_ranked_ask_absence_replaces_ask_without_fyi_copy_for_third_party_reader() -> None:
     ask = item("ask", type="ask", owner="UREADER")
     missing = absence(
         f"absence:ask:{ask.item_id}",
@@ -649,6 +677,7 @@ def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
         ("absence:ask:ask", "not_happened")
     ]
+    assert all(line.section != "fyi" for line in selection.lines)
     assert selection.lines[0].must_see is False
 
 
@@ -668,7 +697,7 @@ def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
 
     selection = choose([ask], [missing], table=table)
 
-    assert [(line.item.item_id, line.section) for line in selection.lines] == [("ask", "needs_you")]
+    assert [(line.item.item_id, line.section) for line in selection.lines] == [("ask", "fyi")]
     assert selection.lines[0].must_see is False
 
 
@@ -730,6 +759,7 @@ def test_must_see_ties_stay_in_item_id_order() -> None:
 
 def test_each_section_caps_only_ranked_lines() -> None:
     rows = [item(f"ask-{index}", type="ask") for index in range(7)]
+    rows += [item(f"ask-owned-{index}", type="ask", owner="UREADER") for index in range(7)]
     rows += [item(f"decision-{index}") for index in range(7)]
     rows += [
         item("risk-low-c", type="risk", severity="low"),
@@ -748,7 +778,7 @@ def test_each_section_caps_only_ranked_lines() -> None:
     counts = Counter(line.section for line in selection.lines)
 
     assert counts == {
-        "needs_you": 5,
+        "needs_you": 7,
         "not_happened": 3,
         "decisions": 5,
         "risks": 6,
