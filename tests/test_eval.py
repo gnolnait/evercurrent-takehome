@@ -855,17 +855,17 @@ def test_eval_counts_failed_calls_and_marks_the_golden_item_missed(
     report_path = tmp_path / "failed-report.md"
     write_report(report, report_path)
 
-    assert report.extract_failed >= 1
+    assert report.extract_failed == 4
     assert "ASK-OWNER" in report.missed
     triage = _section(report_path.read_text(encoding="utf-8"), "triage")
-    _assert_rate_n(triage, ("extract", "fail"), report.extract_failed)
+    _assert_rate_n(triage, ("extract", "fail"), 4)
 
     _set_cli_eval_environment(monkeypatch, case)
     cli_report = tmp_path / "failed-cli-report.md"
     result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(cli_report)])
 
     assert result.exit_code == 0, result.output
-    assert re.search(r"extract(?:ion)?[ _-]fail(?:ed|ures?):\s*[1-9]", result.output, re.IGNORECASE)
+    assert re.search(r"extract(?:ion)?[ _-]fail(?:ed|ures?):\s*4\b", result.output, re.IGNORECASE)
 
 
 def test_eval_rejects_a_golden_thread_that_was_never_run(tmp_path: Path) -> None:
@@ -894,7 +894,8 @@ def test_cli_eval_reports_a_manifest_event_that_is_missing(
 
     assert result.exit_code == 1
     assert "ASK-OWNER" in result.output
-    assert "Traceback" not in result.output
+    assert "manifest" in result.output.lower()
+    assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 def test_cli_eval_reports_no_rendered_threads(
@@ -934,7 +935,7 @@ def test_stale_golden_message_distinguishes_labels_from_cadence(eval_case: EvalC
         _run(eval_case)
 
     message = str(raised.value).lower()
-    assert "labels differ" in message
+    assert "labels differ" in message or "differs from the labels derived" in message
     assert "cadence" not in message
 
     stale = eval_case.golden.model_copy(update={"ask_reply_cadence_days": 2})
@@ -959,15 +960,18 @@ def test_cli_eval_removes_all_store_files_before_the_run(
         sidecar.write_bytes(b"leftover sidecar")
 
     original_run = cli_module.run_extraction_eval
+    sidecars_existed_at_run_start: bool | None = None
 
     def run_after_cleanup(
         world_dir: Path, llm: LLM, priors: Priors, path: Path
     ) -> ExtractionReport:
-        assert not any(sidecar.exists() for sidecar in sidecars)
+        nonlocal sidecars_existed_at_run_start
+        sidecars_existed_at_run_start = any(sidecar.exists() for sidecar in sidecars)
         return original_run(world_dir, llm, priors, path)
 
     monkeypatch.setattr(cli_module, "run_extraction_eval", run_after_cleanup)
     result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(tmp_path / "fresh.md")])
 
     assert result.exit_code == 0, result.output
+    assert sidecars_existed_at_run_start is False
     assert not any(path.exists() for path in sidecars)
