@@ -659,22 +659,23 @@ def windows_shell_text(name, args):
     guard to search. Return None for an encoded PowerShell command, which
     cannot be read.
 
-    The leading flags are left out, so `-NoProfile` cannot look like git's
-    `-n`. A flag starts with `-`, `--` or `/`. Among them, any prefix of
-    `-EncodedCommand`, or `-ec`, names an encoded command. cmd also runs a
-    command glued to its switch (`/cgh pr merge`), so that command is split off
-    first.
+    A flag starts with `-`, `--` or `/`. Any PowerShell flag that is a prefix of
+    `-EncodedCommand`, or `-ec`, names an encoded command, in any position.
+    cmd also runs a command glued to its switch (`/cgh pr merge`, or
+    `/c"gh pr merge & x"`), so that command is split off first.
     """
     if name == "cmd":
         split = []
         for arg in args:
-            glued = re.fullmatch(r"(/+[ck])([^/\s]\S*)", arg, re.I)
+            glued = re.fullmatch(r"(/+[ck])([^/].*)", arg, re.I | re.S)
             split += [glued.group(1), glued.group(2)] if glued else [arg]
         args = split
+    else:
+        for arg in args:
+            flag = arg.lower().lstrip("-/") if arg[:1] in ("-", "/") else ""
+            if flag == "ec" or (flag and "encodedcommand".startswith(flag)):
+                return None
     i = 0
     while i < len(args) and args[i][:1] in ("-", "/"):
-        flag = args[i].lower().lstrip("-/")
-        if name != "cmd" and (flag == "ec" or (flag and "encodedcommand".startswith(flag))):
-            return None
         i += 1
     return " ".join(args[i:]).lower()

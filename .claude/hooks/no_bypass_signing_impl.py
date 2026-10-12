@@ -22,7 +22,8 @@ Parsing is quote-aware (shlex tokens, not a substring regex): the trigger has
 to be an actual argument token of a git command. A commit message or PR title
 that merely MENTIONS --no-verify is one quoted token and never matches — the
 old `tr`-split + regex version false-blocked exactly that (a message with a
-`;` before `git ... --no-verify ...` prose).
+`;` before `git ... --no-verify ...` prose). The exception is the text of a
+Windows shell (`powershell -Command "..."`), which is searched, not parsed.
 
 It also follows transparent wrappers (env / command / sudo / nice / timeout),
 shell-string wrappers (`sh -c '...'`, `eval '...'`, incl. `bash -lc`),
@@ -121,6 +122,12 @@ def tokenize(segment):
 # trigger-shaped and unparseable, so the extra breadth of `-n` only ever blocks
 # in the safe direction.
 TRIGGER_HINTS = ("--no-verify", "--no-veri", "--no-gpg", "--no-g", "gpgsign", "-n")
+
+# For Windows shell text, which is searched on every call, a bare `-n` substring
+# would block `-NoProfile` and `--no-pager`. There, `-n` counts only as a short
+# option cluster that holds `n` (`-n`, `-an`, `-nm`).
+_LONG_HINTS = tuple(h for h in TRIGGER_HINTS if h != "-n")
+_SHORT_N = re.compile(r"(?<!\S)-[a-z]{0,3}n[a-z]{0,3}(?!\S)")
 
 
 def _mentions_git(text):
@@ -249,7 +256,10 @@ def check_segment(toks, depth=0, inherited_gpgsign_off=False):
         # Not parsed (see shell_segments): an encoded command, or git with a
         # bypass hint anywhere in the text, fails closed.
         text = windows_shell_text(word, toks[head + 1 :])
-        return text is None or (_mentions_git(text) and any(h in text for h in TRIGGER_HINTS))
+        return text is None or (
+            _mentions_git(text)
+            and (any(h in text for h in _LONG_HINTS) or _SHORT_N.search(text) is not None)
+        )
     if word != "git":
         return False
     rest = toks[head + 1 :]

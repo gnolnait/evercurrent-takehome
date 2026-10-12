@@ -360,7 +360,9 @@ def process_segment(toks, effdir, piped=()):
     # previous segment (`cat <<EOF | bash`).
     h, env_s_cmd = head, None
     while h < len(toks):
-        if toks[h] == "{":  # brace-group opener runs its body in this shell
+        # A brace-group opener runs its body in this shell, and a keyword such
+        # as `then` comes before the command word it runs.
+        if toks[h] in ("{", "if", "then", "elif", "else", "while", "until", "do", "!"):
             h += 1
             continue
         if os.path.basename(toks[h]) in (
