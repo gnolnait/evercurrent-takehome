@@ -422,6 +422,38 @@ def test_cli_post_stops_after_slack_refuses_a_message_without_leaking_url(
     assert WEBHOOK_URL not in result.output
 
 
+@pytest.mark.parametrize(
+    ("status_code", "body", "withheld_fragments"),
+    [
+        (400, "Rejected /services/T000/B000/SECRET", ("SECRET", "/services/")),
+        (
+            500,
+            "<html><body>Internal Server Error</body></html>",
+            ("<html>", "Internal Server Error"),
+        ),
+    ],
+    ids=["webhook-path", "html"],
+)
+def test_cli_post_withholds_non_code_response_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    body: str,
+    withheld_fragments: tuple[str, ...],
+) -> None:
+    client = FakeWebhookClient([FakeResponse(status_code, body)])
+    prepare_post(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post"])
+
+    assert result.exit_code == 1, result.output
+    assert "Nadia Brenner" in result.output
+    assert str(status_code) in result.output
+    assert "body withheld" in result.output.lower()
+    assert all(fragment not in result.output for fragment in withheld_fragments)
+    assert len(client.calls) == 1
+
+
 def test_cli_post_reports_arbitrary_send_exception_without_leaking_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
