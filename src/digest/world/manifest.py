@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from digest.models import TS_PATTERN, Frozen
 
@@ -22,7 +22,15 @@ class Manifest(Frozen):
 
 
 def load_manifest(path: Path) -> Manifest:
-    return Manifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path}:{error.lineno}: {error.msg}") from error
+    try:
+        return Manifest.model_validate(data)
+    except ValidationError as error:
+        error.add_note(f"file: {path}")
+        raise
 
 
 def write_manifest(manifest: Manifest, path: Path) -> None:

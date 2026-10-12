@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from digest.models import Frozen
 
@@ -30,4 +30,10 @@ class Priors(Frozen):
 
 
 def load_priors(path: Path = DEFAULT_PRIORS_PATH) -> Priors:
-    return Priors.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+    with path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)  # a stream, so a YAML error's mark names the file
+    try:
+        return Priors.model_validate(data)
+    except ValidationError as error:
+        error.add_note(f"file: {path}")
+        raise
