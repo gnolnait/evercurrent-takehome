@@ -339,8 +339,10 @@ def _outputs(
     wrong_objectives: bool,
     scored_attribute: str = "status",
     scored_entity: str = "G-CITE",
+    extracted_scored_entity: str | None = None,
     extracted_value: str = "closed",
     scored_claim_only: bool = False,
+    include_extracted_scored_claim: bool = True,
     ask_claim_value: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     quantity = "5" if wrong_objectives else "4"
@@ -366,7 +368,18 @@ def _outputs(
                     _claim("PN-1", "qty", quantity, SHARED_ROOT),
                 ]
             ),
-            _claim(scored_entity, scored_attribute, extracted_value, SHARED_ROOT),
+            *(
+                [
+                    _claim(
+                        extracted_scored_entity or scored_entity,
+                        scored_attribute,
+                        extracted_value,
+                        SHARED_ROOT,
+                    )
+                ]
+                if include_extracted_scored_claim
+                else []
+            ),
         ],
     )
     noise = _extracted_item(
@@ -431,8 +444,10 @@ def _script_cassettes(
     wrong_objectives: bool,
     scored_attribute: str,
     scored_entity: str,
+    extracted_scored_entity: str | None,
     extracted_value: str,
     scored_claim_only: bool,
+    include_extracted_scored_claim: bool,
     extracted_ask_claim_value: str | None,
 ) -> None:
     world = load_world(case.world_dir / "world.yaml")
@@ -441,8 +456,10 @@ def _script_cassettes(
         wrong_objectives=wrong_objectives,
         scored_attribute=scored_attribute,
         scored_entity=scored_entity,
+        extracted_scored_entity=extracted_scored_entity,
         extracted_value=extracted_value,
         scored_claim_only=scored_claim_only,
+        include_extracted_scored_claim=include_extracted_scored_claim,
         ask_claim_value=extracted_ask_claim_value,
     )
     request_store = case.root / "request.sqlite"
@@ -507,9 +524,11 @@ def _build_case(
     absent_golden_thread: bool = False,
     scored_attribute: str = "status",
     scored_entity: str = "G-CITE",
+    extracted_scored_entity: str | None = None,
     golden_value: str = "open",
     extracted_value: str = "closed",
     scored_claim_only: bool = False,
+    include_extracted_scored_claim: bool = True,
     golden_ask_claim_value: str | None = None,
     extracted_ask_claim_value: str | None = None,
 ) -> EvalCase:
@@ -557,8 +576,10 @@ def _build_case(
         wrong_objectives=wrong_objectives,
         scored_attribute=scored_attribute,
         scored_entity=scored_entity,
+        extracted_scored_entity=extracted_scored_entity,
         extracted_value=extracted_value,
         scored_claim_only=scored_claim_only,
+        include_extracted_scored_claim=include_extracted_scored_claim,
         extracted_ask_claim_value=extracted_ask_claim_value,
     )
     return case
@@ -703,7 +724,7 @@ def test_eval_reports_each_objective_field_miss(tmp_path: Path) -> None:
     assert report.by_type["ask"].golden_matched == 0
 
 
-@pytest.mark.parametrize("attribute", ["status", "spec_param"])
+@pytest.mark.parametrize("attribute", ["status", "spec_param", "lead_time", "priority"])
 def test_eval_matches_non_discriminating_claims_without_equal_values(
     tmp_path: Path, attribute: str
 ) -> None:
@@ -721,6 +742,40 @@ def test_eval_matches_non_discriminating_claims_without_equal_values(
     assert report.claims_found == 2
     assert report.claims_extracted_matched == 2
     assert report.claim_precision == pytest.approx(2 / 3)
+
+
+@pytest.mark.parametrize("attribute", ["status", "spec_param", "lead_time", "priority"])
+def test_eval_does_not_find_non_discriminating_golden_claim_without_same_key(
+    tmp_path: Path, attribute: str
+) -> None:
+    case = _build_case(
+        tmp_path,
+        scored_attribute=attribute,
+        scored_claim_only=True,
+        include_extracted_scored_claim=False,
+    )
+
+    report = _run(case)
+
+    assert (report.claims_golden, report.claims_found) == (2, 1)
+    assert report.claim_recall == pytest.approx(1 / 2)
+
+
+@pytest.mark.parametrize("attribute", ["status", "spec_param", "lead_time", "priority"])
+def test_eval_does_not_match_non_discriminating_extracted_claim_on_another_entity(
+    tmp_path: Path, attribute: str
+) -> None:
+    case = _build_case(
+        tmp_path,
+        scored_attribute=attribute,
+        extracted_scored_entity="G-UNCITE",
+        scored_claim_only=True,
+    )
+
+    report = _run(case)
+
+    assert (report.claims_extracted, report.claims_extracted_matched) == (3, 1)
+    assert report.claim_precision == pytest.approx(1 / 3)
 
 
 @pytest.mark.parametrize(
@@ -813,7 +868,7 @@ def test_eval_handles_no_distractors_or_absences(tmp_path: Path) -> None:
     assert report.absence_false_alarm_rate is None
     assert report.absence_recall is None
     assert report.by_type["fyi"].recall is None
-    assert report.entity_jaccard_n == 1
+    assert report.entity_jaccard_n == 2
 
 
 def _section(text: str, name: str) -> str:
