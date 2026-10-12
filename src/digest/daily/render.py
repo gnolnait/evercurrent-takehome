@@ -98,8 +98,8 @@ def _line(line: Line, names: Mapping[str, str]) -> str:
     detail = item.absence
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
-        owner = names.get(item.owner, item.owner) if item.owner else "none"
-        head = f"- {_plain(item.title)}{entities} - owner {owner}"
+        owner = f" - owner {names.get(item.owner, item.owner)}" if item.owner else ""
+        head = f"- {_plain(item.title)}{entities}{owner}"
         body = [f"  {_plain(item.summary)}"]
     elif detail.source == "checklist":
         head = (
