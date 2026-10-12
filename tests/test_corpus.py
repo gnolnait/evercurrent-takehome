@@ -30,11 +30,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = "https://kestrel-test.slack.com"
 EMPTY_AVOID = AvoidNames(names=(), identifiers=(), phrases=())
 runner = CliRunner()
-ANSWERED_ASK_COUNT = re.compile(
-    r"\b(?:(?:one|1)\b.{0,20}\b(?:root|plus)\b|root\b.{0,20}\b(?:one|1)\b)"
-    r".{0,40}\b(?:the|one|1)\s+repl(?:y|ies)\b",
-    re.IGNORECASE,
-)
 
 
 def world_data() -> dict[str, Any]:
@@ -373,7 +368,8 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
         ask_prompt,
         re.IGNORECASE,
     )
-    assert ANSWERED_ASK_COUNT.search(ask_prompt)
+    assert "1 root message plus 1 reply" in ask_prompt.casefold()
+    assert "replies" not in ask_prompt.casefold()
     system = llm.requests[0].system
     folded = system.casefold()
     assert all(
@@ -392,17 +388,6 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
         ("output", "json", "schema"),
     ):
         assert any(concept in folded for concept in concepts)
-
-
-@pytest.mark.parametrize(
-    ("text", "matches"),
-    [
-        ("Use 1 plus the reply.", True),
-        ("Use 1 root message and 3 replies.", False),
-    ],
-)
-def test_answered_ask_count_requires_exactly_one_reply(text: str, matches: bool) -> None:
-    assert bool(ANSWERED_ASK_COUNT.search(text)) is matches
 
 
 @pytest.mark.parametrize(
@@ -459,7 +444,8 @@ def test_render_request_states_when_an_ask_is_never_answered() -> None:
     assert re.search(
         r"never\s+(?:answered|replied)|(?:no|without)\s+(?:answer|reply)", prompt, re.I
     )
-    assert re.search(r"(?:target|message).{0,30}\b1\b", prompt, re.IGNORECASE)
+    assert "1 root message" in prompt.casefold()
+    assert "1 reply" not in prompt.casefold()
 
 
 def test_render_assigns_timestamps_fields_mentions_reactions_and_permalinks(tmp_path: Path) -> None:
