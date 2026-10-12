@@ -107,7 +107,7 @@ an unknown channel id is not visible).
 B5.2 Visibility filter (SPEC 5.6, a v0.4 core rule): an item's channel is the channel of
 its `thread_id` (`<channel>:<thread_ts>`); every evidence entry comes from that thread.
 An item reaches the reader only when that channel is one the reader can see. An evidence
-entry whose permalink names any other channel is removed from the line's item before
+entry whose `channel_id` (SPEC 4, v0.4.3) is any other channel is removed from the line's item before
 rendering (fail closed), so no quote or link from another channel is shown; an item left
 with no evidence entry is dropped. An item with no
 visible evidence is dropped and counted in `hidden`. An absence item follows the same
@@ -159,9 +159,6 @@ default day 6:
   world schema is a role only.
 - `personal_relevance` is not the neutral 1 for a reader who owns nothing. Each of the
   three demo readers owns entities.
-- M2 evidence entries carry no `channel_id`. M2 does not merge items, so every evidence
-  entry comes from the item's thread, and the thread's channel stands in for it (B5.2).
-  When the model carries `channel_id`, B5.2 reads it.
 - The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The `daily.role_priors`
   table in `config/priors.yaml` has a value for every role and every item type,
   so the default does not apply to the bundled config.
