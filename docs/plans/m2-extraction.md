@@ -1087,9 +1087,11 @@ class ExtractionReport(Frozen):
     triage_golden_kept: int
     triage_golden_total: int
     triage_by_event: dict[str, float]  # max probability over the thread's revisions, per golden and distractor event
-    triage_dropped_golden: tuple[str, ...]
+    triage_dropped_golden: tuple[str, ...]  # dropped by triage at every revision; a failed thread is not here
+    extract_failed: int          # threads whose triage or extraction raised LLMOutputError, summed over days
+    extract_threads: int         # pending thread deltas seen, summed over days; the n of extract_failed
     triage_distractors_kept: tuple[str, ...]
-    missed: tuple[str, ...]      # golden event ids with no matched item
+    missed: tuple[str, ...]      # golden event ids with no matched item, including threads whose calls failed
     unmatched: tuple[str, ...]   # extracted item ids matched to no golden item, with the thread kind
     absence_tp: int
     absence_fp: int
@@ -1130,9 +1132,11 @@ extracted item pairs with at most one golden item. `by_type` groups golden items
 golden type for recall and extracted items by extracted type for precision;
 `type_agreement` is the share of pairs whose types agree (advisory, SPEC section 7). A golden item whose thread's triage decisions
 (`store.triage_for_thread`) were `kept=False` at every revision counts in
-`triage_dropped_golden` and in `missed`; a golden thread with no triage row at all is a
-data error and the eval raises `ValueError` naming it (every thread in the store was
-extracted). Items in a distractor thread, and items in a
+`triage_dropped_golden` and in `missed`. A golden thread that has messages but no triage
+row had its calls fail (counted in `extract_failed`): it is in `missed`, not in
+`triage_dropped_golden`, and counts as not kept in triage recall. A golden or distractor
+thread with no message in the store was never run: the eval raises `ValueError` naming
+it. A manifest missing a non-distractor event raises `ValueError` naming the event. Items in a distractor thread, and items in a
 golden thread matched to no golden item, are `unmatched`.
 
 B4.3 Claims: a golden claim is found when an item in its thread carries a claim with
@@ -1160,9 +1164,9 @@ the eval reports the renderer without running it.
 
 B4.6 Realism: from the rendered threads (`manifest.json` entries with `authored:
 render` and the events in `events.jsonl`): messages per thread and characters per
-message, mean, median and p90. The comparison to DISCO statistics is a `not_run` row
-("no reference statistics in the repo") unless `data/world/reference-stats.yaml`
-exists with published figures and their source.
+message, mean, median and p90; with no rendered thread `realism` is empty and `not_run`
+says so. The comparison to DISCO statistics is a `not_run` row ("no reference statistics
+in the repo"); M2 does not read a reference file.
 
 B4.7 `write_report` writes markdown with one table per section (extraction by type,
 claims, triage, absences, drops, realism, models, not run) and `n` beside every rate,
@@ -1315,6 +1319,8 @@ sees.
 | 4 | Realism | Keys as the tests name them; p90 is nearest-rank (index `ceil(0.9 * n) - 1` of the sorted list). |
 | 4 | Models *(code)* | Concrete ids for one logical model are joined with `", "` in sorted order; the test accepts any separator and order. |
 | 4 | `objective_misses` | A field counts for a thread-matched golden item that is not matched only when no item in its thread carries that field correctly. |
+| 4 | Failed calls | `extract_failed` and `extract_threads` count failed and seen thread deltas over all days; the triage table shows them, and `digest eval` prints them. |
+| 4 | Shared rules *(code)* | The eval's citation check calls `verify.quotes`, and `uncitable_tasks` calls `absence.task_citations`, the detector's own rule. |
 | 4 | Report layout | Each B4.7 section has a heading that contains its name; every rate has its `n` on the same row; rates print with a decimal point and `None` as `n/a` *(code)*. |
 
 ## Open items for the user
