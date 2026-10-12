@@ -96,6 +96,7 @@ CREATES = [
     pytest.param('bash -o pipefail -c "gh pr create --fill"', id="bash-o-value-then-c"),
     pytest.param('bash -eo pipefail -c "gh pr create --fill"', id="bash-eo-cluster-value"),
     pytest.param('bash --rcfile /dev/null -c "gh pr create --fill"', id="bash-rcfile-value"),
+    pytest.param('bash --rcfile -lc -c "gh pr create --fill"', id="bash-rcfile-named-like-c"),
     pytest.param("gh api graphql --input request.json", id="graphql-input-file"),
     pytest.param("gh api graphql -F query=@mutation.graphql", id="graphql-query-file"),
     pytest.param("gh api https://api.github.com/graphql --input request.json",
