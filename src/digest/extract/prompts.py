@@ -1,4 +1,4 @@
-"""The triage and extraction prompts and their requests (plan B1.2, B1.3, Q1 to Q3)."""
+"""The triage and extraction prompts and their requests (plan B1.2, B1.3, Q1 to Q3, Q7)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from digest.models import Event, Glossary, Item
 from digest.project import ProjectConfig
 from digest.store import ThreadDelta
 
-EXTRACT_PROMPT_VERSION = "m2.2"  # triage and extraction prompts; m2.2 adds plan Q1 to Q3
+EXTRACT_PROMPT_VERSION = "m2.3"  # triage and extraction prompts; m2.3 adds plan Q7
 
 # One rule per line: a reader can find each rule of plan B1.3 on its own line.
 EXTRACT_SYSTEM = "\n".join(
@@ -42,8 +42,8 @@ EXTRACT_SYSTEM = "\n".join(
         " progress on the task: a run, a result, a review held, a sign-off, a part received.",
         "Set effect to done only when a message states that the task is complete; else set"
         " effect to evidence. Each task link names the evidence message that shows the progress.",
-        "A question about a task is not evidence, and a status roll-up that lists a task as open"
-        " is not evidence.",
+        "A task link needs a progress report: a question about a task, or a status roll-up that"
+        " lists a task as open, is not a task link. A question can still be an ask item.",
         "Write the rationale first, before every other field, for the output and for each item.",
         "When the changed messages carry no new project information, return an empty items list.",
     )
