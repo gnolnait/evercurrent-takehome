@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -175,6 +176,8 @@ def test_slack_message_limits_blocks_and_reports_omitted_lines(
     message = slack_message(world, selection(profile, *lines))
 
     assert len(message["blocks"]) == 50
+    assert block_text(message["blocks"][2]).startswith("*Decision 1*")
+    assert block_text(message["blocks"][-2]).startswith("*Decision 47*")
     assert block_text(message["blocks"][-1]) == "4 lines left out."
 
 
@@ -196,11 +199,13 @@ class FakeWebhookClient:
 
 
 def successful_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
+    end = args[4]
+    assert isinstance(end, datetime)
     for key, value in {
         "world": "kestrel",
         "timezone": "America/Los_Angeles",
         "workspace_url": WORKSPACE,
-        "until": "2026-10-20T06:59:59.999999+00:00",
+        "until": end.isoformat(),
     }.items():
         store.set_meta(key, value)
     store.upsert_items([item()], prompt_version="m2.1", model="extract")
@@ -212,11 +217,6 @@ def successful_extract(store: Store, *args: object, **kwargs: object) -> Extract
         items_written=1,
         drops=dict.fromkeys(DROP_FIELDS, 0),
     )
-
-
-def failed_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
-    report = successful_extract(store, *args, **kwargs)
-    return report.model_copy(update={"threads": 1, "failed": 1, "items_written": 0})
 
 
 def prepare_post(
@@ -233,10 +233,7 @@ def prepare_post(
     (cassettes / "unused.json").write_text("{}", encoding="utf-8")
     monkeypatch.chdir(ROOT)
     monkeypatch.setenv("DIGEST_CASSETTES", str(cassettes))
-    if webhook_url is None:
-        monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
-    else:
-        monkeypatch.setenv("SLACK_WEBHOOK_URL", webhook_url)
+    monkeypatch.setattr(cli, "_webhook_url", lambda: webhook_url)
     monkeypatch.setattr(cli, "_extract_days", extract)
     monkeypatch.setattr("digest.daily.render.detect_absences", lambda *args, **kwargs: [])
 
@@ -248,19 +245,35 @@ def prepare_post(
 
 
 def test_cli_post_sends_three_readers_in_order_and_exits_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    world: World,
 ) -> None:
     client = FakeWebhookClient()
     prepare_post(tmp_path, monkeypatch, client)
+    selections: list[Selection] = []
+    select_digest = cli.select_digest
 
-    result = runner.invoke(app, ["post"])
+    def capture_selection(*args: Any, **kwargs: Any) -> Selection:
+        selected = select_digest(*args, **kwargs)
+        selections.append(selected)
+        return selected
+
+    monkeypatch.setattr(cli, "select_digest", capture_selection)
+    caplog.set_level(logging.DEBUG)
+
+    result = runner.invoke(app, ["post", "--day", "5"])
 
     assert result.exit_code == 0, result.output
+    assert client.calls == [slack_message(world, selected) for selected in selections]
     assert [call["text"] for call in client.calls] == [
-        "Daily digest for Nadia Brenner (ME) - 2026-10-19",
-        "Daily digest for Hamid Rostami (supply_chain) - 2026-10-19",
-        "Daily digest for Grace Okonkwo (EM) - 2026-10-19",
+        "Daily digest for Nadia Brenner (ME) - 2026-10-16",
+        "Daily digest for Hamid Rostami (supply_chain) - 2026-10-16",
+        "Daily digest for Grace Okonkwo (EM) - 2026-10-16",
     ]
+    assert WEBHOOK_URL not in result.output
+    assert all(WEBHOOK_URL not in str(vars(record)) for record in caplog.records)
 
 
 def test_cli_post_without_webhook_url_exits_one_without_sending(
@@ -274,6 +287,21 @@ def test_cli_post_without_webhook_url_exits_one_without_sending(
     assert result.exit_code == 1, result.output
     assert "SLACK_WEBHOOK_URL" in result.output
     assert client.calls == []
+
+
+def test_webhook_url_reads_cwd_dotenv_and_environment_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dotenv_url = "https://hooks.slack.test/services/from-dotenv"
+    environment_url = "https://hooks.slack.test/services/from-environment"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    (tmp_path / ".env").write_text(f"SLACK_WEBHOOK_URL={dotenv_url}\n", encoding="utf-8")
+
+    assert cli._webhook_url() == dotenv_url
+
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", environment_url)
+    assert cli._webhook_url() == environment_url
 
 
 def test_cli_post_stops_after_slack_refuses_a_message_without_leaking_url(
@@ -296,10 +324,18 @@ def test_cli_post_build_failure_sends_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = FakeWebhookClient()
-    prepare_post(tmp_path, monkeypatch, client, extract=failed_extract)
+    prepare_post(tmp_path, monkeypatch, client)
+    select_digest = cli.select_digest
+
+    def fail_second_reader(*args: Any, **kwargs: Any) -> Selection:
+        if args[3] == "U0SC01":
+            raise ValueError("second reader build failed")
+        return select_digest(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "select_digest", fail_second_reader)
 
     result = runner.invoke(app, ["post"])
 
     assert result.exit_code == 1, result.output
-    assert re.search(r"1 failed thread", result.output, re.IGNORECASE), result.output
+    assert "second reader build failed" in result.output
     assert client.calls == []
