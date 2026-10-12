@@ -320,7 +320,7 @@ def _outputs(*, wrong_objectives: bool) -> dict[str, list[dict[str, Any]]]:
         claims=[_claim("PN-1", "rev", "B", SHARED_REPLY)],
     )
     earlier = _extracted_item(
-        "risk",
+        "decision",
         SHARED_ROOT,
         "12345",
         entities=["PN-1", "G-CITE", "CONTEXT"],
@@ -526,10 +526,18 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
     assert report.by_type["risk"].model_dump() == {
         "golden": 1,
         "golden_matched": 1,
-        "extracted": 1,
-        "extracted_matched": 1,
-        "precision": 1.0,
+        "extracted": 0,
+        "extracted_matched": 0,
+        "precision": None,
         "recall": 1.0,
+    }
+    assert report.by_type["decision"].model_dump() == {
+        "golden": 0,
+        "golden_matched": 0,
+        "extracted": 2,
+        "extracted_matched": 1,
+        "precision": 0.5,
+        "recall": None,
     }
     assert report.by_type["spec_change"].model_dump() == {
         "golden": 1,
@@ -550,7 +558,7 @@ def test_eval_scores_matching_claims_absences_models_and_realism(eval_case: Eval
         "recall": None,
     }
     assert report.thread_recall == 1.0
-    assert report.type_agreement == 1.0
+    assert report.type_agreement == 0.5
     assert report.objective_misses == {"claims.value": 0, "owner": 0}
     assert (
         report.claims_golden,
@@ -671,8 +679,38 @@ def _assert_rate_n(text: str, labels: tuple[str, ...], n: int) -> None:
         ),
         "",
     )
-    assert row, labels
-    assert re.search(rf"(?:\bn\s*=\s*{n}\b|\|\s*{n}\s*\|)", row, re.IGNORECASE), row
+    if row:
+        assert re.search(rf"(?:\bn\s*=\s*{n}\b|\|\s*{n}\s*\|)", row, re.IGNORECASE), row
+        return
+
+    assert len(normalized_labels) == 2, labels
+    item_type, metric = normalized_labels
+    lines = text.splitlines()
+    for header_index, line in enumerate(lines):
+        headers = [
+            re.sub(r"[_-]+", " ", cell.strip().lower()) for cell in line.strip("|").split("|")
+        ]
+        if "type" not in headers or metric not in headers:
+            continue
+        rate_columns = [
+            index for index, header in enumerate(headers) if header in {"precision", "recall"}
+        ]
+        n_columns = [index for index, header in enumerate(headers) if header == "n"]
+        if len(rate_columns) != len(n_columns):
+            continue
+        n_column = n_columns[rate_columns.index(headers.index(metric))]
+        type_column = headers.index("type")
+        for candidate in lines[header_index + 2 :]:
+            if not candidate.startswith("|"):
+                break
+            cells = [cell.strip() for cell in candidate.strip("|").split("|")]
+            if (
+                len(cells) == len(headers)
+                and re.sub(r"[_-]+", " ", cells[type_column].lower()) == item_type
+            ):
+                assert re.fullmatch(rf"(?:n\s*=\s*)?{n}", cells[n_column], re.IGNORECASE), candidate
+                return
+    raise AssertionError(labels)
 
 
 def test_write_report_has_deterministic_tables_and_rate_counts(eval_case: EvalCase) -> None:
@@ -716,7 +754,8 @@ def test_write_report_has_deterministic_tables_and_rate_counts(eval_case: EvalCa
         _assert_rate_n(text, labels, n)
     extraction = _section(text, "extraction")
     for item_type, precision_n, recall_n in [
-        ("risk", 1, 1),
+        ("risk", 0, 1),
+        ("decision", 2, 0),
         ("spec_change", 1, 1),
         ("ask", 1, 1),
         ("fyi", 1, 0),
