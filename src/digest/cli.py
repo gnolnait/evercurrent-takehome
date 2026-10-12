@@ -280,9 +280,9 @@ def world_render(
             manifest,
         )
     # ValueError covers RenderError, a missing API key and malformed world, manifest
-    # and anchor files.
+    # and anchor files. The notes name the file that the loader read.
     except (OSError, ValueError, yaml.YAMLError, CassetteMiss) as error:
-        _refuse(str(error))
+        _refuse("\n".join([str(error), *getattr(error, "__notes__", [])]))
     typer.echo(
         f"rendered {report.rendered} threads, reused {report.reused} anchor threads, "
         f"{report.messages} messages"

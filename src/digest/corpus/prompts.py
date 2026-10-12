@@ -10,7 +10,7 @@ from digest.corpus.avoid import AvoidNames
 from digest.llm import LLMRequest, Message
 from digest.world.schema import World, WorldEvent
 
-RENDER_PROMPT_VERSION = "m2.1"
+RENDER_PROMPT_VERSION = "m2.2"
 RENDER_SYSTEM = """\
 You write Slack threads for a synthetic hardware engineering program. Each request \
 describes one event. Write the thread in which the team discusses that event.
@@ -36,8 +36,9 @@ the event writes it.
 - poster is the user id of the member who writes the message.
 - day_offset is 0 for each message. The only exception is the answer to an answered \
 ask: it has the day_offset that the request gives.
-- minutes_after_start is the number of minutes from the start of the thread to the \
-message. The root has the smallest value.
+- minutes_after_start is the number of minutes from the event's base time to the \
+message. The base time is on the message's own day, and day_offset picks that day.
+- No message is earlier than the message before it.
 - files lists the names of the files that the message attaches.
 - reactions lists the emoji reactions to the message. Each has the emoji name and the \
 user id of the member who reacts.
@@ -82,8 +83,13 @@ def _user_message(world: World, event: WorldEvent, earlier: Sequence[WorldEvent]
     entities = {entity.id: entity for entity in world.entities}
     channel = next(channel for channel in world.channels if channel.id == event.channel)
     poster = personas[event.poster]
+    program = f"Program: {world.program}."
+    if world.project.name != world.program:
+        program += f" {world.project.name}."
+    if world.description:
+        program += f" {world.description}"
     lines = [
-        f"Program: {world.program}. {world.project.name}.",
+        program,
         f"Channel: #{channel.name}. Purpose: {channel.purpose}.",
         "Members:",
     ]

@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 _DAY_START = time(8, 30)
 _MINUTES_PER_EVENT = 25
 _FIRST_FRACTION = 10_000  # anchor lines use fractions below this
+_MAX_MINUTES = 24 * 60  # a larger minutes_after_start cannot be on the message's date
 _MENTION = re.compile(r"<@(U[A-Z0-9]+)>")
 
 
@@ -97,7 +98,12 @@ def render_world(
     human = {
         event_id: ref for event_id, ref in manifest_in.threads.items() if ref.authored == "human"
     }
-    # A world with no human-authored slice has no anchor file.
+    if human and not anchor.exists():
+        raise ValueError(
+            f"the manifest has {len(human)} human-authored threads, "
+            f"but the anchor file {anchor} does not exist"
+        )
+    # A world with no human-authored slice needs no anchor file.
     rows = list(read_events(anchor, world.workspace_url)) if anchor.exists() else []
     threads = dict(human)
     per_thread: dict[str, int] = {}
@@ -109,12 +115,12 @@ def render_world(
         model_cls = thread_model(world, event)
         request = render_request(world, event, earlier, avoid, model_cls.model_json_schema())
         thread = llm.extract(request, model_cls)
-        moments = _moments(world, event, slot, thread)
-        rule = _broken_rule(world, event, thread, moments, avoid)
+        rule = _broken_rule(world, event, slot, thread, avoid)
         if rule is not None:
             raise RenderError(
                 f"event {event.id} breaks a render rule: {rule}; cassette key {request_key(request)}"
             )
+        moments = _moments(world, event, slot, thread)
         thread_rows = _thread_rows(world, event, thread, moments, fractions)
         rows.extend(thread_rows)
         threads[event.id] = ThreadRef(
@@ -167,13 +173,12 @@ def _moments(world: World, event: WorldEvent, slot: int, thread: RenderedThread)
 
 
 def _broken_rule(
-    world: World,
-    event: WorldEvent,
-    thread: RenderedThread,
-    moments: list[datetime],
-    avoid: AvoidNames,
+    world: World, event: WorldEvent, slot: int, thread: RenderedThread, avoid: AvoidNames
 ) -> str | None:
-    """The first rule of plan B3.2 and B3.3 that the thread breaks, or None."""
+    """The first rule of plan B3.2 and B3.3 that the thread breaks, or None.
+
+    The offsets are checked before the timestamps are computed, so no offset can overflow.
+    """
     messages = thread.messages
     if not messages:
         return "the thread has no messages"
@@ -200,14 +205,20 @@ def _broken_rule(
             expected = ask.answered_day - event.day
         if message.day_offset != expected:
             return f"message {number} has day_offset {message.day_offset}, not {expected}"
+        if abs(message.minutes_after_start) > _MAX_MINUTES:
+            return (
+                f"message {number} has minutes_after_start {message.minutes_after_start}, "
+                f"out of the range -{_MAX_MINUTES} to {_MAX_MINUTES}"
+            )
+    moments = _moments(world, event, slot, thread)
     zone = ZoneInfo(world.timezone)
     for number, (message, moment) in enumerate(zip(messages, moments, strict=True), 1):
         day = world.date_of(event.day + message.day_offset)
         if moment.astimezone(zone).date() != day:
             return f"the timestamp of message {number} is not on the date {day}"
-    for number, moment in enumerate(moments[1:], 2):
-        if moment < moments[0]:
-            return f"message {number} precedes the root"
+    for number in range(2, len(moments) + 1):
+        if moments[number - 1] < moments[number - 2]:
+            return f"message {number} precedes message {number - 1}"
     text = "\n".join(message.text for message in messages)
     if not event.noise.get("indirection", False):
         entities = {entity.id: entity for entity in world.entities}
