@@ -1,6 +1,6 @@
 """Choose a reader's lines: the visibility filter, the must-see lane and the ranked lane (plan B5.2 to B5.5).
 
-When the digest shows an ask absence line, the line of the ask in the same thread is left out.
+When the digest shows an ask absence line, the line of the ask its id names is left out.
 """
 
 from __future__ import annotations
@@ -53,6 +53,8 @@ SEVERITY_WEIGHTS: Mapping[Severity, float] = {"high": 1.0, "medium": 0.7, "low":
 
 DEFAULT_ROLE_PRIOR = 0.5  # when the priors table has no entry for the role and type
 
+ASK_ABSENCE_PREFIX = "absence:ask:"  # the item_id prefix `_ask_item` in digest.absence writes
+
 
 class Line(Frozen):
     item: Item
@@ -104,18 +106,19 @@ def select(
     for section, cap in SECTION_CAPS.items():
         lines += sorted(must_see[section], key=lambda line: line.item.item_id)
         lines += sorted(ranked[section], key=_rank_key)[:cap]
-    # After the caps and the threshold: a shown ask absence line replaces the ask it cites.
-    absent_asks = {
-        line.item.thread_id
-        for line in lines
-        if line.item.absence is not None and line.item.absence.source == "ask"
-    }
+    # After the caps and the threshold: a shown ask absence line replaces the one ask its id names.
+    absent_asks = {_cited_ask(line.item) for line in lines} - {None}
     lines = [
-        line
-        for line in lines
-        if not (line.item.type == "ask" and line.item.thread_id in absent_asks)
+        line for line in lines if not (line.item.type == "ask" and line.item.item_id in absent_asks)
     ]
     return Selection(profile=profile, day=day, lines=tuple(lines), hidden=hidden)
+
+
+def _cited_ask(item: Item) -> str | None:
+    """The item_id of the ask an ask absence names, or None for any other item."""
+    if item.absence is None or item.absence.source != "ask":
+        return None
+    return item.item_id.removeprefix(ASK_ABSENCE_PREFIX)
 
 
 def _visible(world: World, profile: Profile, item: Item) -> Item | None:
