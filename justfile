@@ -29,7 +29,7 @@ test *ARGS:
 # Hook guard tests (Claude Code PreToolUse guards); run from the hooks dir so the
 # standalone shims import their siblings the way Claude Code invokes them
 test-hooks:
-    cd .claude/hooks && uv run --project ../.. python -m pytest -q
+    cd .claude/hooks && uv run --project ../.. python -m pytest -q -n auto
 
 # Everything CI runs
 ci: lint test test-hooks
