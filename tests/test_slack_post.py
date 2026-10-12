@@ -27,7 +27,7 @@ WORLD_PATH = ROOT / "data" / "world" / "kestrel" / "world.yaml"
 DAY = date(2026, 10, 14)
 TS = "1760000000.000001"
 WORKSPACE = "https://kestrel-k2.slack.com"
-WEBHOOK_URL = "https://hooks.slack.test/services/secret-value"
+WEBHOOK_URL = "https://hooks.slack.com/services/secret-value"
 runner = CliRunner()
 
 
@@ -107,6 +107,16 @@ def block_text(block: dict[str, Any]) -> str:
     return value
 
 
+def mrkdwn_text_objects(value: Any) -> list[dict[str, Any]]:
+    """Return all mrkdwn text objects nested in a Block Kit value."""
+    if isinstance(value, dict):
+        found = [value] if value.get("type") == "mrkdwn" else []
+        return found + [item for child in value.values() for item in mrkdwn_text_objects(child)]
+    if isinstance(value, list):
+        return [item for child in value for item in mrkdwn_text_objects(child)]
+    return []
+
+
 def test_slack_message_has_header_section_titles_lines_and_sources(
     world: World, profile: Profile
 ) -> None:
@@ -156,6 +166,23 @@ def test_slack_message_escapes_model_text_before_mrkdwn(world: World, profile: P
     assert "<@U123>" not in rendered
     assert "<https://x|y>" not in rendered
     assert re.findall(r"<[^>]+>", rendered) == [f"<{evidence().permalink}|source>"]
+
+
+def test_slack_message_sets_verbatim_on_every_mrkdwn_text_object(
+    world: World, profile: Profile
+) -> None:
+    selected = Selection(
+        profile=profile,
+        day=DAY,
+        lines=(line(item()),),
+        hidden=1,
+    )
+
+    message = slack_message(world, selected)
+
+    text_objects = mrkdwn_text_objects(message)
+    assert text_objects
+    assert all(text.get("verbatim") is True for text in text_objects)
 
 
 def test_slack_message_cuts_a_long_line_with_ellipsis(world: World, profile: Profile) -> None:
@@ -289,11 +316,49 @@ def test_cli_post_without_webhook_url_exits_one_without_sending(
     assert client.calls == []
 
 
+@pytest.mark.parametrize(
+    "invalid_url",
+    [
+        "ftp://hooks.slack.test/services/SECRET",
+        "https://hooks.slack.com/services/SECRET value",
+    ],
+    ids=["wrong-scheme-and-host", "space"],
+)
+def test_cli_post_rejects_invalid_webhook_url_before_build_without_leaking_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_url: str,
+) -> None:
+    client = FakeWebhookClient()
+    builds: list[None] = []
+
+    def record_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
+        builds.append(None)
+        return successful_extract(store, *args, **kwargs)
+
+    prepare_post(
+        tmp_path,
+        monkeypatch,
+        client,
+        extract=record_extract,
+        webhook_url=invalid_url,
+    )
+
+    result = runner.invoke(app, ["post"])
+
+    assert result.exit_code == 1, result.output
+    assert "SLACK_WEBHOOK_URL" in result.output
+    assert builds == []
+    assert client.calls == []
+    assert invalid_url not in result.output
+    assert "SECRET" not in result.output
+
+
 def test_webhook_url_reads_cwd_dotenv_and_environment_wins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dotenv_url = "https://hooks.slack.test/services/from-dotenv"
-    environment_url = "https://hooks.slack.test/services/from-environment"
+    dotenv_url = "https://hooks.slack.com/services/from-dotenv"
+    environment_url = "https://hooks.slack.com/services/from-environment"
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     (tmp_path / ".env").write_text(f"SLACK_WEBHOOK_URL={dotenv_url}\n", encoding="utf-8")
@@ -302,6 +367,43 @@ def test_webhook_url_reads_cwd_dotenv_and_environment_wins(
 
     monkeypatch.setenv("SLACK_WEBHOOK_URL", environment_url)
     assert cli._webhook_url() == environment_url
+
+
+@pytest.mark.parametrize(
+    ("encoding", "suffix"),
+    [
+        ("utf-8-sig", ""),
+        ("utf-16", ""),
+        ("utf-8", " # comment"),
+    ],
+    ids=["utf-8-bom", "utf-16-bom", "inline-comment"],
+)
+def test_webhook_url_reads_supported_dotenv_encodings_and_inline_comment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    encoding: str,
+    suffix: str,
+) -> None:
+    dotenv_url = "https://hooks.slack.com/services/from-dotenv"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    (tmp_path / ".env").write_text(
+        f"SLACK_WEBHOOK_URL={dotenv_url}{suffix}\n",
+        encoding=encoding,
+    )
+
+    assert cli._webhook_url() == dotenv_url
+
+
+def test_cli_post_names_unreadable_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    (tmp_path / ".env").write_bytes(b"\xff\xfe\x00")
+
+    result = runner.invoke(app, ["post"])
+
+    assert result.exit_code == 1, result.output
+    assert ".env" in result.output
 
 
 def test_cli_post_stops_after_slack_refuses_a_message_without_leaking_url(
@@ -318,6 +420,28 @@ def test_cli_post_stops_after_slack_refuses_a_message_without_leaking_url(
     assert "invalid_blocks" in result.output
     assert len(client.calls) == 1
     assert WEBHOOK_URL not in result.output
+
+
+def test_cli_post_reports_arbitrary_send_exception_without_leaking_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RaisingWebhookClient(FakeWebhookClient):
+        def send(self, *, text: str, blocks: list[dict[str, Any]]) -> FakeResponse:
+            raise LookupError(f"send failed for {WEBHOOK_URL}")
+
+    client = RaisingWebhookClient()
+    prepare_post(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post"])
+
+    assert result.exit_code == 1, result.output
+    assert "Nadia Brenner" in result.output
+    assert "LookupError" in result.output
+    assert client.calls == []
+    exception_text = f"{result.exception!r} {result.exception}"
+    for sensitive in (WEBHOOK_URL, "secret-value"):
+        assert sensitive not in result.output
+        assert sensitive not in exception_text
 
 
 def test_cli_post_build_failure_sends_nothing(
