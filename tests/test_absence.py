@@ -45,12 +45,13 @@ def _day_date(day: int) -> date:
     return START + timedelta(weeks=weeks, days=weekday)
 
 
-def _evidence(day: int, label: str, second: int = 0) -> Evidence:
+def _evidence(day: int, label: str, second: int = 0, channel: str = "C1") -> Evidence:
     message_ts = _day_ts(day, second)
     return Evidence(
+        channel_id=channel,
         message_ts=message_ts,
         quote=label,
-        permalink=f"https://kestrel.slack.com/archives/C1/p{message_ts.replace('.', '')}",
+        permalink=f"https://kestrel.slack.com/archives/{channel}/p{message_ts.replace('.', '')}",
     )
 
 
@@ -209,7 +210,14 @@ def test_checklist_absence_uses_latest_link_and_emits_all_contract_fields() -> N
             "latest",
             3,
             entities=("PART",),
-            tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=latest.message_ts),),
+            tasks=(
+                TaskLink(
+                    channel_id="C1",
+                    task="G-A.high",
+                    effect="evidence",
+                    message_ts=latest.message_ts,
+                ),
+            ),
             evidence=(merged_root, latest),
             first_seen=merged_root.message_ts,
             last_updated=_day_ts(6),
@@ -218,7 +226,11 @@ def test_checklist_absence_uses_latest_link_and_emits_all_contract_fields() -> N
             "old",
             2,
             entities=("OLD",),
-            tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=old.message_ts),),
+            tasks=(
+                TaskLink(
+                    channel_id="C1", task="G-A.high", effect="evidence", message_ts=old.message_ts
+                ),
+            ),
         ),
     ]
 
@@ -252,7 +264,9 @@ def test_checklist_done_task_yields_nothing() -> None:
     done = _item(
         "done",
         2,
-        tasks=(TaskLink(task="G-A.high", effect="done", message_ts=cited.message_ts),),
+        tasks=(
+            TaskLink(channel_id="C1", task="G-A.high", effect="done", message_ts=cited.message_ts),
+        ),
     )
     assert checklist_absences(project, [done], date(2026, 10, 20), ZONE) == []
 
@@ -269,6 +283,7 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
             entities=("B",),
             claims=(
                 Claim(
+                    channel_id="C1",
                     entity="G-A",
                     attribute="status",
                     value="open",
@@ -285,6 +300,7 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
             entities=("A",),
             claims=(
                 Claim(
+                    channel_id="C1",
                     entity="G-A",
                     attribute="status",
                     value="open",
@@ -300,6 +316,7 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
             2,
             claims=(
                 Claim(
+                    channel_id="C1",
                     entity="G-A",
                     attribute="status",
                     value="open",
@@ -333,12 +350,18 @@ def test_checklist_skips_mentions_without_claims_and_unanchored_tasks() -> None:
 def test_checklist_fires_on_buffer_opening_but_not_day_before() -> None:
     project = _two_gate_project()
     anchor_ts = _ts(date(2026, 10, 8))
-    anchor = Evidence(message_ts=anchor_ts, quote="anchor", permalink="https://example.test/anchor")
+    anchor = Evidence(
+        channel_id="C1",
+        message_ts=anchor_ts,
+        quote="anchor",
+        permalink="https://example.test/anchor",
+    )
     item = _item(
         "anchor",
         1,
         claims=(
             Claim(
+                channel_id="C1",
                 entity="G-A",
                 attribute="status",
                 value="open",
@@ -365,6 +388,7 @@ def test_checklist_emits_nothing_after_gate() -> None:
         1,
         claims=(
             Claim(
+                channel_id="C1",
                 entity="G-A",
                 attribute="status",
                 value="open",
@@ -385,6 +409,7 @@ def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
         7,
         claims=(
             Claim(
+                channel_id="C1",
                 entity="G-A",
                 attribute="status",
                 value="open",
@@ -392,7 +417,11 @@ def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
                 authority="owner_stated",
             ),
         ),
-        tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=future.message_ts),),
+        tasks=(
+            TaskLink(
+                channel_id="C1", task="G-A.high", effect="evidence", message_ts=future.message_ts
+            ),
+        ),
         evidence=(future,),
     )
     earlier_item = _item(
@@ -400,6 +429,7 @@ def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
         2,
         claims=(
             Claim(
+                channel_id="C1",
                 entity="G-A",
                 attribute="status",
                 value="open",
@@ -407,7 +437,11 @@ def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
                 authority="owner_stated",
             ),
         ),
-        tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=earlier.message_ts),),
+        tasks=(
+            TaskLink(
+                channel_id="C1", task="G-A.high", effect="evidence", message_ts=earlier.message_ts
+            ),
+        ),
         evidence=(earlier,),
     )
 
@@ -426,13 +460,17 @@ def test_checklist_counts_silence_from_local_evidence_date() -> None:
     local_evening = datetime(2026, 10, 12, 18, tzinfo=ZONE).astimezone(UTC)
     timestamp = f"{int(local_evening.timestamp()):010d}.000000"
     evidence = Evidence(
-        message_ts=timestamp, quote="local evening", permalink="https://example.test"
+        channel_id="C1",
+        message_ts=timestamp,
+        quote="local evening",
+        permalink="https://example.test",
     )
     item = _item(
         "anchor",
         1,
         claims=(
             Claim(
+                channel_id="C1",
                 entity="G-A",
                 attribute="status",
                 value="open",
@@ -456,6 +494,7 @@ def test_checklist_weekend_as_of_counts_only_through_friday() -> None:
         1,
         claims=(
             Claim(
+                channel_id="C1",
                 entity="G-A",
                 attribute="status",
                 value="open",
@@ -511,6 +550,56 @@ def test_ask_absence_finds_asker_and_emits_all_contract_fields() -> None:
         "buffer_consumed": None,
         "buffer_days": None,
     }
+
+
+@pytest.mark.parametrize("cited_by", ["link", "claim"])
+def test_checklist_cites_the_channel_of_a_shared_ts(cited_by: str) -> None:
+    """Setup an item citing one ts in two channels; detect; assert the C2 entry is cited."""
+    project = _two_gate_project()
+    wrong = _evidence(1, "C1 message", channel="C1")
+    right = _evidence(1, "C2 message", channel="C2")
+    tasks: tuple[TaskLink, ...] = ()
+    claims: tuple[Claim, ...] = ()
+    if cited_by == "link":
+        tasks = (
+            TaskLink(
+                task="G-A.high", effect="evidence", channel_id="C2", message_ts=right.message_ts
+            ),
+        )
+    else:
+        claims = (
+            Claim(
+                entity="G-A",
+                attribute="status",
+                value="open",
+                channel_id="C2",
+                message_ts=right.message_ts,
+                authority="owner_stated",
+            ),
+        )
+    item = _item("merged", 1, tasks=tasks, claims=claims, evidence=(wrong, right))
+
+    absences = checklist_absences(project, [item], date(2026, 10, 19), ZONE)
+
+    high = next(row for row in absences if row.item_id == "absence:G-A.high")
+    assert high.evidence == (right,)
+
+
+def test_ask_absence_finds_the_asker_by_channel_of_a_shared_ts() -> None:
+    """Setup owner (C2) and asker (C1) messages with one ts; detect; assert the C1 ask is cited."""
+    owner_entry = _evidence(2, "owner message", channel="C2")
+    ask_entry = _evidence(2, "ask message", channel="C1")
+    ask = _item("ASK-1", 2, item_type="ask", owner="UOWNER", evidence=(owner_entry, ask_entry))
+    events = [
+        _event(ask, "UASKER", 2),
+        _event(ask, "UOWNER", 2).model_copy(update={"channel_id": "C2"}),
+    ]
+
+    (absence,) = ask_absences([ask], lambda _: events, date(2026, 10, 19), 2, ZONE)
+
+    assert absence.evidence == (ask_entry,)
+    assert absence.absence is not None
+    assert absence.absence.asker == "UASKER"
 
 
 @pytest.mark.parametrize(
@@ -578,7 +667,9 @@ def test_ask_absence_counts_silence_from_local_ask_date() -> None:
     ask = _item("ASK-1", 1, item_type="ask", owner="UOWNER")
     local_evening = datetime(2026, 10, 12, 18, tzinfo=ZONE).astimezone(UTC)
     timestamp = f"{int(local_evening.timestamp()):010d}.000000"
-    evidence = Evidence(message_ts=timestamp, quote="late ask", permalink="https://example.test")
+    evidence = Evidence(
+        channel_id="C1", message_ts=timestamp, quote="late ask", permalink="https://example.test"
+    )
     ask = ask.model_copy(
         update={"evidence": (evidence,), "first_seen": timestamp, "last_updated": timestamp}
     )
@@ -631,11 +722,12 @@ def _kestrel_items() -> tuple[list[Item], dict[str, list[Event]]]:
                 entities=(event_id,),
                 evidence=(cited,),
                 tasks=tuple(
-                    TaskLink(task=task, effect=effect, message_ts=cited.message_ts)
+                    TaskLink(channel_id="C1", task=task, effect=effect, message_ts=cited.message_ts)
                     for task, effect in touches
                 ),
                 claims=tuple(
                     Claim(
+                        channel_id="C1",
                         entity=gate,
                         attribute="status",
                         value="open",
@@ -738,6 +830,7 @@ def test_absence_output_order_is_deterministic() -> None:
         1,
         claims=tuple(
             Claim(
+                channel_id="C1",
                 entity=gate,
                 attribute="status",
                 value="open",
@@ -812,6 +905,7 @@ def _write_ready_cli_store(store: Store) -> None:
                 1,
                 claims=(
                     Claim(
+                        channel_id="C1",
                         entity="G-DVT1",
                         attribute="gate_date",
                         value="2026-10-22",

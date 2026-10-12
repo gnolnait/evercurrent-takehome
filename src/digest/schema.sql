@@ -61,9 +61,9 @@ CREATE TABLE IF NOT EXISTS items (
   affected_roles  TEXT NOT NULL,   -- JSON array
   severity        TEXT NOT NULL,
   confidence      TEXT NOT NULL,
-  evidence        TEXT NOT NULL,   -- JSON array of {message_ts, quote, permalink}
-  claims          TEXT NOT NULL,   -- JSON array of {entity, attribute, value, message_ts, authority}
-  tasks           TEXT NOT NULL,   -- JSON array of {task, effect, message_ts}
+  evidence        TEXT NOT NULL,   -- JSON array of {channel_id, message_ts, quote, permalink}
+  claims          TEXT NOT NULL,   -- JSON array of {entity, attribute, value, channel_id, message_ts, authority}
+  tasks           TEXT NOT NULL,   -- JSON array of {task, effect, channel_id, message_ts}
   status          TEXT NOT NULL,
   resolved_by     TEXT,
   first_seen      TEXT NOT NULL,

@@ -214,7 +214,9 @@ def stored_item(**changes: Any) -> Item:
         "affected_roles": ("ME",),
         "severity": "low",
         "confidence": "medium",
-        "evidence": (Evidence(message_ts=ROOT, quote="old quote", permalink="https://old"),),
+        "evidence": (
+            Evidence(channel_id="C1", message_ts=ROOT, quote="old quote", permalink="https://old"),
+        ),
         "first_seen": ROOT,
         "last_updated": ROOT,
         "claims": (),
@@ -645,6 +647,7 @@ def drop_case(
         old_claims = (
             (
                 Claim(
+                    channel_id="C1",
                     entity="PN-31010",
                     attribute="rev",
                     value="B",
@@ -656,7 +659,7 @@ def drop_case(
             else ()
         )
         old_tasks = (
-            (TaskLink(task="today.task", effect="evidence", message_ts=ROOT),)
+            (TaskLink(channel_id="C1", task="today.task", effect="evidence", message_ts=ROOT),)
             if field == "tasks.stale"
             else ()
         )
@@ -790,6 +793,7 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
     stale = event(stale_ts, text="edited text no longer supports the old quote")
     delta_row = delta(root, reply, stale, root=root)
     kept_old_claim = Claim(
+        channel_id="C1",
         entity="PN-31010",
         attribute="rev",
         value="B",
@@ -797,23 +801,37 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
         authority="owner_stated",
     )
     stale_claim = Claim(
+        channel_id="C1",
         entity="PN-31010",
         attribute="status",
         value="old status",
         message_ts=stale_ts,
         authority="owner_stated",
     )
-    kept_done_task = TaskLink(task="today.task", effect="done", message_ts=old_uncited_ts)
-    stale_task = TaskLink(task="today.task", effect="evidence", message_ts=stale_ts)
+    kept_done_task = TaskLink(
+        channel_id="C1", task="today.task", effect="done", message_ts=old_uncited_ts
+    )
+    stale_task = TaskLink(
+        channel_id="C1", task="today.task", effect="evidence", message_ts=stale_ts
+    )
     existing_item = stored_item(
         type="risk",
         entities=(),
         owner=None,
         affected_roles=("ME",),
         evidence=(
-            Evidence(message_ts=ROOT, quote="old root quote", permalink="old-root-link"),
-            Evidence(message_ts=old_uncited_ts, quote="uncited old quote", permalink="old-link"),
-            Evidence(message_ts=stale_ts, quote="stale quote", permalink="stale-link"),
+            Evidence(
+                channel_id="C1", message_ts=ROOT, quote="old root quote", permalink="old-root-link"
+            ),
+            Evidence(
+                channel_id="C1",
+                message_ts=old_uncited_ts,
+                quote="uncited old quote",
+                permalink="old-link",
+            ),
+            Evidence(
+                channel_id="C1", message_ts=stale_ts, quote="stale quote", permalink="stale-link"
+            ),
         ),
         first_seen=old_uncited_ts,
         last_updated=stale_ts,
@@ -865,7 +883,7 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
         (REPLY, "new quote"),
     ]
     assert updated.evidence[0] == Evidence(
-        message_ts=ROOT, quote="replacement quote", permalink=root.permalink
+        channel_id="C1", message_ts=ROOT, quote="replacement quote", permalink=root.permalink
     )
     assert [(c.attribute, c.value, c.message_ts) for c in updated.claims] == [
         ("rev", "B", old_uncited_ts),
@@ -904,11 +922,138 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
     }
 
 
+def test_verify_update_keys_citations_by_channel_and_ts() -> None:
+    """Setup a C1 item and a C2 delta that share a ts; merge; assert both channels stay cited."""
+    reply = event(
+        REPLY,
+        channel_id="C2",
+        text="C2 review complete",
+        permalink=f"https://kestrel.test/C2/{REPLY}",
+    )
+    delta_row = ThreadDelta(
+        thread_id=f"C2:{ROOT}",
+        channel_id="C2",
+        thread_ts=ROOT,
+        last_ts=REPLY,
+        since_ts=None,
+        root=None,
+        changed=(reply,),
+    )
+    existing_item = stored_item(
+        evidence=(Evidence(channel_id="C1", message_ts=REPLY, quote="C1 quote", permalink="c1"),),
+        first_seen=REPLY,
+        last_updated=REPLY,
+        claims=(
+            Claim(
+                entity="PN-31010",
+                attribute="rev",
+                value="B",
+                channel_id="C1",
+                message_ts=REPLY,
+                authority="owner_stated",
+            ),
+        ),
+        tasks=(TaskLink(task="today.task", effect="evidence", channel_id="C1", message_ts=REPLY),),
+    )
+    incoming = extracted_item(
+        item_id="I1",
+        evidence=[ExtractedEvidence(message_ts=REPLY, quote="review complete")],
+        claims=[ExtractedClaim(entity="PN-31010", attribute="rev", value="B", message_ts=REPLY)],
+        tasks=[ExtractedTask(task="today.task", effect="done", message_ts=REPLY)],
+    )
+
+    result = verify(
+        Extraction(rationale="Update.", items=[incoming]),
+        delta_row,
+        {REPLY: reply},
+        glossary(),
+        {"today.task": project().task("today.task")},
+        {"I1": existing_item},
+    )
+
+    (updated,) = result.items
+    assert [(e.channel_id, e.quote) for e in updated.evidence] == [
+        ("C1", "C1 quote"),
+        ("C2", "review complete"),
+    ]
+    assert [(c.channel_id, c.value) for c in updated.claims] == [("C1", "B"), ("C2", "B")]
+    assert [(t.channel_id, t.effect) for t in updated.tasks] == [
+        ("C1", "evidence"),
+        ("C2", "done"),
+    ]
+    assert result.drops == dict.fromkeys(DROP_FIELDS, 0)
+
+
+def test_verify_update_drops_stale_links_of_one_channel_only() -> None:
+    """Setup C1 and C2 entries on one ts, C2 stale; merge; assert only the C2 citations drop."""
+    root = event(channel_id="C2", text="C2 root", permalink=f"https://kestrel.test/C2/{ROOT}")
+    reply = event(
+        REPLY, channel_id="C2", text="C2 edited", permalink=f"https://kestrel.test/C2/{REPLY}"
+    )
+    delta_row = ThreadDelta(
+        thread_id=f"C2:{ROOT}",
+        channel_id="C2",
+        thread_ts=ROOT,
+        last_ts=REPLY,
+        since_ts=None,
+        root=root,
+        changed=(reply,),
+    )
+
+    def old_claim(channel: str) -> Claim:
+        return Claim(
+            entity="PN-31010",
+            attribute="rev",
+            value="B",
+            channel_id=channel,
+            message_ts=REPLY,
+            authority="owner_stated",
+        )
+
+    def old_link(channel: str) -> TaskLink:
+        return TaskLink(task="today.task", effect="evidence", channel_id=channel, message_ts=REPLY)
+
+    existing_item = stored_item(
+        evidence=(
+            Evidence(channel_id="C1", message_ts=REPLY, quote="C1 quote", permalink="c1"),
+            Evidence(channel_id="C2", message_ts=REPLY, quote="C2 old quote", permalink="c2"),
+        ),
+        first_seen=REPLY,
+        last_updated=REPLY,
+        claims=(old_claim("C1"), old_claim("C2")),
+        tasks=(old_link("C1"), old_link("C2")),
+    )
+    incoming = extracted_item(
+        item_id="I1", evidence=[ExtractedEvidence(message_ts=ROOT, quote="C2 root")]
+    )
+
+    result = verify(
+        Extraction(rationale="Update.", items=[incoming]),
+        delta_row,
+        {ROOT: root, REPLY: reply},
+        glossary(),
+        {"today.task": project().task("today.task")},
+        {"I1": existing_item},
+    )
+
+    (updated,) = result.items
+    assert [(e.channel_id, e.message_ts) for e in updated.evidence] == [("C1", REPLY), ("C2", ROOT)]
+    assert [c.channel_id for c in updated.claims] == ["C1"]
+    assert [t.channel_id for t in updated.tasks] == ["C1"]
+    assert result.drops == dict.fromkeys(DROP_FIELDS, 0) | {
+        "evidence.stale": 1,
+        "claims.stale": 1,
+        "tasks.stale": 1,
+    }
+
+
 def test_verify_two_outputs_for_one_existing_item_merge_in_output_order(tmp_path: Path) -> None:
     root = event(user_id="B1", text="PN-31010 Rev C released.")
     reply = event(REPLY, text="PN-31010 review complete.")
     existing_item = stored_item(
-        evidence=(Evidence(message_ts=ROOT, quote="PN-31010", permalink=root.permalink),),
+        evidence=(
+            Evidence(channel_id="C1", message_ts=ROOT, quote="PN-31010", permalink=root.permalink),
+        ),
         claims=(),
         tasks=(),
     )
@@ -991,7 +1136,14 @@ def test_verify_update_links_may_cite_held_evidence_only_when_citable(
     changed = event(LATER, text="PN-31010 Rev C released in another message.")
     claim_ts = LATER if case == "changed-not-evidence" else held_ts
     existing_item = stored_item(
-        evidence=(Evidence(message_ts=held_ts, quote="PN-31010 Rev C", permalink=held.permalink),),
+        evidence=(
+            Evidence(
+                channel_id="C1",
+                message_ts=held_ts,
+                quote="PN-31010 Rev C",
+                permalink=held.permalink,
+            ),
+        ),
         claims=(),
         tasks=(),
     )
