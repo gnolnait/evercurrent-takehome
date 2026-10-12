@@ -231,7 +231,11 @@ def replay_llm(
 
 
 def write_events(path: Path, events: list[Event]) -> None:
-    path.write_text("".join(event.model_dump_json() + "\n" for event in events), encoding="utf-8")
+    path.write_text(
+        "".join(event.model_dump_json() + "\n" for event in events),
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def anchor_event(world: World, event: WorldEvent) -> Event:
@@ -456,7 +460,7 @@ def test_render_assigns_timestamps_fields_mentions_reactions_and_permalinks(tmp_
     world = World.model_validate(data)
     manifest = Manifest(threads={})
     anchor = tmp_path / "anchor.jsonl"
-    anchor.write_text("", encoding="utf-8")
+    anchor.write_text("", encoding="utf-8", newline="\n")
     llm = replay_llm(tmp_path, world, manifest)
 
     render_world(
@@ -631,7 +635,7 @@ def test_indirection_allows_a_missing_claim_entity_and_empty_message_lists(tmp_p
     messages[0]["files"] = []
     manifest = Manifest(threads={})
     anchor = tmp_path / "anchor.jsonl"
-    anchor.write_text("", encoding="utf-8")
+    anchor.write_text("", encoding="utf-8", newline="\n")
     llm = replay_llm(tmp_path, world, manifest, overrides={world.events[0].id: messages})
 
     report = render_world(
@@ -867,8 +871,10 @@ def prepare_cli_world(
     world = World.model_validate(data)
     world_dir = tmp_path / "data/world/small"
     world_dir.mkdir(parents=True)
-    (world_dir / "world.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    (world_dir / "anchor.jsonl").write_text("", encoding="utf-8")
+    (world_dir / "world.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8", newline="\n"
+    )
+    (world_dir / "anchor.jsonl").write_text("", encoding="utf-8", newline="\n")
     write_manifest(Manifest(threads={}), world_dir / "manifest.json")
     avoid_path = tmp_path / "data/world/avoid-names.yaml"
     avoid_path.write_text(
