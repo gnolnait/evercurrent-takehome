@@ -136,9 +136,10 @@ entries, newest first, then on `item_id` ascending (SPEC 5.6). Must-see lines ar
 `item_id` order, above the ranked lines. `reason`
 names the three terms with their values.
 
-B5.5 Sections: `ask` items go to `needs_you`. An ask absence replaces the line of the
-ask item it cites (same thread) for every reader who gets the absence, so one ask never
-shows twice; an ask in another thread keeps its line. The ask absence goes to
+B5.5 Sections: `ask` items go to `needs_you`. When a reader's digest shows an ask absence
+line, after the caps and the threshold, the line of the ask item it cites (same thread)
+is left out, so one ask never shows twice; an ask in another thread keeps its line, and
+an ask whose absence line is not shown keeps its line. The ask absence goes to
 `needs_you` when the reader is the person asked, else to `not_happened`, as every other
 absence does; `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
@@ -159,8 +160,8 @@ default day 6:
 - M2 evidence entries carry no `channel_id`. M2 does not merge items, so every evidence
   entry comes from the item's thread, and the thread's channel stands in for it (B5.2).
   When the model carries `channel_id`, B5.2 reads it.
-- The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The table that the stubs
-  commit adds to `config/priors.yaml` has a value for every role and every item type,
+- The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The `daily.role_priors`
+  table in `config/priors.yaml` has a value for every role and every item type,
   so the default does not apply to the bundled config.
 - Newest evidence is the greatest `message_ts`, not the greatest `event_ts` of the
   current message versions: an edit does not make an item newer. Items carry no
