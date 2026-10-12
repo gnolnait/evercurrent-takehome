@@ -60,11 +60,12 @@ structure.
   discriminating field, so the digest never hides "Rev C" behind "Rev B".
 
 In this repo (built): `src/digest/extract/normalize.py` maps glossary aliases and splits a
-single-letter revision suffix, and `src/digest/extract/verify.py` drops a claim whose
-entity does not resolve. Designed, not built: the linker (blocking, field diff and the
-adjudicator) and the ECO, PO, date and quantity parsers (SPEC section 5). The SPEC day-3
-rule cut the ledger and the linker from the demo: claim precision is 0.537 (n = 41)
-against 0.8. No vector database is used.
+single-letter revision suffix, and `src/digest/extract/verify.py` normalizes revision and
+quantity forms and drops a claim whose entity does not resolve. Designed, not built: the
+linker (blocking, field diff and the adjudicator), ECO and PO id parsers, and checks of
+values against the cited text (SPEC section 5). The SPEC day-3 rule cut the ledger and the
+linker from the demo: the eval's claim precision, a stricter proxy for keying precision,
+is 0.537 (n = 41) against 0.8. No vector database is used.
 
 ## Evaluation: how do you evaluate LLM-generated content and summaries?
 

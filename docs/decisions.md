@@ -83,9 +83,9 @@ beside `message_ts`, because a Slack `ts` is unique only within a channel and me
 items cite more than one channel.
 
 Amended 2026-10-12 (status): two parts of the 2026-10-11 amendment are designed, not
-built. The code does not check a claim value against the cited text: `verify.py` resolves
-the entity, checks that the claim cites a message the item holds, and normalizes the
-value form. The prompt carries no ledger values, because the ledger is cut (SPEC section
+built. The code does not check a claim value, an owner or a due date against the cited
+text: `verify.py` resolves the entity and the owner through the glossary, checks that a
+claim cites a message the item holds, parses the due date, and normalizes the value form. The prompt carries no ledger values, because the ledger is cut (SPEC section
 9). The value check, with a repair step before a drop, is in `docs/later.md`.
 
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction

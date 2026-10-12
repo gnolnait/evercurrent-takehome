@@ -117,7 +117,8 @@ In order. Each item names its trigger. Measured numbers are from
    quote is not support for a claim (arXiv 2609.15964). Trigger: now.
 3. Claim key checks in code. A table of the attributes each entity type may carry, a
    value form per attribute, and an attachment rule: the entity is named in the quote,
-   the thread root or an earlier cited message. The measured key errors put a true fact
+   the thread root or an earlier cited message. Key errors seen in a hand review of the
+   extractor output, not yet measured (item 4 adds the metric), put a true fact
    on the wrong entity or attribute (a PO revision stored as a part revision, status
    stored as lead time); a synonym merge does not fix that. Trigger: before the ledger.
 4. Claim scoring. Report each extracted claim as matched, true but unlabeled, wrong key,
@@ -126,7 +127,7 @@ In order. Each item names its trigger. Measured numbers are from
    key-error rate, with a recall guard and key stability across two recordings.
    Trigger: before the ledger.
 5. Digest window per reader and a seen record, so a reader is not told the same thing
-   twice. Trigger: every demo digest is a first digest (13 to 16 lines).
+   twice. Trigger: every demo digest is a first digest (`docs/plans/m3-demo.md`).
 6. Stage key records the concrete model id, and a run refuses a mismatch. Today the key
    holds the logical name, so a model change in `config/models.yaml` reuses old runs.
 7. Extraction payload limit: open items, plus items that share an entity with the new

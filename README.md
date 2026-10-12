@@ -13,8 +13,10 @@ message in code, and code builds every link.
 
 The claims ledger and the stale-belief lines ("you were told Rev B; it is Rev C") are cut.
 SPEC section 9 set a rule before the build: if claim keying precision is below 0.8, cut
-the ledger to the ranker plus absences. The recorded eval measures claim precision 0.537
-(n = 41), so the ledger is not in this slice. The design stays in `SPEC.md` and
+the ledger to the ranker plus absences. The eval has no separate keying metric. Its claim
+precision is stricter: it also needs an equal value on rev, gate date, qty and owner, and
+it counts any claim the golden labels do not list as wrong, even a true one. That proxy measures
+0.537 (n = 41), so the ledger is not in this slice. The design stays in `SPEC.md` and
 `docs/decisions.md` (D19, D21).
 
 Measured on the recorded corpus (`reports/eval-2026-10-23.md`):
