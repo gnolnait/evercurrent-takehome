@@ -42,6 +42,7 @@ dev = [
     "ty==0.0.84",
     "types-pyyaml>=6.0.12.20260906",
     "import-linter>=2.15",
+    "pytest-xdist>=3.6",
 ]
 # No respx / pytest-httpx: anthropic 1.x runs on httpx2 and those mocks fail silently;
 # the LLM layer is tested through the SDK-boundary cassette (docs/decisions.md D9) and

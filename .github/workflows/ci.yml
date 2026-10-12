@@ -27,7 +27,7 @@ jobs:
         env:
           DIGEST_MODE: replay
       - name: hook guard tests
-        run: cd .claude/hooks && uv run --project ../.. python -m pytest -q
+        run: cd .claude/hooks && uv run --project ../.. python -m pytest -q -n auto
 
   secrets:
     runs-on: ubuntu-latest
