@@ -64,8 +64,9 @@ that the next line reads as fact. A guard meant to fail closed then fails open.
 prek runs ruff, the hygiene hooks, the AGENTS.md copy check and the token scan
 (`no-secrets`) at commit, and ty, lint-imports, pytest, the hook guard tests and
 `pr-not-merged` at push (`stages: [pre-push]`). CI runs ruff, every pre-push gate except
-`pr-not-merged`, and gitleaks (the `secrets` job). `pr-not-merged` checks the local
-branch against GitHub before a push, so it has no CI step. The commit-stage hygiene
+`pr-not-merged`, and gitleaks (the `secrets` job, configured by `.gitleaks.toml`).
+`pr-not-merged` checks the local branch against GitHub before a push, so it has no CI
+step. The commit-stage hygiene
 hooks and the copy check run only locally; that is accepted (`AGENTS.md`, "Speed first").
 
 - **Signature:** a new `stages: [pre-push]` hook, or a step removed from `ci.yml`.

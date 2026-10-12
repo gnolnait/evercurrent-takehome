@@ -5,6 +5,7 @@ two review fixes on PR #17 missed main this way. The hook asks GitHub, through `
 the branch's pull requests. If one merged and none is open, the push stops with a hint
 to open a follow-up branch. Without `gh` or a network, it prints a warning and lets the
 push through: the check needs GitHub, and a missing tool must not block all work.
+prek gives the hook only the first branch of a push, so push one branch at a time.
 """
 
 import json
@@ -42,7 +43,11 @@ def merged_pr(branch: str, run: Run = _run) -> int | None:
             ]
         ).stdout
         prs = json.loads(out or "[]")
-    except (OSError, subprocess.SubprocessError, ValueError) as error:
+    except (
+        OSError,  # gh is not installed
+        subprocess.SubprocessError,  # gh exits non-zero: offline or not signed in
+        ValueError,  # gh prints no JSON
+    ) as error:
         print(f"pr-not-merged: could not check the PR state ({error}); push allowed")
         return None
     # A PR from a fork with the same branch name says nothing about this repo's branch.

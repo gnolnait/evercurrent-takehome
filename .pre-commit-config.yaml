@@ -1,8 +1,9 @@
 # Run with prek (https://github.com/j178/prek), a drop-in pre-commit runner:
 #   uv tool install prek && prek install && prek install --hook-type pre-push
-# Commit: fast, auto-fixing checks only. Push: the type check, the import contract
-# and the test suite.
-# Everything here is also what CI runs, so a green push is a green CI.
+# Commit: fast, auto-fixing checks and the token scan. Push: the type check, the import
+# contract, the test suite and the merged-PR check.
+# CI runs ruff and every pre-push gate except pr-not-merged, plus gitleaks, which has no
+# local hook. See .claude/rules/ci-workflows.md.
 
 default_install_hook_types: [pre-commit, pre-push]
 default_stages: [pre-commit]
@@ -59,6 +60,7 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        verbose: true  # prek hides a passing hook's output, and the fail-open warning
         stages: [pre-push]
       - id: ty
         name: ty (type check)
