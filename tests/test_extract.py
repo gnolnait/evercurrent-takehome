@@ -958,11 +958,7 @@ def test_verify_update_keys_citations_by_channel_and_ts() -> None:
     incoming = extracted_item(
         item_id="I1",
         evidence=[ExtractedEvidence(message_ts=REPLY, quote="review complete")],
-        claims=[
-            ExtractedClaim(
-                entity="PN-31010", attribute="status", value="complete", message_ts=REPLY
-            )
-        ],
+        claims=[ExtractedClaim(entity="PN-31010", attribute="rev", value="B", message_ts=REPLY)],
         tasks=[ExtractedTask(task="today.task", effect="done", message_ts=REPLY)],
     )
 
@@ -980,12 +976,75 @@ def test_verify_update_keys_citations_by_channel_and_ts() -> None:
         ("C1", "C1 quote"),
         ("C2", "review complete"),
     ]
-    assert [(c.channel_id, c.value) for c in updated.claims] == [("C1", "B"), ("C2", "complete")]
+    assert [(c.channel_id, c.value) for c in updated.claims] == [("C1", "B"), ("C2", "B")]
     assert [(t.channel_id, t.effect) for t in updated.tasks] == [
         ("C1", "evidence"),
         ("C2", "done"),
     ]
     assert result.drops == dict.fromkeys(DROP_FIELDS, 0)
+
+
+def test_verify_update_drops_stale_links_of_one_channel_only() -> None:
+    """Setup C1 and C2 entries on one ts, C2 stale; merge; assert only the C2 citations drop."""
+    root = event(channel_id="C2", text="C2 root", permalink=f"https://kestrel.test/C2/{ROOT}")
+    reply = event(
+        REPLY, channel_id="C2", text="C2 edited", permalink=f"https://kestrel.test/C2/{REPLY}"
+    )
+    delta_row = ThreadDelta(
+        thread_id=f"C2:{ROOT}",
+        channel_id="C2",
+        thread_ts=ROOT,
+        last_ts=REPLY,
+        since_ts=None,
+        root=root,
+        changed=(reply,),
+    )
+
+    def old_claim(channel: str) -> Claim:
+        return Claim(
+            entity="PN-31010",
+            attribute="rev",
+            value="B",
+            channel_id=channel,
+            message_ts=REPLY,
+            authority="owner_stated",
+        )
+
+    def old_link(channel: str) -> TaskLink:
+        return TaskLink(task="today.task", effect="evidence", channel_id=channel, message_ts=REPLY)
+
+    existing_item = stored_item(
+        evidence=(
+            Evidence(channel_id="C1", message_ts=REPLY, quote="C1 quote", permalink="c1"),
+            Evidence(channel_id="C2", message_ts=REPLY, quote="C2 old quote", permalink="c2"),
+        ),
+        first_seen=REPLY,
+        last_updated=REPLY,
+        claims=(old_claim("C1"), old_claim("C2")),
+        tasks=(old_link("C1"), old_link("C2")),
+    )
+    incoming = extracted_item(
+        item_id="I1", evidence=[ExtractedEvidence(message_ts=ROOT, quote="C2 root")]
+    )
+
+    result = verify(
+        Extraction(rationale="Update.", items=[incoming]),
+        delta_row,
+        {ROOT: root, REPLY: reply},
+        glossary(),
+        {"today.task": project().task("today.task")},
+        {"I1": existing_item},
+    )
+
+    (updated,) = result.items
+    assert [(e.channel_id, e.message_ts) for e in updated.evidence] == [("C1", REPLY), ("C2", ROOT)]
+    assert [c.channel_id for c in updated.claims] == ["C1"]
+    assert [t.channel_id for t in updated.tasks] == ["C1"]
+    assert result.drops == dict.fromkeys(DROP_FIELDS, 0) | {
+        "evidence.stale": 1,
+        "claims.stale": 1,
+        "tasks.stale": 1,
+    }
 
 
 def test_verify_two_outputs_for_one_existing_item_merge_in_output_order(tmp_path: Path) -> None:
