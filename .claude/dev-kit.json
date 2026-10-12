@@ -1,8 +1,8 @@
 {
-  "kit_commit": "31db177f184d8c9bed1262c92f71b6605139488d",
+  "kit_commit": "240fb60e94d7eb708b2da8c0802be2e9ea045df6",
   "exclude": [],
   "files": {
-    ".claude/commands/review-local.md": "a1e9247877e6c22d56f5673dcb12038b4b2eee390169015d49fdea0b7e2518b7",
+    ".claude/commands/review-local.md": "d35161f5081b351840bc20b0c55bef89f40af81a9bc88a2b7486c73e11d5b6de",
     ".claude/hooks/conftest.py": "0d8c9595b7b71f78fcf2fba4623d958c19a1e591ae5a2be785b63a86ce56207a",
     ".claude/hooks/git_commit_events.py": "cef0dca793259923e71ca97c46021961f3d057ef6670cf2cd5b08c3458d3aa10",
     ".claude/hooks/guard_runner": "1420a95433fe981d079210e1b11e798270ad398bec8edf066f0791a687b7745a",
@@ -33,7 +33,7 @@
     ".claude/hooks/test_prove_test_track_edit.py": "279904c737a54477edb2ca5796dcd807a4c27ce931efff11707526cff9bb24d2",
     ".claude/hooks/test_settings_guards.py": "fbf42a89666f56b04356d74e7bfd6f71fd944d3449396033dad28fbb2ccfca24",
     ".claude/hooks/test_shell_segments.py": "22e75a608087ad207c4951df27c56893a83cc47f545446b0a6ab80ec8f77aa43",
-    ".claude/review-lenses/ORCHESTRATOR.md": "63254ba76df6a69001fedd383d2886276e8ac9784382df587c1a83562d29762f",
+    ".claude/review-lenses/ORCHESTRATOR.md": "ca946dcadc043ae2b2c02fb0953767cffbf4d284fb3f3df8655a9c647acf2ab6",
     ".claude/review-lenses/SELECTION.md": "0f80d2fefbbfd7969fd7e6a720d54952fa7a1916fedc4ae0e93be6cea1efd778",
     ".claude/review-lenses/_contract.md": "e8a53ae5798527ac1081a3040fb4af8f9fa2f1e135a2c0d8dca7658460d3bcf9",
     ".claude/review-lenses/review-adversarial.md": "57188f7fb418700a94cf44ec5a10d73d001d807106d616f7ed48d6b9daa92f6c",
