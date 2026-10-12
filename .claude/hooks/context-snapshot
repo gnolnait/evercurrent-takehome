@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# context-snapshot - PreCompact and SessionStart launcher for
-# context_snapshot.py. The handoff must never block a compaction or a session
-# start, so this fence always exits 0 whatever the python child does (missing
-# interpreter, crash, malformed payload). The mode argument passes through.
+# context-snapshot - PreCompact, SessionStart and PreToolUse(spawn_task)
+# launcher for context_snapshot.py. The handoff must never block a compaction,
+# a session start or a spawn, so this fence always exits 0 whatever the python
+# child does (missing interpreter, crash, malformed payload). The mode argument
+# passes through.
 set -u
 # Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
 # python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
