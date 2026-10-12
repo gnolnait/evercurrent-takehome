@@ -158,6 +158,7 @@ def priors(
 def evidence(channel_id: str, suffix: int = 1) -> Evidence:
     ts = f"1791993600.{suffix:06d}"
     return Evidence(
+        channel_id=channel_id,
         message_ts=ts,
         quote=f"Evidence in {channel_id}",
         permalink=f"https://kestrel.slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
@@ -311,17 +312,28 @@ def test_visibility_keeps_only_evidence_from_visible_thread_channel() -> None:
     assert selection.hidden == 0
 
 
-@pytest.mark.parametrize(
-    "permalink",
-    [
-        "https://kestrel.slack.com/archives/CPRIVATE/p1791993600000001",
-        "not a Slack permalink",
-    ],
-    ids=["another-channel", "unparseable"],
-)
-def test_visibility_drops_item_with_no_evidence_from_thread_channel(permalink: str) -> None:
-    row = item("no-thread-evidence").model_copy(
-        update={"evidence": (evidence("CPUBLIC").model_copy(update={"permalink": permalink}),)}
+def test_visibility_drops_item_with_no_evidence_from_thread_channel() -> None:
+    row = item("no-thread-evidence").model_copy(update={"evidence": (evidence("CPRIVATE"),)})
+
+    selection = choose([row])
+
+    assert selection.lines == ()
+    assert selection.hidden == 1
+
+
+def test_visibility_uses_evidence_channel_id_instead_of_permalink() -> None:
+    row = item("mismatched-evidence").model_copy(
+        update={
+            "evidence": (
+                evidence("CPRIVATE").model_copy(
+                    update={
+                        "permalink": (
+                            "https://kestrel.slack.com/archives/CPUBLIC/p1791993600000001"
+                        )
+                    }
+                ),
+            )
+        }
     )
 
     selection = choose([row])
