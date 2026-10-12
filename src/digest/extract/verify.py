@@ -76,9 +76,9 @@ def verify(
         old_claims: list[Claim] = []
         old_links: list[TaskLink] = []
         if raw.item_id is None:
-            # A new id names the earliest cited message and the lowest free k. It is stable
-            # against delta boundaries and output order, not against a different first citation
-            # or a swap of two new items that share an anchor.
+            # A new id names the earliest cited message and the lowest free k. For an item with
+            # its anchor to itself it is stable against delta boundaries and output order. Items
+            # that share an anchor take k in the order they first appear.
             anchor_ts = min((entry.message_ts for entry in evidence), key=ts_micros)
             k = 0
             while (item_id := f"{delta.thread_id}#{anchor_ts}#{k}") in existing or item_id in items:

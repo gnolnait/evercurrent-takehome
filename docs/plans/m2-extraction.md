@@ -1358,7 +1358,7 @@ sees.
 
 | Unit | Point | Ruling |
 |---|---|---|
-| 1 | New item id index | `n` is zero-based. |
+| 1 | New item id index | `k` is the lowest integer from 0 not used by the thread's existing items or this extraction (amended 2026-10-12). |
 | 1 | `extract_failed` field | The error class is under `error_class`. |
 | 1 | Times in the stage *(code)* | The stage's `as_of` is also the triage `decided_at` and every stage run's `run_at`, so a replayed store is the same on every run. |
 | 1 | Claims and task links on an update | A claim or link may cite any merged evidence message that is in `citable` (root and changed rows); its authority is that message author's. |

@@ -22,9 +22,10 @@ the id must be stable before they are built.
   existing items and not an id already given in this extraction.
 - An updated item (the model returns an existing `item_id`) keeps its id, as today.
 
-The id is stable against delta boundaries and output order. It is not stable when the
-model cites a different first message for the same fact, or when two new items share an
-anchor and the model swaps their order.
+For an item that has its anchor to itself, the id is stable against delta boundaries and
+output order. It is not stable when the model cites a different first message for the
+same fact. It is also not stable when two items share an anchor: `k` follows the order
+in which they first appear, so a different delta split or output order can swap them.
 
 ## Interface
 
