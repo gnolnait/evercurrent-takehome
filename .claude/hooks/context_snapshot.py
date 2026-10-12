@@ -16,11 +16,12 @@ in a linked worktree reads and writes the same files as one in the primary.
 
 The hook must never block a compaction or a session start. Every path exits 0,
 and the bash fence also forces exit 0. The script reads no file contents except
-the two handoff files that `print` shows. It lists only the names, times and
-sizes of files under `notes/dispatch/` and `notes/reviews/`.
+the two handoff files that `print` shows. For the other files under `notes/`,
+it reads only names, times and sizes.
 """
 import json
 import os
+from collections import Counter
 import shutil
 import subprocess
 import sys
@@ -36,8 +37,9 @@ MAX_PRS = 10
 # Claude Code caps SessionStart stdout at 10,000 characters. Over the cap it
 # shows the model only a 2,000-character preview, so stay well under it.
 MAX_PRINT_CHARS = 9000
-# Total time for all subprocess calls in `snapshot`. The settings timeout is 60.
-BUDGET_S = 45.0
+# Total time for all subprocess calls in one run, below each hook's settings
+# timeout (60 s for PreCompact, 15 s for SessionStart).
+BUDGET_S = {"snapshot": 45.0, "print": 10.0}
 
 _deadline = [0.0]
 
@@ -149,14 +151,16 @@ def branch_lines(root):
 
 def check_summary(gh, root, number):
     out = run([gh, "pr", "checks", str(number), "--json", "bucket"], root)
+    if out is None:
+        return "checks: unknown (gh timed out)"
     try:
-        rows = json.loads(out or "")
+        rows = json.loads(out)
     except ValueError:
         return "checks: none"
-    counts = {}
-    for row in rows if isinstance(rows, list) else []:
-        bucket = row.get("bucket", "?") if isinstance(row, dict) else "?"
-        counts[bucket] = counts.get(bucket, 0) + 1
+    counts = Counter(
+        row.get("bucket", "?") if isinstance(row, dict) else "?"
+        for row in (rows if isinstance(rows, list) else [])
+    )
     if not counts:
         return "checks: none"
     return "checks: " + ", ".join("%s %d" % kv for kv in sorted(counts.items()))
@@ -226,8 +230,9 @@ def notes_lines(root, sub):
 
 def newest_handoff(root):
     for e in files_by_mtime(os.path.join(root, "notes", "handoffs")):
-        if e.name != AUTO_STATE:
-            return e.path
+        if e.name == AUTO_STATE:
+            continue
+        return e.path
     return None
 
 
@@ -302,6 +307,15 @@ def section(path, limit):
     return head + text.rstrip() + "\n"
 
 
+def age_note(path):
+    """One line with the age of `path`, so a stale snapshot shows as stale."""
+    try:
+        minutes = int((time.time() - os.path.getmtime(path)) // 60)
+    except OSError:
+        return ""
+    return "The auto-state file was written %d minutes ago.\n" % minutes
+
+
 def render_resume(root):
     """The SessionStart text, or "" when there is nothing to show.
 
@@ -311,8 +325,9 @@ def render_resume(root):
     auto = shown(os.path.join(root, "notes", "handoffs", AUTO_STATE))
     handoff = newest_handoff(root)
     handoff = shown(handoff) if handoff else None
+    preface = PREFACE + age_note(auto)
     parts = []
-    budget = MAX_PRINT_CHARS - len(PREFACE) - 2
+    budget = MAX_PRINT_CHARS - len(preface) - 2
     if os.path.isfile(auto):
         text = section(auto, budget // 2 if handoff else budget)
         if text:
@@ -324,12 +339,12 @@ def render_resume(root):
             parts.append(text)
     if not parts:
         return ""
-    return PREFACE + "\n" + "\n".join(parts)
+    return preface + "\n" + "\n".join(parts)
 
 
 def main(argv):
-    _deadline[0] = time.monotonic() + BUDGET_S
     mode = argv[0] if argv else "snapshot"
+    _deadline[0] = time.monotonic() + BUDGET_S.get(mode, 10.0)
     try:
         payload = read_payload()
         root = primary_root(start_dir(payload))
@@ -339,7 +354,11 @@ def main(argv):
             trigger = payload.get("trigger")
             snapshot(root, trigger if isinstance(trigger, str) else "manual run")
         elif mode == "print":
-            sys.stdout.write(render_resume(root))
+            text = render_resume(root)
+            # On Windows a piped sys.stdout is cp1252, and one character
+            # outside it (an arrow, a check mark) raised and lost the output.
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stdout.write(text)
     except Exception:  # noqa: BLE001 - a snapshot failure must not block compaction
         pass
     return 0
