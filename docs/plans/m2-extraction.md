@@ -1073,11 +1073,13 @@ class ExtractionReport(Frozen):
     type_agreement: float | None # among matched golden items, share whose item has the same type (advisory)
     objective_misses: dict[str, int]   # thread-matched golden items with a wrong or missing objective field, per field
     claims_golden: int
-    claims_found: int            # golden claims found on an item in the thread with equal normalized value
+    claims_found: int            # golden claims found on an item in the thread, by the Q6 rule
     claims_extracted: int        # extracted claims in golden threads
     claims_extracted_matched: int
     claim_recall: float | None   # claims_found / claims_golden
     claim_precision: float | None   # claims_extracted_matched / claims_extracted
+    claim_value_agreement: float | None  # Q6 advisory: found non-discriminating claims whose value agrees
+    claim_value_agreement_n: int          # found golden claims on non-discriminating attributes
     evidence_entries: int        # delivered evidence entries, the n of citation_validity
     entity_jaccard: float | None # mean over matched items with golden entities; n reported
     entity_jaccard_n: int
