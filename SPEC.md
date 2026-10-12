@@ -1,6 +1,6 @@
 # SPEC: role- and phase-aware daily Slack digest
 
-Status: v0.4.1, 2026-10-11. This is the contract the tests are written against. Change it by
+Status: v0.4.2, 2026-10-12. This is the contract the tests are written against. Change it by
 editing this file first, then the tests, then the code. v0.2 added the belief ledger,
 absence detection, decision landing map and world-first simulator on top of the v0.1
 baseline pipeline. v0.3 adds, after the design review: bot personas for systems of
@@ -11,7 +11,9 @@ profile bootstrap and onboarding, a two-tier delivery policy, and a live replay 
 the stale-belief person-days objective, claim certainty and kind, entity dependency
 edges with decision exposure and routed contradictions, three more absence sources, a
 feedback event log, a reader access filter, coverage on every digest, documents and
-actions as claims, and evaluation gates with baselines.
+actions as claims, and evaluation gates with baselines. v0.4.2 defines the `novelty`
+term, adds a `window_recency` term for windows longer than one delivery day, and makes
+the ranked-lane tie-break deterministic.
 
 ## 1. Problem
 
@@ -281,9 +283,19 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
    impression. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
-   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner. Stretch term
+   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner.
+   `novelty` measures what is new to the reader, not the age of the message: it is 1 when
+   the reader has no exposure to the item's fact, 1 when a discriminating field (rev, qty,
+   date, status) differs from the value the reader was last shown, and a floor (default
+   0.3) when the reader was last shown the same values. Stretch term
    `last_to_know`: rises when every other reader in the fact's audience has been exposed
-   to it and this reader has not. `importance`
+   to it and this reader has not. Stretch term `window_recency`: when the digest window
+   spans more than one delivery day (a Monday digest after a weekend, a reader back from
+   leave), it falls linearly from 1 for an item whose newest evidence is on the window's
+   last day to a floor (default 0.8) for one whose newest evidence is on the first day. It
+   is 1 in a one-day window, and 1 for absences, re-surfaced items and open blockers,
+   whose rank rises with age. Ranked-lane ties break on the time of the item's newest
+   evidence, newest first, then on item id, so the order is deterministic. `importance`
    includes type, severity, authority, affected-role count and engagement (replies and
    reactions on the source thread). `sender_affinity` is highest for the reader's
    manager and reports, then the same team, then frequent collaborators (counted from
@@ -525,7 +537,7 @@ reads it is built.
   v0.4 stretch: ledger values in the extraction prompt, decision exposure, contradiction
   routing with the confirm action, the per-subsystem phase
   override, history labels, resolved-since lines, per-role consequence templates, the
-  "last to know" term. Re-surfacing by age and diversity at render stay
+  "last to know" term, the `window_recency` term. Re-surfacing by age and diversity at render stay
   stretch.
 - M4 (day 4): landing map; eval harness and report with the ablation table;
   faithfulness judge; degradation curve; web preview with the profile page (paste

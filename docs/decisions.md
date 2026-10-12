@@ -97,6 +97,13 @@ entity the reader's pending checklist task touches; a visibility check (public c
 or private with membership) runs before both lanes and fails closed; the ranked score
 gains `decision_exposure` and a one-hop `dependency_distance`; learned interest is clamped.
 
+Amended 2026-10-12 (SPEC v0.4.2): `novelty` is defined against the reader's exposure,
+not the age of the message. A stretch `window_recency` term orders items inside a window
+longer than one delivery day; it never applies to absences, re-surfaced items or open
+blockers. Ranked-lane ties break on the newest evidence, then on item id. Plain age
+decay is rejected: it pushes down the items that matter more as they age, such as an
+open blocker or a missed task.
+
 ## D7. Slack integration: Bolt sync, Socket Mode, internal app, scheduler in-process
 
 Decision. `slack-bolt` sync app with `SocketModeHandler`, `RateLimitErrorRetryHandler`
