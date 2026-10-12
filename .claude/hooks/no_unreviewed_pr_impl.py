@@ -47,7 +47,9 @@ command runs. An unresolvable HEAD, `--head` branch or main checkout also
 blocks.
 
 Not detected: a user-defined gh alias; an httpie POST that has only key=value
-items. Two shell_segments gaps, shared with the merge and signing guards, hide
+items; a GraphQL body sent on stdin through a redirection
+(`http POST <url>/graphql < request.json`), because the segmenter removes the
+redirection before the guard reads the command. Two shell_segments gaps, shared with the merge and signing guards, hide
 a creation until the segmenter fix lands: an unquoted `{owner}`/`{repo}`
 placeholder in an API path, and a substitution inside double quotes
 (`url="$(gh pr create)"`).
@@ -191,6 +193,26 @@ def _create_kind(cmdword, rest):
     return "", False
 
 
+def _shell_string(rest):
+    """The command string a shell runs with -c, or None.
+
+    Only leading options count. The first operand is a script, and a later
+    -c is an argument of that script (the signing guard reads it the same way).
+    """
+    m = 0
+    while m < len(rest):
+        tok = rest[m]
+        if not tok.startswith(("-", "+")):
+            return None
+        if tok in ("-o", "+o", "-O", "+O"):
+            m += 2  # bash -o pipefail: the option takes a separate value
+            continue
+        if SHELL_C_FLAG.match(tok):
+            return rest[m + 1] if m + 1 < len(rest) else None
+        m += 1
+    return None
+
+
 def _writes_symbolic_ref(rest):
     """True for `git symbolic-ref <name> <ref>` or a delete; reading is safe."""
     if "symbolic-ref" not in rest:
@@ -214,11 +236,9 @@ def _scan(cmd, found, movers, depth=0):
             _scan(" ".join(rest), found, movers, depth + 1)
             continue
         if cmdword in SHELLS:
-            for i, tok in enumerate(rest):
-                if SHELL_C_FLAG.match(tok):
-                    if i + 1 < len(rest):
-                        _scan(rest[i + 1], found, movers, depth + 1)
-                    break
+            string = _shell_string(rest)
+            if string is not None:
+                _scan(string, found, movers, depth + 1)
             continue
         if cmdword in DIR_CHANGERS:
             movers.append(seg)
