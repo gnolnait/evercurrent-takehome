@@ -1,0 +1,183 @@
+# Plan: M3 demo slice, a daily digest per reader
+
+Status: v0.1, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
+with the user for the 2026-10-14 deadline: Codex writes the tests, an Opus subagent
+writes the code, every test is RED-GREEN proven, one review lane per commit
+(alternating Codex and the Claude lenses), at most one fix round per commit; findings
+left over are recorded in the verdict.
+
+## Goal
+
+SPEC A1: `just demo` runs offline in under 60 seconds and prints the digests of three
+readers (ME, supply chain, EM) on the same day, from the bundled Kestrel corpus and its
+recorded cassettes.
+
+This slice takes SPEC section 9's day-3 kill-criterion path: no claims ledger and no
+stale-belief section. A digest is the visibility filter, a must-see lane, a baseline
+ranked lane, the absence lines and a plain-text renderer. The README says so. The
+ledger, stale beliefs, feedback, sender affinity, decision exposure and delivery are M3
+proper and follow after the interview.
+
+## Units and branches
+
+| Unit | Branch | Modules | Tests |
+|---|---|---|---|
+| 5 Selection | `m3-select` | `digest/daily/profile.py`, `digest/daily/select.py`, the `daily.role_priors` table in `config/priors.yaml` and `digest/priors.py` | `tests/test_select.py` |
+| 6 Render and commands | `m3-render` | `digest/daily/render.py`, `digest run`, `digest demo`, the `demo` recipe in `justfile` | `tests/test_daily_render.py` |
+
+A stubs commit on `m3-stubs` lands first, by pull request: the interfaces below raising
+`NotImplementedError`, the priors table, the layer change, the CLI options. Units 5 and
+6 then fork from `main` and run in parallel; unit 6 builds digests from hand-made
+`Selection` values, so it does not wait for unit 5.
+
+## Shared conventions
+
+- Layers: `digest.daily` sits between `digest.eval` and the
+  `digest.replay | digest.extract | digest.absence` layer; it reads items, events and
+  absences from the store and the world, and calls no model.
+- Determinism: same store, world, reader and day give the same bytes. No wall-clock
+  time; ties break on `item_id`.
+- The reader is a world persona. A persona with `kind: bot` is refused.
+- Text from the model and from Slack is rendered as plain text; only permalinks built by
+  code are links.
+
+## Interface
+
+`digest/daily/profile.py`
+
+```python
+class Profile(Frozen):
+    user_id: str
+    name: str
+    role: Role
+    team: str | None
+    owned_entities: tuple[str, ...]
+    channels: tuple[str, ...]          # channels the reader is a member of
+
+def profile_for(world: World, user_id: str) -> Profile   # KeyError for an unknown id, ValueError for a bot
+def can_see(world: World, profile: Profile, channel_id: str) -> bool  # public, or private with the reader a member
+```
+
+`digest/daily/select.py`
+
+```python
+Section = Literal["needs_you", "not_happened", "decisions", "risks", "fyi"]
+SECTION_CAPS: Mapping[Section, int]   # needs_you 5, not_happened 3, decisions 5, risks 5, fyi 5 (SPEC 5.7)
+
+class Line(Frozen):
+    item: Item
+    section: Section
+    must_see: bool
+    reason: str          # why it is here: the must-see rule, or the score terms
+    score: float         # 0 for a must-see line
+
+class Selection(Frozen):
+    profile: Profile
+    day: date
+    lines: tuple[Line, ...]           # section order, must-see first, then score descending, then item_id
+    hidden: int                       # items dropped by the visibility filter
+
+def select(world: World, profile: Profile, items: Sequence[Item], absences: Sequence[Item],
+           priors: Priors, day: date) -> Selection
+```
+
+`digest/daily/render.py`
+
+```python
+def render_digest(world: World, selection: Selection) -> str      # plain text, see B6.1
+def build_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> str
+```
+
+CLI: `digest run --user ID --as-of YYYY-MM-DD [--world NAME] [--db PATH]` prints one
+digest from a store that `replay` and `extract` filled up to that day.
+`digest demo [--day N]` replays the bundled Kestrel world into a temporary store up to
+world day N (default 6), runs `digest extract` in replay mode from the bundled
+cassettes, and prints the digests of the ME (`U0ME01`), supply chain (`U0SC01`) and
+EM (`U0EM01`) readers, separated by a rule line.
+
+## Behaviours
+
+B5.1 `profile_for` builds the profile from the persona; `can_see` is true for a public
+channel and for a private channel the reader belongs to, false otherwise (fail closed:
+an unknown channel id is not visible).
+
+B5.2 Visibility filter (SPEC 5.6, a v0.4 core rule): an item reaches the reader only
+when at least one of its evidence messages is in a channel the reader can see; the
+evidence entries in other channels are removed from the line's item before rendering,
+so no quote or link from a channel the reader cannot see is shown. An item with no
+visible evidence is dropped and counted in `hidden`. An absence item follows the same
+rule through its cited evidence.
+
+B5.3 Must-see lane, the rules that need no ledger (SPEC 5.6): an open `ask` whose
+`owner` is the reader; an open `blocker` whose entities include an entity the reader
+owns; a `schedule_change` whose entities include a gate the reader owns; a checklist
+absence whose `affected_roles` include the reader's role; an ask absence where the
+reader is the asker or the person asked. A must-see line is never cut by a section cap.
+
+B5.4 Ranked lane: every other visible open item gets
+`score = importance * role_prior * personal_relevance`:
+- `importance`: by type (blocker 1.0, decision 0.9, schedule_change 0.9, spec_change 0.8,
+  bom_change 0.8, risk 0.7, ask 0.6, fyi 0.3), times severity (high 1.0, medium 0.7,
+  low 0.4).
+- `role_prior`: `priors.daily.role_priors[role][type]`, default 0.5 when the table has no
+  entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
+  phase re-weighting is M3 proper).
+- `personal_relevance`: 1.0 when an item entity is owned by the reader, 0.8 when the
+  item's `affected_roles` include the reader's role, else 0.4.
+An item below the threshold `priors.daily.min_score` (default 0.15) is left out. `reason`
+names the three terms with their values.
+
+B5.5 Sections: `ask` and must-see lines that ask something of the reader go to
+`needs_you`; absences to `not_happened`; `decision`, `schedule_change`, `spec_change`,
+`bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
+section holds its must-see lines plus up to its cap of ranked lines. Resolved items are
+left out. Items are those with `last_updated` at or before the end of `day` in the
+world's zone; absences are `detect_absences` as of that day.
+
+B6.1 `render_digest` writes, in order: a header line with the reader's name, role and
+the date; then each non-empty section with a title ("Needs you", "Not happened",
+"Decisions", "Risks", "FYI"); each line as `- <title> (<entity ids>) - owner <name or
+"none">` and, indented below it, the summary, then `source: <permalink>` for each
+visible evidence entry; an absence line reads `- Not happened: <task> for <gate> - <N>
+working days silent, <consumed>/<buffer> buffer days used` or, for an ask,
+`- Not happened: <asker> asked <owner>, no reply for <N> working days`, each with its
+source link; a must-see line is marked `[must see]`. A day with no line renders one
+line saying there is nothing new for the reader. A footer line says how many items the
+visibility filter hid, when that is above zero.
+
+B6.2 `build_digest` reads items with `store.items(as_of)` and absences with
+`detect_absences`, selects and renders. It refuses (ValueError naming the reason) a
+store without `meta.until`, with pending extract deltas, or replayed to before `day`.
+
+B6.3 `digest run` prints `build_digest` and exits 0; it exits 1 with the reason on a
+refused store, an unknown user or a bot. `digest demo` exits 0, prints three digests,
+reads no API key, never writes outside a temporary directory, and finishes in under 60
+seconds on the bundled data; a missing cassette exits 1 with the `CassetteMiss`
+message.
+
+## Tests
+
+`tests/test_select.py`: B5.1 to B5.5 on a small synthetic world (one private channel,
+two readers of different roles, items of each type, one absence of each source):
+visibility drop and evidence trimming, each must-see rule, the score terms and the
+threshold, section assignment and caps with must-see lines kept above the cap, ordering
+and determinism. Null cases: a reader who owns nothing, a day with no items, an item
+whose evidence is all in a channel the reader cannot see.
+
+`tests/test_daily_render.py`: B6.1 on hand-made `Selection` values (every line kind,
+the empty day, the hidden footer, plain text for quotes with markdown characters);
+B6.2 and B6.3 with CliRunner on a tmp store and tmp cassettes (the same request-helper
+pattern as `tests/test_extract.py`); `digest demo` on the bundled data once the data
+pull request has recorded the cassettes (the test skips with a reason naming the
+missing cassettes until then).
+
+## Acceptance
+
+- A1 on the bundled data after the data pull request.
+- SPEC 5.6 visibility filter: no reader sees a quote or link from a private channel
+  they are not in (LEADS-1 never appears for ME or supply chain).
+- The README shows the three demo digests and states the deferred M3 scope.
+
+## Open for the user
+
+None. The deadline decisions are recorded in this plan's status line.
