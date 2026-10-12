@@ -1,6 +1,6 @@
 # SPEC: role- and phase-aware daily Slack digest
 
-Status: v0.4.1, 2026-10-11. This is the contract the tests are written against. Change it by
+Status: v0.4.2, 2026-10-12. This is the contract the tests are written against. Change it by
 editing this file first, then the tests, then the code. v0.2 added the belief ledger,
 absence detection, decision landing map and world-first simulator on top of the v0.1
 baseline pipeline. v0.3 adds, after the design review: bot personas for systems of
@@ -11,7 +11,9 @@ profile bootstrap and onboarding, a two-tier delivery policy, and a live replay 
 the stale-belief person-days objective, claim certainty and kind, entity dependency
 edges with decision exposure and routed contradictions, three more absence sources, a
 feedback event log, a reader access filter, coverage on every digest, documents and
-actions as claims, and evaluation gates with baselines.
+actions as claims, and evaluation gates with baselines. v0.4.2 defines the `novelty`
+term, adds a `window_recency` term for windows longer than 36 hours, and makes
+the ranked-lane tie-break deterministic.
 
 ## 1. Problem
 
@@ -281,9 +283,31 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
    impression. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
-   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner. Stretch term
+   owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner.
+   `novelty` measures what is new to the reader, not the age of a message. For an item
+   with claims, it is 1 when the reader has no exposure on a claim's key, or when a
+   claim's value differs from the reader's `exposed` value for that key (any
+   `exposed.how`); a claim the ledger has since superseded does not count. `exposed`
+   holds one value per key, so a claim of kind target or measured, or with `scope` or
+   `conditions`, is not compared with it. An item not in `seen` is also 1 when it has no
+   compared claim or carries a current claim that is not compared. For any item in `seen`, it is also 1 when its
+   `last_updated` is later than its `seen` time. Otherwise it is a floor (default 0.3). Novelty is held at 1 for
+   absences, open blockers, unanswered asks, stale-belief items, open contradictions and
+   items that carry a `pending` claim, because these stay true until someone acts and
+   their rank rises with age (section 5 step 5). Stretch term
    `last_to_know`: rises when every other reader in the fact's audience has been exposed
-   to it and this reader has not. `importance`
+   to it and this reader has not. Stretch term `window_recency`: when the window (from
+   its start, step 9, to `as_of`) is longer than 36 hours, the term falls linearly with
+   elapsed time from 1 for an item whose newest evidence is at `as_of` to a floor
+   (default 0.8) at the window start; evidence older than the window start takes the
+   floor. The term is 1 in a window of 36 hours or less, and 1 for every item whose
+   novelty is held at 1. The ablation reads it on Monday digests (world days are working
+   days, so a Monday window spans a weekend) and on one persona whose delivery the eval
+   run pauses for three working days. An item's newest evidence is the greatest
+   `event_ts` among the current versions of the messages its `evidence` cites, so an edit
+   counts as new evidence. Ranked-lane ties (scores equal to six significant
+   figures) break on newest evidence, newest first, then on `item_id` ascending, so the
+   order is deterministic. `importance`
    includes type, severity, authority, affected-role count and engagement (replies and
    reactions on the source thread). `sender_affinity` is highest for the reader's
    manager and reports, then the same team, then frequent collaborators (counted from
@@ -297,12 +321,14 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    section holds its must-see lines plus up to its cap of ranked ones, and a section with
    nothing above threshold renders empty. Items are diversified at render (maximal marginal relevance) so one
    entity does not fill a section; items that differ in a discriminating field (rev,
-   qty, date) are exempt from the penalty. Each line: fact, specific id and rev, buffer
+   qty, date, status, owner) are exempt from the penalty. Each line: fact, specific id and rev, buffer
    or deadline math, consequence, owner, source link, and a history label when the item
    is not new (ongoing N days, escalated from risk to blocker, resurfaced). The
    consequence clause comes from a template table per role and item type; the fact,
    ids, values and link are identical for every reader. An item the reader was shown
-   while open and that has since resolved appears once more with its closing evidence.
+   while open and that has since resolved appears once more with its closing evidence,
+   whatever its score, outside the section caps and the diversity penalty; the
+   visibility check and mute still apply.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
    with nothing to say sends one line that says so. Rationale on demand.
@@ -382,8 +408,8 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   E before P is told, P's interval for E ends there and a new interval starts for the
   later claim. Beside it: time-to-told per
   role (median, p90, never-told count) over every must-see fact for personas not in
-  `known_by` by E.day, and novelty rate (delivered lines whose discriminating fields
-  differ from what the reader was last shown, over delivered lines). All three compute
+  `known_by` by E.day, and novelty rate (delivered lines whose `novelty` term
+  was 1 at delivery, over delivered lines). All three compute
   from the store and the world file with no model call.
 - Ledger: supersession recall; contradiction precision; abstention precision (on quiet
   days, every delivered contradiction, stale-belief line or absence must match an
@@ -492,7 +518,7 @@ reads it is built.
   audit; scoped claims; the external-channel stale-reference rule; ledger values in the
   extraction prompt; decision exposure; contradiction routing with the confirm action;
   the per-subsystem phase override; history labels; resolved-since lines; per-role
-  consequence templates; the "last to know" term.
+  consequence templates; the "last to know" term; the `window_recency` term.
 - M4. Stretch: the headline metrics; the regression gate; the coverage line; baselines
   beside every rate; abstention precision; pairwise judging; `digest diff`; `why_ranked`
   on an undelivered item.
@@ -525,7 +551,7 @@ reads it is built.
   v0.4 stretch: ledger values in the extraction prompt, decision exposure, contradiction
   routing with the confirm action, the per-subsystem phase
   override, history labels, resolved-since lines, per-role consequence templates, the
-  "last to know" term. Re-surfacing by age and diversity at render stay
+  "last to know" term, the `window_recency` term. Re-surfacing by age and diversity at render stay
   stretch.
 - M4 (day 4): landing map; eval harness and report with the ablation table;
   faithfulness judge; degradation curve; web preview with the profile page (paste
