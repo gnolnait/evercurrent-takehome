@@ -768,3 +768,58 @@ def test_load_manifest_validation_error_notes_file(tmp_path: Path) -> None:
     with pytest.raises(ValidationError) as excinfo:
         load_manifest(path)
     assert str(path) in "".join(excinfo.value.__notes__)
+
+
+def _world_with_valid_ask() -> dict[str, Any]:
+    raw = _world()
+    raw["events"][0]["kind"] = "ask"
+    raw["events"][0]["ask"] = {"of": "UEM", "answered_day": 2}
+    return raw
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        pytest.param("ask-on-non-ask", id="ask-on-non-ask-kind"),
+        pytest.param("ask-missing", id="ask-missing-on-ask-kind"),
+        pytest.param("unknown-persona", id="of-not-a-persona"),
+        pytest.param("bot", id="of-a-bot"),
+        pytest.param("non-member", id="of-not-a-channel-member"),
+        pytest.param("poster", id="of-equals-poster"),
+        pytest.param("answer-before", id="answered-day-before-event"),
+        pytest.param("answer-after", id="answered-day-after-world"),
+    ],
+)
+def test_world_rejects_broken_ask_references(broken: str) -> None:
+    raw = _world_with_valid_ask()
+    event = raw["events"][0]
+    if broken == "ask-on-non-ask":
+        event["kind"] = "fyi"
+    elif broken == "ask-missing":
+        event.pop("ask")
+    elif broken == "unknown-persona":
+        event["ask"]["of"] = "missing"
+    elif broken == "bot":
+        raw["personas"][2]["channels"].append("CMAIN")
+        event["ask"]["of"] = "BPLM"
+    elif broken == "non-member":
+        raw["personas"].append(
+            {"user_id": "UOUT", "name": "Outsider", "role": "PM", "channels": ["CFEED"]}
+        )
+        event["ask"]["of"] = "UOUT"
+    elif broken == "poster":
+        event["ask"]["of"] = event["poster"]
+    elif broken == "answer-before":
+        event["ask"]["answered_day"] = event["day"] - 1
+    elif broken == "answer-after":
+        event["ask"]["answered_day"] = raw["days"] + 1
+
+    with pytest.raises(ValidationError):
+        World.model_validate(raw)
+
+
+def test_world_accepts_valid_ask_reference() -> None:
+    world = World.model_validate(_world_with_valid_ask())
+    ask = world.events[0].ask
+    assert ask is not None
+    assert (ask.of, ask.answered_day) == ("UEM", 2)
