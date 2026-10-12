@@ -11,8 +11,9 @@ exists under the main checkout:
                                      It must contain the full 40-character <sha>.
 
 <root> is the first worktree that `git worktree list --porcelain` prints, the
-same root /review-local writes to. <sha> is HEAD of the hook cwd, or the
-`--head` branch of `gh pr create`. A later commit changes <sha>, so a review
+same root /review-local writes to. <sha> is HEAD of the directory the creation
+runs in, or the `--head` branch of `gh pr create`. That directory is the hook
+cwd, or the target of a top-level `cd <literal path>` before the creation. A later commit changes <sha>, so a review
 goes stale by construction.
 
 Override, for a trivial PR only: an assignment on the same command segment,
@@ -40,11 +41,12 @@ requests (--help, and -h for gh, curl and wget) do not match.
 An API creation names a remote branch, not a local commit, so no review marker
 can match it. Only the override allows it.
 
-Fail closed: a command that also changes directory or moves HEAD (cd, pushd,
-popd, or git checkout/switch/commit/reset/rebase/merge/pull/cherry-pick/am/
-revert/update-ref, or a symbolic-ref write) blocks, because the guard reads HEAD before the
-command runs. An unresolvable HEAD, `--head` branch or main checkout also
-blocks.
+Fail closed: a command blocks when it changes directory in a way the guard
+cannot follow (cd to a variable, ~ or -, pushd, popd, a cd in a subshell or a
+shell string), or when it moves HEAD (git checkout/switch/commit/reset/rebase/
+merge/pull/cherry-pick/am/revert/update-ref, or a symbolic-ref write), because
+the guard reads HEAD before the command runs. An unresolvable HEAD, `--head`
+branch or main checkout also blocks.
 
 Not detected: a user-defined gh alias; an httpie POST that has only key=value
 items; a GraphQL body sent on stdin through a redirection
@@ -77,6 +79,10 @@ PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
 MAY_CREATE = ("gh", "pulls", "PullRequest")
 DIR_CHANGERS = {"cd", "pushd", "popd"}
+# A cd that may run in a subshell, (cd x) or $(cd x), moves nothing for the
+# commands after it, so no cd in such a command can be followed.
+SUBSHELL_CD = re.compile(r"[(`]\s*cd\b")
+MSYS_DRIVE = re.compile(r"^/([A-Za-z])(/|$)")
 HEAD_MOVERS = {"checkout", "switch", "commit", "reset", "rebase", "merge",
                "pull", "cherry-pick", "am", "revert", "update-ref"}
 HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
@@ -213,8 +219,26 @@ def _writes_symbolic_ref(rest):
     return len([a for a in args if not a.startswith("-")]) >= 2
 
 
-def _scan(cmd, found, movers, depth=0):
-    """Collect each PR-creation segment and each dir change or HEAD move."""
+def _cd_target(rest, base):
+    """The directory `cd <literal path>` moves to, or None when it is unreadable."""
+    if len(rest) != 1:
+        return None
+    path = rest[0]
+    if not path or path == "-" or path.startswith("~") or any(c in path for c in "$`*?["):
+        return None
+    if os.name == "nt":
+        # Git Bash spells C:/x as /c/x.
+        path = MSYS_DRIVE.sub(lambda m: m.group(1).upper() + ":/", path)
+    return os.path.normpath(os.path.join(base, path))
+
+
+def _scan(cmd, found, movers, state, depth=0):
+    """Collect each PR-creation segment and each dir change or HEAD move.
+
+    A top-level `cd <literal path>` sets state["cwd"] for the segments after
+    it; each creation records the directory it runs in. Any other change of
+    directory is a mover.
+    """
     if depth > 3:
         raise _Ambiguous("shell strings nest too deep to read")
     for seg in split_segments(cmd):
@@ -223,14 +247,20 @@ def _scan(cmd, found, movers, depth=0):
             continue
         rest = toks[1:]
         if cmdword == "eval":
-            _scan(" ".join(rest), found, movers, depth + 1)
+            _scan(" ".join(rest), found, movers, state, depth + 1)
             continue
         if cmdword in SHELLS:
             for string in _shell_strings(rest):
-                _scan(string, found, movers, depth + 1)
+                _scan(string, found, movers, state, depth + 1)
             continue
         if cmdword in DIR_CHANGERS:
-            movers.append(seg)
+            target = None
+            if cmdword == "cd" and depth == 0 and not state["subshell_cd"]:
+                target = _cd_target(rest, state["cwd"])
+            if target is None:
+                movers.append(seg)
+            else:
+                state["cwd"] = target
             continue
         if cmdword == "git" and (any(t in HEAD_MOVERS for t in rest)
                                  or _writes_symbolic_ref(rest)):
@@ -238,7 +268,7 @@ def _scan(cmd, found, movers, depth=0):
             continue
         kind, through_api = _create_kind(cmdword, rest)
         if kind:
-            found.append((kind, through_api, seg, prefix, cmdword, rest))
+            found.append((kind, through_api, seg, prefix, cmdword, rest, state["cwd"]))
 
 
 def _git(cwd, *args):
@@ -376,8 +406,9 @@ def _ambiguous_message(reason, detail):
 
 def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
     found, movers = [], []
+    state = {"cwd": hook_cwd, "subshell_cd": bool(SUBSHELL_CD.search(cmd))}
     try:
-        _scan(cmd, found, movers)
+        _scan(cmd, found, movers, state)
     except _Ambiguous as exc:
         # Only a command that could create a PR may fail closed here.
         if any(word in cmd for word in MAY_CREATE):
@@ -390,13 +421,13 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
         return True, _ambiguous_message("the command also changes directory or HEAD",
                                         movers[0])
     try:
-        root = _main_checkout(hook_cwd)
-        if not root:
-            raise _Ambiguous("cannot find the main checkout from %s" % hook_cwd)
         entries = []
-        for kind, through_api, seg, prefix, cmdword, rest in found:
+        for kind, through_api, seg, prefix, cmdword, rest, cwd in found:
+            root = _main_checkout(cwd)
+            if not root:
+                raise _Ambiguous("cannot find the main checkout from %s" % cwd)
             # For an API creation this is HEAD, which only the log records.
-            sha = _target_sha(hook_cwd, cmdword, rest)
+            sha = _target_sha(cwd, cmdword, rest)
             reason = _override_reason(prefix)
             if reason == "":
                 return True, (
@@ -411,22 +442,22 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
                 route, problems = _evidence(root, sha)
                 if not route:
                     return True, _missing_message(kind, sha, root, problems)
-            entries.append({
+            entries.append((root, {
                 "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(
                     timespec="seconds"),
                 "head": sha,
                 "route": route,
                 "reason": reason or "",
-                "cwd": hook_cwd,
-            })
+                "cwd": cwd,
+            }))
     except _Ambiguous as exc:
         return True, _ambiguous_message(str(exc), found[0][2])
-    try:
-        for entry in entries:
+    for root, entry in entries:
+        try:
             _log(root, entry)
-    except OSError as exc:
-        return True, (
-            "BLOCKED: could not record this PR creation in %s (%s). The log feeds\n"
-            "the guard's deletion trigger, so an unlogged creation is refused.\n"
-            % (_join(root, ".review", LOG_NAME), exc))
+        except OSError as exc:
+            return True, (
+                "BLOCKED: could not record this PR creation in %s (%s). The log feeds\n"
+                "the guard's deletion trigger, so an unlogged creation is refused.\n"
+                % (_join(root, ".review", LOG_NAME), exc))
     return False, ""
