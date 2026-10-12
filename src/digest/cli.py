@@ -43,6 +43,7 @@ from digest.world.manifest import load_manifest
 from digest.world.schema import World
 
 if TYPE_CHECKING:
+    from slack_sdk import WebClient
     from slack_sdk.webhook import WebhookClient
 
 _DEMO_WORLD = "kestrel"
@@ -50,7 +51,9 @@ _DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")
 _DEMO_ROLES = ("ME", "supply_chain", "EM")  # the roles of _DEMO_READERS, in the same order
 _RULE = "-" * 40
 _WEBHOOK_PREFIX = "https://hooks.slack.com/"
+_BOT_TOKEN_PREFIX = "xoxb-"
 _SLACK_ERROR_CODE = re.compile(r"[a-z_]+")  # a body such as invalid_blocks
+_SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]+")
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -88,6 +91,15 @@ def demo(
 @app.command()
 def post(
     day: int = typer.Option(6, "--day", help="World day of the digests (1 is the first day)."),
+    dm: str | None = typer.Option(
+        None,
+        "--dm",
+        metavar="USER_ID",
+        help=(
+            "Send each digest as a direct message from the bot in SLACK_BOT_TOKEN to this "
+            "Slack user id, not to the webhook."
+        ),
+    ),
 ) -> None:
     """Post the three demo digests to the Slack incoming webhook in SLACK_WEBHOOK_URL.
 
@@ -98,10 +110,16 @@ def post(
     reader order. It stops at the first message that Slack refuses or that fails to send.
     A send failure shows the reader and the exception type only. A refusal shows the
     reader, the status and the response body. It shows the body only when the body is a
-    Slack error code (lower-case letters and underscores), else it says the body is
-    withheld. The command never constructs the settings object, so it reads no API key.
-    No output contains the webhook URL.
+    Slack error code (lower-case letters and underscores) that is not part of the URL,
+    else it says the body is withheld. The command never constructs the settings object,
+    so it reads no API key. No output contains the webhook URL.
+
+    With `--dm USER_ID`, the command does not use the webhook. It sends each digest as a
+    direct message from the app's bot to the Slack user `USER_ID` (see `_post_dm`).
     """
+    if dm is not None:
+        _post_dm(day, dm)
+        return
     url = _webhook_url()
     if url is None:
         _refuse("SLACK_WEBHOOK_URL is not set in the environment or in .env")
@@ -118,17 +136,71 @@ def post(
         except Exception as error:
             _refuse(f"cannot post the digest for {reader}: {type(error).__name__}")
         if response.status_code != 200:
-            # Show only a Slack error code. Another body, such as a proxy page, can echo the URL.
+            # Show only a Slack error code that is not part of the URL. Another body, such
+            # as a proxy page, can echo the URL.
             body = response.body
             shown = (
                 body
-                if _SLACK_ERROR_CODE.fullmatch(body)
+                if _SLACK_ERROR_CODE.fullmatch(body) and body not in url
                 else "body withheld (not a Slack error code)"
             )
             _refuse(
                 f"Slack refused the digest for {reader}: status {response.status_code}, {shown}"
             )
         typer.echo(f"posted the digest for {reader}")
+
+
+def _post_dm(day: int, user_id: str) -> None:
+    """Send the three demo digests as direct messages from the bot to the Slack user `user_id`.
+
+    The function reads SLACK_BOT_TOKEN from the environment, then from `.env`. The user id
+    must match `[UW][A-Z0-9]+` and the token must start with `xoxb-`, else the command exits
+    1 before it builds a digest. It builds the three digests as `digest demo` does and sends
+    nothing until all three are built. It opens the DM once with `conversations.open`. It
+    posts one message per reader with `chat.postMessage`, in reader order. It stops at the
+    first failure. A Slack API error shows the reader and Slack's error code only, and only
+    when the code is lower-case letters and underscores. Any other exception shows the
+    reader and the exception type only. No output contains the token.
+    """
+    if not _SLACK_USER_ID.fullmatch(user_id):
+        _refuse("--dm must be a Slack user id: U or W, then upper-case letters and digits")
+    token = _env_value("SLACK_BOT_TOKEN")
+    if token is None:
+        _refuse("SLACK_BOT_TOKEN is not set in the environment or in .env")
+    if not token.startswith(_BOT_TOKEN_PREFIX):
+        _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
+    loaded, selections = _demo_selections(day)
+    messages = [slack_message(loaded, selection) for selection in selections]
+    client = _slack_web_client(token)
+    # The message of an exception can hold the token, so a refusal shows _slack_failure only.
+    try:
+        channel = client.conversations_open(users=user_id)["channel"]["id"]
+    except Exception as error:
+        _refuse(f"cannot open the DM with {user_id}: {_slack_failure(error)}")
+    for selection, message in zip(selections, messages, strict=True):
+        reader = selection.profile.name
+        try:
+            client.chat_postMessage(channel=channel, text=message["text"], blocks=message["blocks"])
+        except Exception as error:
+            _refuse(f"cannot post the digest for {reader}: {_slack_failure(error)}")
+        typer.echo(f"posted the digest for {reader}")
+
+
+def _slack_failure(error: Exception) -> str:
+    """Slack's error code of a Slack API error, else the exception type.
+
+    The function shows the code only when it is lower-case letters and underscores.
+    """
+    # slack-sdk is in the optional `slack` extra. _slack_web_client refuses before this
+    # point when the extra is not installed.
+    from slack_sdk.errors import SlackApiError
+
+    if not isinstance(error, SlackApiError):
+        return type(error).__name__
+    code = error.response.get("error")
+    if isinstance(code, str) and _SLACK_ERROR_CODE.fullmatch(code):
+        return code
+    return "SlackApiError, error code withheld (not a Slack error code)"
 
 
 @app.command()
@@ -508,7 +580,12 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
 
 
 def _webhook_url() -> str | None:
-    """SLACK_WEBHOOK_URL from the environment, else from a `KEY=VALUE` line in `.env`.
+    """SLACK_WEBHOOK_URL from the environment, else from `.env` (see `_env_value`)."""
+    return _env_value("SLACK_WEBHOOK_URL")
+
+
+def _env_value(key: str) -> str | None:
+    """The variable `key` from the environment, else from a `KEY=VALUE` line in `.env`.
 
     A `.env` that starts with a UTF-16 byte-order mark is read as UTF-16 (the PowerShell
     5.1 default). Any other `.env` is read as UTF-8, with or without a byte-order mark. A
@@ -517,7 +594,7 @@ def _webhook_url() -> str | None:
     unquoted value ends at ` #`, which starts an inline comment. The last line for the
     key wins. An empty value is no value.
     """
-    value = os.environ.get("SLACK_WEBHOOK_URL")
+    value = os.environ.get(key)
     if value:
         return value
     try:
@@ -532,8 +609,8 @@ def _webhook_url() -> str | None:
     except UnicodeDecodeError as error:
         _refuse(f".env: cannot decode as {encoding}: {error.reason}")
     for raw in text.splitlines():
-        key, sep, rest = raw.strip().removeprefix("export ").partition("=")
-        if sep and key.strip() == "SLACK_WEBHOOK_URL":
+        name, sep, rest = raw.strip().removeprefix("export ").partition("=")
+        if sep and name.strip() == key:
             rest = rest.strip()
             if len(rest) >= 2 and rest[0] == rest[-1] and rest[0] in "\"'":
                 rest = rest[1:-1]
@@ -556,6 +633,21 @@ def _webhook_client(url: str) -> WebhookClient:
     quiet = logging.getLogger("digest.slack_webhook")
     quiet.disabled = True
     return WebhookClient(url, logger=quiet)
+
+
+def _slack_web_client(token: str) -> WebClient:
+    """A Slack Web API client that writes no log line, so no log line holds the token."""
+    # slack-sdk is in the optional `slack` extra. A top-level import would stop every
+    # command when the extra is not installed.
+    try:
+        from slack_sdk import WebClient
+    except ImportError:
+        _refuse("digest post needs the slack extra; run uv sync --extra slack")
+    # The client logs requests at DEBUG level and failures at ERROR level. A disabled
+    # logger drops all of them.
+    quiet = logging.getLogger("digest.slack_web")
+    quiet.disabled = True
+    return WebClient(token=token, logger=quiet)
 
 
 def _extract_days(
