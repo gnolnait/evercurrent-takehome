@@ -363,7 +363,7 @@ class TriageOutput(Frozen):
 `digest/extract/prompts.py`
 
 ```python
-EXTRACT_PROMPT_VERSION = "m2.2"  # covers the triage and the extraction prompt; m2.2: new roots count as changed
+EXTRACT_PROMPT_VERSION = "m2.3"  # covers the triage and the extraction prompt; m2.2: new roots count as changed; m2.3: task-link scope
 EXTRACT_SYSTEM: str                # static; rules, output instructions, abstention rule
 TRIAGE_SYSTEM: str
 def extract_request(delta: ThreadDelta, glossary: Glossary, project: ProjectConfig, as_of: date, existing: Sequence[Item], citable: Sequence[Event]) -> LLMRequest
@@ -1337,6 +1337,13 @@ attributes. Claim precision uses the same rule. So that a reader does not take c
 recall for value accuracy, the report adds an advisory row, "claim value agreement
 (non-discriminating)": of the found golden claims on the other attributes, the share
 whose normalized value equals the value of a matching extracted claim, with its n.
+
+Q7 Task-link wording (B1.3), after the secondary review of the re-record. The line "A
+question about a task is not evidence" read as a general rule: on the PO thread the model
+returned no item for an ask (golden ASK-PO). The line now names its scope: "A task link
+needs a progress report: a question about a task, or a status roll-up that lists a task
+as open, is not a task link. A question can still be an ask item." The prompt version
+moves to `m2.3` and the cassettes are re-recorded, again with zero extract failures.
 
 ## Rulings taken while building the units
 

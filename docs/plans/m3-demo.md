@@ -116,7 +116,8 @@ rule through its cited evidence.
 B5.3 Must-see lane, the rules that need no ledger (SPEC 5.6): an open `ask` whose
 `owner` is the reader; an open `blocker` whose entities include an entity the reader
 owns; a `schedule_change` whose entities include a gate the reader owns; a checklist
-absence whose `affected_roles` include the reader's role; an ask absence where the
+absence whose `affected_roles` include the reader's role, or any checklist absence when
+the reader is the EM, who runs the gate; an ask absence where the
 reader is the asker or the person asked. A must-see line is never cut by a section cap.
 
 B5.4 Ranked lane: every other visible open item gets
@@ -147,7 +148,9 @@ its line. The ask absence goes to
 `needs_you` when the reader is the person asked, else to `not_happened`, as every other
 absence does; `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
-section holds its must-see lines plus up to its cap of ranked lines. Resolved items are
+section holds its must-see lines plus up to its cap of ranked lines. A checklist absence reaches only the readers its must-see rule names (the task's owner
+role and the EM); it never enters another reader's ranked lane (user ruling, 2026-10-12).
+Resolved items are
 left out. Items are those with `last_updated` at or before the end of `day` in the
 world's zone; absences are `detect_absences` as of that day.
 
