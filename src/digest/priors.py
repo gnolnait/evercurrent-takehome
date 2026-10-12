@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from pydantic import Field, ValidationError
 
-from digest.models import Frozen
+from digest.models import Frozen, ItemType, Role
 
 DEFAULT_PRIORS_PATH = Path("config/priors.yaml")
 
@@ -24,9 +24,15 @@ class AbsencePriors(Frozen):
     ask_reply_cadence_days: int = Field(ge=1)  # working days before an unanswered ask is silent
 
 
+class DailyPriors(Frozen):
+    role_priors: dict[Role, dict[ItemType, float]] = Field(default_factory=dict)  # 0.5 when absent
+    min_score: float = Field(default=0.15, ge=0)  # a ranked line below this is left out
+
+
 class Priors(Frozen):
     triage: TriagePriors
     absence: AbsencePriors
+    daily: DailyPriors = DailyPriors()
 
 
 def load_priors(path: Path = DEFAULT_PRIORS_PATH) -> Priors:
