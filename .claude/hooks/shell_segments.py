@@ -62,7 +62,27 @@ contexts - legacy `$[ ... ]` and parameter-expansion subscripts (`${a[i<<2]}`) -
 is not modeled, because the `]` delimiter collides with array-subscript `]` and
 tracking it leaks a new fail-open per rule. A `<<` there is still misread as a
 heredoc opener.
+
+The same holds for WHAT a command word names. `command_name` reads `gh.exe`, `GH`
+and a full Windows path as `gh`, and `windows_shell_code` finds the command that
+`powershell`, `pwsh` or `cmd` runs. Each guard calls these, so the three guards
+agree on which program runs.
 """
+
+import re
+
+# Tools whose `command` is shell text that the guards must read.
+SHELL_TOOLS = frozenset(
+    {
+        "Bash",
+        "PowerShell",
+    }
+)
+
+# Windows shells that run their argument text as a command.
+WINDOWS_SHELLS = frozenset({"powershell", "pwsh", "cmd"})
+
+_PATH_SEP = re.compile(r"[/\\]")
 
 _HEREDOC_BARE_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./!:@%+,=~-"
@@ -598,3 +618,43 @@ def split_segments(cmd):
         i += 1
     flush()
     return segs
+
+
+def tool_command(tool, cmd):
+    """Return a shell tool's command in the POSIX form the guards parse.
+
+    PowerShell does not treat a backslash as an escape; it is a path separator
+    there. So a PowerShell command gets forward slashes, and `C:\\x\\gh.exe`
+    stays a path to `gh.exe`.
+    """
+    return cmd.replace("\\", "/") if tool == "PowerShell" else cmd
+
+
+def command_name(word):
+    """Return the program a command word runs: the last path part, in lower
+    case, without `.exe`. Windows runs `GIT.EXE`, `git.exe` and a full path to
+    it as `git`."""
+    name = _PATH_SEP.split(word)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name
+
+
+def windows_shell_code(args):
+    """Return the code texts that `powershell`, `pwsh` or `cmd` runs from its
+    `args`. Return None for an encoded command, which cannot be read.
+
+    After a command flag (`-Command` or a prefix of it, `/c`, `/k`, or Git
+    Bash's `//c`), the remaining arguments are one command. With no command
+    flag, each operand is its own text: `powershell "gh pr merge"` runs it, and
+    an option value such as `Bypass` names no program the guards know.
+    """
+    for i, arg in enumerate(args):
+        low = arg.lower()
+        if low.startswith("-e") and not low.startswith("-ex"):
+            return None  # -EncodedCommand and its prefixes; -ex is -ExecutionPolicy
+        if low in ("/c", "/k", "//c", "//k") or (
+            low.startswith("-c") and ("-command".startswith(low) or low.startswith("-command"))
+        ):
+            return [" ".join(args[i + 1 :])]
+    return [a for a in args if not a.startswith(("-", "/"))]

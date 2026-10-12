@@ -5,6 +5,8 @@ import re
 import shlex
 import sys
 
+from shell_segments import WINDOWS_SHELLS, command_name
+
 # Bash's literal close marker for any delimiter outside these forms — an embedded
 # backslash-escape, an unquoted `$`/backtick that extends the word, a mid-word line
 # continuation — can differ from a naive capture, so the body cannot be located:
@@ -377,19 +379,21 @@ def process_segment(toks, effdir, piped=()):
                 h += 1
             continue
         break
-    hb = os.path.basename(toks[h]) if h < len(toks) else ""
+    hb = command_name(toks[h]) if h < len(toks) else ""
     if env_s_cmd:
         parts = env_s_cmd.split()
         if parts:
-            hb = os.path.basename(parts[0])
+            hb = command_name(parts[0])
     stdin_code = " ".join(segment_bodies(toks)) + " " + " ".join(piped)
     rest = (env_s_cmd.split()[1:] if env_s_cmd else []) + toks[h + 1 :]
-    if hb in ("eval", "sh", "bash", "zsh", "dash", "ksh", ".", "source"):
+    if hb in ("eval", "sh", "bash", "zsh", "dash", "ksh", ".", "source") or hb in WINDOWS_SHELLS:
         # With a short -c flag the shell executes its ARGV string; stdin is
         # plain data then (`cat <<EOF | bash -c 'true'` must not go ambiguous).
+        # Windows runs `GIT COMMIT` as git, so the test ignores case.
         payload = " ".join(rest)
         if not any(re.match(r"-\w*c$", t) for t in rest):
             payload += " " + stdin_code
+        payload = payload.lower()
         if "git" in payload and "commit" in payload:
             print("__AMBIGUOUS__")
         return None
@@ -411,7 +415,7 @@ def process_segment(toks, effdir, piped=()):
         return None
 
     for i, tok in enumerate(toks):
-        if tok != "git":
+        if command_name(tok) != "git":
             continue
         gdir, verb, j = effdir, None, i + 1
         while j < len(toks):
@@ -460,7 +464,7 @@ def process_segment(toks, effdir, piped=()):
 _INTERPRETERS = frozenset(
     ("eval", "sh", "bash", "zsh", "dash", "ksh", ".", "source",
      "python", "python3", "perl", "ruby", "node")
-)
+) | WINDOWS_SHELLS
 
 
 def _ambiguous_bears_git(raw_cmd):
@@ -483,9 +487,9 @@ def _ambiguous_bears_git(raw_cmd):
         toks = tokenize(raw_cmd)
     except ValueError:
         return True  # can't parse -> can't reason -> fail closed
-    if any(t == "git" for t in toks):
+    if any(command_name(t) == "git" for t in toks):
         return True
-    if any(os.path.basename(t) in _INTERPRETERS for t in toks):
+    if any(command_name(t) in _INTERPRETERS for t in toks):
         return True
     return False
 
