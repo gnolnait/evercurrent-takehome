@@ -499,43 +499,64 @@ def test_extract_request_handles_missing_root_and_omits_world_event_ids() -> Non
     assert "Only changed message" in text
 
 
-def test_extract_request_lists_root_once_when_first_revision_includes_it() -> None:
+def request_text(delta_row: ThreadDelta, citable: tuple[Event, ...], kind: str) -> str:
+    request = (
+        triage_request(delta_row, "Mechanical work", citable)
+        if kind == "triage"
+        else extract_request(delta_row, glossary(), project(), date(2026, 10, 13), (), citable)
+    )
+    return request.messages[0].content
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_list_root_first_when_first_revision_includes_reply(kind: str) -> None:
     root = event(text="FIRST-REVISION-ROOT")
-    first_delta = delta(root, root=root)
+    reply = event(REPLY, text="FIRST-REVISION-REPLY")
+
+    text = request_text(delta(root, reply, root=root), (root, reply), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" in root_section.lower()
+    assert "FIRST-REVISION-ROOT" not in root_section
+    assert "FIRST-REVISION-ROOT" in changed_section
+    assert text.count("FIRST-REVISION-ROOT") == 1
+    assert changed_section.index("FIRST-REVISION-ROOT") < changed_section.index(
+        "FIRST-REVISION-REPLY"
+    )
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_list_edited_root_first_when_later_delta_includes_reply(kind: str) -> None:
+    root = event(text="EDITED-ROOT", event_ts=LATER)
+    reply = event(REPLY, text="CHANGED-REPLY", event_ts=LATER)
+    delta_row = delta(root, reply, root=root, last_ts=LATER).model_copy(update={"since_ts": ROOT})
+
+    text = request_text(delta_row, (root, reply), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" in root_section.lower()
+    assert "EDITED-ROOT" not in root_section
+    assert "EDITED-ROOT" in changed_section
+    assert text.count("EDITED-ROOT") == 1
+    assert changed_section.index("EDITED-ROOT") < changed_section.index("CHANGED-REPLY")
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_keep_unchanged_root_as_context_on_later_revision(kind: str) -> None:
+    root = event(text="UNCHANGED-ROOT")
     reply = event(REPLY, text="LATER-REVISION-REPLY")
-    later_delta = delta(reply, root=root)
-    first_requests = (
-        triage_request(first_delta, "Mechanical work", (root,)),
-        extract_request(first_delta, glossary(), project(), date(2026, 10, 13), (), (root,)),
-    )
-    later_requests = (
-        triage_request(later_delta, "Mechanical work", (root, reply)),
-        extract_request(
-            later_delta,
-            glossary(),
-            project(),
-            date(2026, 10, 13),
-            (),
-            (root, reply),
-        ),
-    )
+    delta_row = delta(reply, root=root).model_copy(update={"since_ts": ROOT})
 
-    for request in first_requests:
-        text = request.messages[0].content
-        root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
-        assert heading
-        assert "new in this delta" in root_section.lower()
-        assert "FIRST-REVISION-ROOT" not in root_section
-        assert "FIRST-REVISION-ROOT" in changed_section
-        assert text.count("FIRST-REVISION-ROOT") == 1
+    text = request_text(delta_row, (root, reply), kind)
 
-    for request in later_requests:
-        text = request.messages[0].content
-        root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
-        assert heading
-        assert "FIRST-REVISION-ROOT" in root_section.rsplit("Thread root:", maxsplit=1)[-1]
-        assert "FIRST-REVISION-ROOT" not in changed_section
-        assert text.count("FIRST-REVISION-ROOT") == 1
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" not in root_section.lower()
+    assert "UNCHANGED-ROOT" in root_section.rsplit("Thread root:", maxsplit=1)[-1]
+    assert "UNCHANGED-ROOT" not in changed_section
+    assert text.count("UNCHANGED-ROOT") == 1
 
 
 @pytest.mark.parametrize(
@@ -763,6 +784,7 @@ def test_verify_quote_matches_only_its_cited_message_after_space_normalization(
         ("qty", "32 counted, 8 short", "32"),
         ("qty", "50", "50"),
         ("qty", "about 32 counted", "about 32 counted"),
+        ("gate_date", "2026-10-22", "2026-10-22"),
         ("status", "In Progress", "In Progress"),
     ],
 )
