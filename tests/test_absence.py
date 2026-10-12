@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from digest.absence import ask_absences, checklist_absences
 from digest.cli import app
+from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.models import (
     Claim,
     Event,
@@ -892,7 +893,7 @@ def _write_ready_cli_store(store: Store) -> None:
             stage="extract",
             thread_id=ask_event.thread_id,
             last_ts=ask_event.event_ts,
-            prompt_version="m2.1",
+            prompt_version=EXTRACT_PROMPT_VERSION,
             model="extract",
             run_at=datetime.now(UTC),
             status="ok",
@@ -916,7 +917,7 @@ def _write_ready_cli_store(store: Store) -> None:
             ),
             ask,
         ],
-        prompt_version="m2.1",
+        prompt_version=EXTRACT_PROMPT_VERSION,
         model="extract",
     )
 
@@ -964,7 +965,7 @@ def test_absences_cli_refuses_unready_store(
             store.upsert_events([_event(pending, "U0EM01", 2)])
             deltas = store.thread_deltas(
                 "extract",
-                "m2.1",
+                EXTRACT_PROMPT_VERSION,
                 "extract",
                 datetime(2026, 10, 16, 6, 59, 59, 999999, tzinfo=UTC),
             )
