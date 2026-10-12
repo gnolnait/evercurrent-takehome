@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.6, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.7, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -662,7 +662,7 @@ class Golden(Frozen):
     distractors: tuple[GoldenDistractor, ...]
 
 def derive_golden(world: World, manifest: Manifest, priors: Priors) -> Golden
-def write_golden(golden: Golden, path: Path) -> None     # JSONL, one line per item, absence and distractor, with a "kind" field
+def write_golden(golden: Golden, path: Path) -> None     # JSONL: one meta line, then one line per item, absence and distractor, each with a "kind" field
 def read_golden(path: Path) -> Golden
 ```
 
@@ -763,8 +763,9 @@ check also records nothing about `private`: it is a flag the M3 filter reads.
 B2.9 Fixture content (stubs commit, pinned by unit 2's tests on the bundled world):
 channel `C0LEADS` `kestrel-leads` with `private: true`, members `U0EM01` and `U0PM01`,
 one event `LEADS-1` (day 4, PM to EM, kind `risk`: the pilot customer presses for 600 kg
-and the two agree to keep the PRD at 500 kg until after DVT-1; claim `PN-90001
-spec_param` `payload 500 kg`; `must_see_for` `U0EM01`; `known_by` PM and EM on day 4);
+and the two agree to keep the PRD at 500 kg until after DVT-1; no claim, so the scripted
+claim pair on `PN-90001 spec_param` (S8-PAYLOAD) and its labels are unchanged;
+`must_see_for` `U0EM01`; `known_by` PM and EM on day 4);
 two ask events: `ASK-SAF` (day 3, `C0ENGEF`, EM asks FW when TST-SAF-01 reruns on the
 DVT firmware, `answered_day` None, no task touch (a question is not progress, B1.3),
 `must_see_for` `U0FW01`, `known_by` EM and FW on day 3) and `ASK-PO` (day 4, `C0SUPCH`, EE asks SC whether PO-45002211 was amended to Rev C,
@@ -891,10 +892,11 @@ B3.3 Code checks each rendered thread: every claim entity's id or one of its ali
 appears in the thread text (case-insensitive) unless the event sets `noise.indirection`
 (the knob asks for the value to be implied, and the extractor missing it under noise is
 what the degradation measurement reads), the thread text contains no entry of the
-negative-name list, the message count is at least one, a reply never precedes the
-root, every computed `ts` falls on `date_of(d + day_offset)` in the world's zone, and for
-an ask the last message is by `ask.of` when `answered_day` is set and no
-message is by `ask.of` when it is None. A failed check raises `RenderError` naming the event and the rule; nothing is
+negative-name list, the message count is at least one, the root is by the event's poster with
+`day_offset` 0, a reply never precedes the root, every computed `ts` falls on `date_of(d
++ day_offset)` in the world's zone, and for an ask no message other than the last is by
+`ask.of`; when `answered_day` is set the thread has at least two messages and the last is
+by `ask.of` on that day, and when it is None no message is by `ask.of`. A failed check raises `RenderError` naming the event and the rule; nothing is
 written. The schema enforces posters and reactors through the per-event Literals, so
 an unknown poster cannot occur.
 
