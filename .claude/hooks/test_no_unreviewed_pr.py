@@ -93,6 +93,7 @@ CREATES = [
     pytest.param("echo $(gh pr create)", id="command-substitution"),
     pytest.param('bash -c "gh pr create --fill"', id="bash-c"),
     pytest.param('bash -lc "gh pr create --fill"', id="bash-lc-flag-cluster"),
+    pytest.param('bash -o pipefail -c "gh pr create --fill"', id="bash-o-value-then-c"),
     pytest.param("gh api graphql --input request.json", id="graphql-input-file"),
     pytest.param("gh api graphql -F query=@mutation.graphql", id="graphql-query-file"),
     pytest.param("gh api https://api.github.com/graphql --input request.json",
@@ -136,6 +137,8 @@ NOT_CREATES = [
     pytest.param("gh api -X GET search/code -f q=createPullRequest", id="search-for-mutation"),
     pytest.param("gh pr create --help", id="gh-pr-create-help"),
     pytest.param("gh help pr create", id="gh-help-pr-create"),
+    # After the script operand, -lc and its string are the script's arguments.
+    pytest.param('bash script.sh -lc "gh pr create"', id="script-argument-lc"),
     pytest.param("gh api graphql --input request.json --help", id="gh-api-graphql-help"),
     pytest.param("gh api repos/o/r/issues --input /tmp/graphql-issue.json",
                  id="rest-issue-from-graphql-named-file"),
