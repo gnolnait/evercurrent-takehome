@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.5, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.6, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -114,7 +114,9 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
   the version constants and empty prompt strings.
 - `data/world/avoid-names.yaml`: the complete negative-name list (B3.6).
 - `digest/cli.py`: `extract`, `absences`, `world render`, `world golden` with their
-  option declarations and `_not_yet` bodies; `eval` keeps its stub.
+  option declarations and `_not_yet` bodies; `eval` gains its `--world` and `--out`
+  options and keeps its `_not_yet` body, so unit 4's RED run fails on the body, not on
+  an unknown option.
 - `pyproject.toml`: the layers contract above. No new dependency.
 - `tests/test_world.py`: the bundled-world test that pins seven channels and their
   names gains the eighth, and the corpus test's `8 <= len(events) <= 14` becomes a lower
@@ -451,7 +453,8 @@ and discarded (a mention at a revision is not a claim about the current revision
 revisions enter as `rev` claim values). Any other text returns None. `resolve_person` accepts `<@U...>`, a bare user id, a persona
 alias or a persona name (case-insensitive) and returns the user id, else None.
 Property tests: every entity id and alias resolves to its id; every `id-L` form resolves
-to the id; a string that is neither resolves to None.
+to the id; a string that is not an id, an alias or one of the suffixed forms resolves to
+None.
 
 B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per field:
 - An evidence entry whose `message_ts` is not a key of `citable` drops the item
@@ -505,7 +508,8 @@ Extraction)`, verifies, upserts the items with `prompt_version=EXTRACT_PROMPT_VE
 records a `failed` run, logs `extract_failed` with the thread id and the error class,
 counts `failed`, and continues with the next thread. A `CassetteMiss` is logged as `extract_cassette_miss`
 with the thread id and re-raised unchanged: strict replay is the contract (SPEC section 6). Running twice on an unchanged store writes
-nothing the second time and the report shows `threads == 0`. Because dropped threads
+nothing the second time, and the second report's `threads` equals the first run's
+`failed` (a failed run leaves the thread pending, M1 B1.7), zero when none failed. Because dropped threads
 record an extract run, a change to `TRIAGE_PROMPT_VERSION` alone re-triages nothing:
 bump `EXTRACT_PROMPT_VERSION` with it.
 
@@ -652,6 +656,7 @@ class GoldenDistractor(Frozen):
     thread_ts: str
 
 class Golden(Frozen):
+    ask_reply_cadence_days: int     # the prior the absences were derived with
     items: tuple[GoldenItem, ...]
     absences: tuple[GoldenAbsence, ...]
     distractors: tuple[GoldenDistractor, ...]
@@ -705,8 +710,11 @@ emitted); the comparison is against the ask message, not `last_updated`, so a re
 extractor folded into the item as evidence still counts. Otherwise `days_silent =
 working_days_between(ask date, as_of)`, the ask date being the ask message's `ts` in
 `zone`; when it exceeds `cadence_days` the detector emits an absence item with
-`item_id=f"absence:ask:{ask item_id}"`, `owner` the person asked, `absence.asker` the
-asker, `source="ask"`, `evidence` the ask's evidence, `affected_roles` the ask's. An ask
+`item_id=f"absence:ask:{ask item_id}"`, `thread_id` the ask's, `title` naming the asker
+and the person asked, `summary` the ask's, `entities` the ask's, `owner` the person
+asked, `affected_roles` the ask's, `severity="medium"`, `confidence="high"`, `evidence`
+the ask message's entry, `first_seen` and `last_updated` the ask message's ts, and
+`absence` with `source="ask"`, `asker` the asker and `days_silent`. An ask
 with no such evidence entry is skipped and logged (`absence_ask_without_message`). `detect_absences` reads `store.items(as_of)` and
 `store.events_in_thread` and runs both sources with `as_of` converted to a date in the
 world's zone.
@@ -735,8 +743,9 @@ with `answered_day` None or greater than `d`, `d - a > priors.absence.ask_reply_
 emits an absence citing the ask with `audience=(poster, ask.of)`. Day `d` is converted
 to a date with `World.date_of`.
 
-B2.6 `write_golden` writes one JSON object per line with `"kind"` set to `item`,
-`absence` or `distractor`, items first in `(day, event_id)` order, then absences in
+B2.6 `write_golden` writes one JSON object per line with `"kind"` set to `meta`, `item`,
+`absence` or `distractor`: one `meta` line first (`ask_reply_cadence_days`), then items in
+`(day, event_id)` order, then absences in
 `(day, source, gate or "", task or "", cites)` order (`gate` and `task` are None for
 the ask source), then distractors; `read_golden` reads it back equal.
 Dates are ISO strings.
@@ -915,7 +924,8 @@ human`; unit 3 creates `manifest.json` with those entries and the data pull requ
 adds the rendered ones. `events.jsonl` keeps the nine lines until the data pull request regenerates it.
 
 B3.8 `RenderReport` carries message counts per thread and the character length of every
-message, so the eval can report the realism note (B4.6).
+message for the command's printed summary; the eval computes the same figures from the
+files (B4.6), so the report has one source.
 
 ### Tests
 
@@ -1000,7 +1010,9 @@ headline rows. Exit 1 on a cassette miss in replay mode.
 B4.1 The eval replays the world one day at a time: for `d` in `1..days`, `replay_world`
 to `date_of(d)`, then `run_extract` and `detect_absences` both as of the end of that day
 in the world's zone (the same `as_of`); it collects the absence items per day and the drop counts. It reads `golden.jsonl`
-and `manifest.json` from the world directory.
+and `manifest.json` from the world directory and raises `ValueError` when the golden
+file's `ask_reply_cadence_days` differs from the priors in force, so stale labels never
+score a detector run.
 
 B4.2 Matching: an extracted item belongs to the golden item whose manifest thread equals
 `item.thread_id`. A golden item is thread-matched when its thread has at least one
