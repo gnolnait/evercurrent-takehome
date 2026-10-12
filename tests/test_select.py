@@ -99,7 +99,31 @@ def world() -> World:
             ],
             "entities": [
                 {"id": "PN-OWNED", "type": "part", "description": "Owned part"},
+                {
+                    "id": "SUB-ROLE-OWNED",
+                    "type": "subsystem",
+                    "description": "Subsystem owned by the reader role",
+                    "owner": "ME",
+                },
+                {
+                    "id": "ASM-CHILD",
+                    "type": "assembly",
+                    "description": "Child of the role-owned subsystem",
+                    "subsystem": "SUB-ROLE-OWNED",
+                },
+                {
+                    "id": "PN-GRANDCHILD",
+                    "type": "part",
+                    "description": "Child of the child assembly",
+                    "parent": "ASM-CHILD",
+                },
                 {"id": "PN-OTHER", "type": "part", "description": "Other part"},
+                {
+                    "id": "PN-OTHER-ROLE",
+                    "type": "part",
+                    "description": "Part owned by another role",
+                    "owner": "EE",
+                },
                 {"id": "G-DVT1", "type": "gate", "description": "DVT build"},
                 {"id": "G-OTHER", "type": "gate", "description": "Other gate"},
             ],
@@ -212,7 +236,21 @@ def slack_ts(moment: datetime) -> str:
 def test_profile_for_builds_profile_from_human_persona() -> None:
     profile = profile_for(world(), "UREADER")
 
-    assert profile == reader()
+    assert profile.model_dump(exclude={"owned_entities"}) == reader().model_dump(
+        exclude={"owned_entities"}
+    )
+
+
+def test_profile_for_closes_owned_entities_over_role_and_containment() -> None:
+    profile = profile_for(world(), "UREADER")
+
+    assert profile.owned_entities == (
+        "ASM-CHILD",
+        "G-DVT1",
+        "PN-GRANDCHILD",
+        "PN-OWNED",
+        "SUB-ROLE-OWNED",
+    )
 
 
 @pytest.mark.parametrize(
@@ -338,6 +376,16 @@ def test_each_must_see_rule_is_kept(row: Item, reason_terms: tuple[str, ...]) ->
     assert all(term in line.reason.lower() for term in reason_terms)
 
 
+def test_role_owned_entity_makes_blocker_must_see_when_persona_omits_it() -> None:
+    profile = profile_for(world(), "UREADER")
+    blocker = item("role-owned-blocker", type="blocker", entities=("SUB-ROLE-OWNED",))
+
+    selection = choose([blocker], profile=profile, table=priors(min_score=1.1))
+
+    assert len(selection.lines) == 1
+    assert selection.lines[0].must_see is True
+
+
 @pytest.mark.parametrize(
     ("row", "profile"),
     [
@@ -407,6 +455,20 @@ def test_ranked_score_names_all_terms(
     assert "importance=0.9" in line.reason
     assert "role_prior=0.6" in line.reason
     assert f"personal_relevance={relevance}" in line.reason
+
+
+def test_transitive_child_of_owned_entity_has_full_personal_relevance() -> None:
+    profile = profile_for(world(), "UREADER")
+    row = item("owned-grandchild", severity="high", entities=("PN-GRANDCHILD",))
+
+    line = choose(
+        [row],
+        profile=profile,
+        table=priors(role_priors={"ME": {"decision": 1.0}}),
+    ).lines[0]
+
+    assert line.score == pytest.approx(0.9)
+    assert "personal_relevance=1.0" in line.reason
 
 
 @pytest.mark.parametrize(

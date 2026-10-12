@@ -95,10 +95,8 @@ def test_load_priors_validation_error_notes_file(tmp_path: Path) -> None:
     assert str(path) in "".join(excinfo.value.__notes__)
 
 
-@pytest.mark.parametrize("weight", [-0.1, 1.1], ids=["below-zero", "above-one"])
-def test_load_priors_rejects_role_weight_outside_unit_interval(
-    tmp_path: Path, weight: float
-) -> None:
+@pytest.mark.parametrize("weight", [0, -0.1, 1.1], ids=["exactly-zero", "below-zero", "above-one"])
+def test_load_priors_rejects_role_weight_outside_bounds(tmp_path: Path, weight: float) -> None:
     path = tmp_path / "priors.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -114,3 +112,21 @@ def test_load_priors_rejects_role_weight_outside_unit_interval(
     with pytest.raises(ValidationError) as excinfo:
         load_priors(path)
     assert str(path) in "".join(excinfo.value.__notes__)
+
+
+def test_load_priors_accepts_role_weight_of_one(tmp_path: Path) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "triage": {"miss_cost_ratio": 10},
+                "absence": {"ask_reply_cadence_days": 2},
+                "daily": {"role_priors": {"ME": {"decision": 1}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    priors = load_priors(path)
+
+    assert priors.daily.role_priors["ME"]["decision"] == 1
