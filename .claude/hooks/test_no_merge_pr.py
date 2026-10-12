@@ -193,9 +193,21 @@ BLOCK = [
     pytest.param('powershell "gh pr merge 5"', id="powershell-positional"),
     pytest.param('cmd //c "gh pr merge 5"', id="cmd-double-slash-c"),
     pytest.param("cmd.exe /c gh pr merge 5", id="cmd-c-unquoted"),
+    pytest.param("powershell -Command gh pr merge 5", id="powershell-command-unquoted"),
+    pytest.param("pwsh -c gh pr merge 5", id="pwsh-c-unquoted"),
+    # PowerShell runs bare operands as one command, also after an option value.
+    pytest.param("powershell gh pr merge 5", id="powershell-bare-operands"),
+    pytest.param(
+        "powershell -ExecutionPolicy Bypass gh pr merge 5", id="powershell-option-value-then-operands"
+    ),
+    # A backslash in the inner command is a path separator, not an escape.
+    pytest.param('powershell -Command "C:\\x\\gh.exe pr merge 1"', id="powershell-backslash-path"),
+    pytest.param('cmd /c "C:\\Git\\gh.exe pr merge 1"', id="cmd-backslash-path"),
     # An encoded command cannot be read, so it is refused.
     pytest.param("powershell -EncodedCommand ZwBoAA==", id="powershell-encoded"),
     pytest.param("pwsh -enc ZwBoAA==", id="pwsh-encoded-short"),
+    pytest.param("powershell /enc ZwBoAA==", id="powershell-encoded-slash"),
+    pytest.param("pwsh --EncodedCommand ZwBoAA==", id="pwsh-encoded-double-dash"),
 ]
 
 # --- Bash commands that MUST be allowed (no false positive) -------------------
@@ -252,6 +264,7 @@ ALLOW = [
         id="powershell-unrelated-command",
     ),
     pytest.param("powershell -ExecutionPolicy Bypass -File build.ps1", id="powershell-file"),
+    pytest.param("powershell -ep Bypass -File build.ps1", id="powershell-ep-is-execution-policy"),
     pytest.param('cmd //c "dir"', id="cmd-unrelated"),
 ]
 

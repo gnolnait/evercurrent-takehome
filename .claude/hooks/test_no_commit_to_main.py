@@ -129,6 +129,7 @@ def test_allows_foreign_commit_by_full_git_path(repos):
         pytest.param('powershell -Command "git commit -m update"', id="powershell"),
         pytest.param("pwsh -c 'git commit -m update'", id="pwsh"),
         pytest.param('cmd //c "git commit -m update"', id="cmd"),
+        pytest.param('powershell -Command "GIT COMMIT -m update"', id="powershell-upper-case"),
     ],
 )
 def test_blocks_windows_shell_wrapped_commit_on_main(cmd, repos):

@@ -172,6 +172,13 @@ def test_blocks_windows_shell_wrapped_bypass():
     assert _verdict("pwsh -c 'git commit --no-verify -m x'") == "BLOCK"
     assert _verdict('cmd //c "git commit -n -m x"') == "BLOCK"
     assert _verdict("cmd.exe /c git commit --no-verify -m x") == "BLOCK"
+    assert _verdict("powershell -Command git commit --no-verify -m x") == "BLOCK"
+    assert _verdict("powershell git commit --no-verify -m x") == "BLOCK"
+
+
+def test_blocks_windows_shell_wrapped_bypass_by_backslash_path():
+    """A backslash in the inner command is a path separator, not an escape."""
+    assert _verdict('cmd /c "C:\\Git\\cmd\\git.exe commit --no-verify -m x"') == "BLOCK"
 
 
 def test_blocks_encoded_powershell_command():
