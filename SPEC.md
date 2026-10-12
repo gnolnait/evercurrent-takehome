@@ -48,7 +48,8 @@ Four consequences:
 The objective behind all four: minimise stale-belief person-days, the working days a
 reader holds a value the ledger has superseded, summed over readers and facts, under a
 length budget per digest. Every ranking term earns its place by moving that sum, or must-see recall for the facts
-the sum does not count (asks, blockers, absences), in the ablation; section 7 measures
+the sum does not count (asks, blockers, absences), in the ablation; until the sum is
+built, nDCG at 5 may also keep a term (section 7). Section 7 measures
 both. Cost follows the same shape: extraction runs once per thread
 revision and personalisation is code, so cost grows with thread revisions, not with
 messages times readers.
@@ -125,11 +126,11 @@ Item: one extracted unit of information.
 `{item_id, type, title, summary, entities[], owner, due, affected_roles[], phase_tags[],
 severity, confidence, evidence[{channel_id, message_ts, quote}], claims[], first_seen,
 last_updated, status, resolved_by, links[{kind, item_id}], tasks[{task, effect,
-message_ts}], absence}`
+channel_id, message_ts}], absence}`
 - type: decision | blocker | risk | schedule_change | spec_change | bom_change | ask | fyi | absence
 - entities: part numbers with rev, ECO/ECR/DEV ids, gates, tests, vendors, POs, people
-- evidence entries name their channel, because a Slack `ts` is unique only within a
-  channel.
+- evidence entries and task links name their channel, because a Slack `ts` is unique
+  only within a channel. Every lookup by message uses `(channel_id, message_ts)`.
 - `owner` is a user id. For an ask, it is the person asked; the asker is the author of
   the first evidence message that the owner did not write.
 - `tasks` links the item to checklist tasks. `effect` is evidence (progress on the task)
@@ -193,8 +194,9 @@ priority, entities[]}]}]}`
 - priority: critical | high | normal | low (default normal)
 - `entities` on a checklist task names the entities the task touches; decision exposure
   reads it, and the world script sets it where it sets `tasks` on events
-- A checklist task's `owner` is a role. Its absence goes to every reader with that role,
-  and any of them may mark it done.
+- A checklist task's `owner` is a role. Its absence goes to every reader with that role.
+  `done` on a checklist absence records exposure for the clicker only; the task closes
+  when a message carries a `done` link to it.
 
 UserProfile: `{user_id, role, team, manager, projects[], owned_entities[],
 watch_prompts[], interest{entity_or_topic: weight}, exposed{key: (value, ts, how)},
@@ -203,8 +205,9 @@ delivery{time, weekdays[], quiet_hours, paused},
 style{description, length, section_order[], sections_off[], language},
 sources{field: configured | inferred | confirmed | pasted | imported}}`
 - role: ME | EE | FW | supply_chain | EM | PM
-- The reader's owned set is every entity whose `owner` is the reader, every entity in
-  `owned_entities`, and every entity whose `subsystem` or `parent` is in the set. A rule
+- An entity's `owner` is a user id or a role. The reader's owned set is every entity
+  whose `owner` is the reader or the reader's role, every entity in `owned_entities`,
+  and every entity whose `subsystem` or `parent` is in the set. A rule
   that says "owned" reads this set; a rule on a checklist task reads the task's role.
 - exposed.how: authored | replied | reacted | shown_in_digest | linked (the reader posted, replied to or reacted on a message carrying a file or link
   that names a value, so they hold it)
@@ -278,11 +281,13 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    the evidence of one item never mixes audiences.
 4. Project state: gates and checklists from `config/project.yaml`; the project phase is the configured window for the date, and a human may override it
    per subsystem (`subsystem_phases`).
-5. Absence, computed over all open items at `as_of`, not over a digest window. (a) For
+5. Absence, computed at `as_of` over the whole store, not over a digest window. (a) For
    each open checklist task on a gate inside its buffer, find the last evidence item; if
    the age exceeds the task's `expected_cadence_days` (weekend-aware), emit an absence
-   item citing that last evidence. A task is open until an item carries a `done` link to
-   it; its last evidence is the newest `tasks` link to it. (b) An ask
+   item citing that last evidence. Task links are read from every item, whatever its
+   status. A task is open until an item carries a `done` link to it. Its last evidence is
+   the newest `tasks` link to it; with no link, it is the earliest claim on the task's
+   gate (the gate anchor); with neither, nothing is emitted. (b) An open ask
    addressed to a person with no reply from them after a cadence is an absence for the
    asker and the owner, citing the ask. A reply is any message by the person asked, not
    deleted, later in the same thread than the ask message; the cadence is
@@ -308,19 +313,23 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    had already superseded at its `asserted_ts`, for the actor and the key's owner, with
    what the actor had last been told). Before either lane, a reader sees an item only through evidence from a channel they
    can see (public, or private with the reader a member); the check fails closed, and an
-   access drop is recorded per impression so "why not shown" can name it. A stale-belief
-   line, a contradiction line and every ledger value shown to a reader use the newest
-   claim on the key whose evidence the reader can see; the reader is not told of a change
-   when they can see no evidence for it. Must-see
+   access drop is recorded per impression so "why not shown" can name it. Each reader
+   has a ledger view: the ledger rules of section 4 (authority, supersession, pending,
+   coexistence) applied only to claims whose evidence the reader can see. Stale-belief
+   detection, contradiction lines and every ledger value shown to the reader read that
+   view, and a contradiction line needs visible evidence for each side. The reader is
+   not told of a change when they can see no evidence for it. Must-see
    lines are never cut by a section cap; the caps bound the ranked lane. Ranked lane:
    `score = importance * role_phase_prior * personal_relevance * decision_exposure *
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
-   impression. Every term is 1 when its input is missing and stays within a band above
-   zero, set per term in `config/priors.yaml`, so no single input takes a score to zero.
-   Must-see rules run over all open items. A ranked-lane candidate is an item whose
-   newest evidence falls in the digest window (step 9), or an open blocker, unanswered
-   ask, absence, stale belief, open contradiction or item with a `pending` claim,
-   whatever the age of its evidence. `decision_exposure` rises when the reader owns a checklist task inside
+   impression. Every term is 1 when the project or the profile does not supply its input
+   (no `depends_on` edges, no watch prompts) and stays within a band above zero, set per
+   term in `config/priors.yaml`, so no single input takes a score to zero. Must-see rules
+   run over all open items. A ranked-lane candidate is an item whose newest evidence
+   falls in the digest window (step 9), or, whatever the age of its evidence, an open
+   blocker, unanswered ask, absence, stale belief, open contradiction, item with a
+   `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
+   been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
    owned entity and a constant below 1 otherwise (one hop, no path search); a claim still `pending` confirmation raises urgency for its owner.
    `novelty` measures what is new to the reader, not the age of a message. For an item
@@ -352,7 +361,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    manager and reports, then the same team, then frequent collaborators (counted from
    shared threads in a trailing window), else neutral. An open blocker or unanswered
    ask re-surfaces when its age crosses a threshold. Stale-belief items are keys where
-   the user's exposed value differs from the ledger value, weighted by the prior. Learned interest is clamped so repeated feedback never takes a key to zero; the two
+   the user's exposed value differs from the value in the reader's ledger view, weighted
+   by the prior. Learned interest is clamped so repeated feedback never takes a key to zero; the two
    hard filters are mute and the visibility check, and both win over every term. Every term is a row in the ablation
    table (section 7) or it is removed.
 7. Render: sections capped (needs_you 5, stale_beliefs 3, not_happened 3, decisions 5,
@@ -488,9 +498,9 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   configuration without its key.
 - Ranking ablation: each score term switched off in turn, with stale-belief person-days (M4 stretch), must-see recall and nDCG per persona
   reported. Off means the term is set to 1 with everything else fixed. A term stays when
-  it moves stale-belief person-days, must-see recall or mean nDCG at 5 across personas by
-  at least `ablation.min_effect` in `config/priors.yaml` (default 0.01); until
-  person-days is built, must-see recall and nDCG decide (D21). Otherwise it is removed.
+  it moves stale-belief person-days or must-see recall by at least `ablation.min_effect`
+  in `config/priors.yaml` (default 0.01, mean across personas); until person-days is
+  built, must-see recall or mean nDCG at 5 decide (D21). Otherwise it is removed.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction

@@ -78,6 +78,10 @@ values for the entities the thread names; verification also covers `owner`, `due
 claim values against the cited text, with unit-aware numbers and user ids for people; the
 digest renders quoted and model text as plain text and links only constructed permalinks.
 
+Amended 2026-10-12 (SPEC v0.4.3): evidence entries and task links carry `channel_id`
+beside `message_ts`, because a Slack `ts` is unique only within a channel and merged
+items cite more than one channel.
+
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction
 
 Decision. Must-see is rule-based and never ranked away: asks addressed to the user,
@@ -107,11 +111,11 @@ items that matter more as they age.
 
 Amended 2026-10-12 (SPEC v0.4.3): every score term is 1 when its input is missing and
 stays in a band above zero. "Off" in the ablation means the term is 1; a term stays when
-it moves person-days, must-see recall or nDCG at 5 by a configured minimum, so the rule
-can keep a term before person-days exists (D21). Items merge only within one audience,
-and a ledger value is shown only through evidence the reader can see. Open blockers,
-asks, absences, stale beliefs, contradictions and pending claims stay candidates when
-their evidence is older than the window.
+it moves person-days or must-see recall by a configured minimum, and before person-days
+exists nDCG at 5 may also keep it (D21). Items merge only within one audience, and each
+reader reads a ledger view built by the same rules from the claims they can see. Open
+blockers, unanswered asks, absences, stale beliefs, contradictions, pending claims and
+undelivered closing lines stay candidates when their evidence is older than the window.
 
 ## D7. Slack integration: Bolt sync, Socket Mode, internal app, scheduler in-process
 
