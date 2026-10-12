@@ -194,6 +194,7 @@ TaskEffect = Literal["evidence", "done"]
 
 
 class Evidence(Frozen):
+    channel_id: str  # the cited message's channel; a ts is unique only within a channel (SPEC 4, v0.4.3)
     message_ts: str  # TS_PATTERN
     quote: str  # verbatim span of the cited message
     permalink: str  # the stored event's permalink (constructed, never model-written)
@@ -203,6 +204,7 @@ class Claim(Frozen):
     entity: str  # entity id after normalization
     attribute: Attribute
     value: str
+    channel_id: str  # the cited message's channel; a ts is unique only within a channel (SPEC 4, v0.4.3)
     message_ts: (
         str  # the evidence message that states the value; its ts is the claim's asserted time
     )
@@ -212,6 +214,7 @@ class Claim(Frozen):
 class TaskLink(Frozen):
     task: str  # ChecklistTask.id
     effect: TaskEffect
+    channel_id: str  # the cited message's channel; a ts is unique only within a channel (SPEC 4, v0.4.3)
     message_ts: str  # the evidence message that shows the progress; its ts is the evidence time
 
 
@@ -458,9 +461,9 @@ CREATE TABLE IF NOT EXISTS items (
   affected_roles TEXT NOT NULL,   -- JSON array
   severity       TEXT NOT NULL,
   confidence     TEXT NOT NULL,
-  evidence       TEXT NOT NULL,   -- JSON array of {message_ts, quote, permalink}
-  claims         TEXT NOT NULL,   -- JSON array of {entity, attribute, value, message_ts, authority}
-  tasks          TEXT NOT NULL,   -- JSON array of {task, effect, message_ts}
+  evidence       TEXT NOT NULL,   -- JSON array of {channel_id, message_ts, quote, permalink}
+  claims         TEXT NOT NULL,   -- JSON array of {entity, attribute, value, channel_id, message_ts, authority}
+  tasks          TEXT NOT NULL,   -- JSON array of {task, effect, channel_id, message_ts}
   status         TEXT NOT NULL,
   resolved_by    TEXT,
   first_seen     TEXT NOT NULL,
