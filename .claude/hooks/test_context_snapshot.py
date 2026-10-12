@@ -1,8 +1,7 @@
 """context_snapshot: PreCompact writes the state file, SessionStart prints it.
 
-Every test runs the script with PATH set to git's directory only, so `gh` is
-not found and no test touches the network. A fake `gh` goes first on PATH
-where a test needs the PR section.
+Every test runs with a PATH that holds git but no `gh`, so no test touches
+the network. A fake `gh` goes first on PATH where a test needs the PR section.
 
 Run: cd .claude/hooks && python -m pytest -q test_context_snapshot.py
 """
@@ -40,13 +39,26 @@ def repo(tmp_path):
     return r
 
 
-def _env(extra_path=None):
-    env = os.environ.copy()
-    git_dir = os.path.dirname(shutil.which("git") or "git")
-    env["PATH"] = os.pathsep.join(([str(extra_path)] if extra_path else []) + [git_dir])
-    env.pop("CLAUDE_PROJECT_DIR", None)
-    env["CLAUDE_HOOK_PYTHON"] = PYTHON  # the fence cannot find python on this PATH
-    return env
+@pytest.fixture(scope="session")
+def tool_dir(tmp_path_factory):
+    """A PATH directory with git and the fence's tools, but no gh."""
+    if IS_WINDOWS:
+        # gh installs to its own directory, and the bash launcher from
+        # hooktest_support supplies the MSYS tools that the fence uses.
+        return os.path.dirname(shutil.which("git"))
+    # On POSIX, git and gh can share /usr/bin. The fence needs bash (for its
+    # `env bash` shebang) and dirname.
+    d = tmp_path_factory.mktemp("tools")
+    for name in ("git", "bash", "dirname"):
+        os.symlink(shutil.which(name), d / name)
+    return str(d)
+
+
+@pytest.fixture(autouse=True)
+def no_gh_env(tool_dir, monkeypatch):
+    monkeypatch.setenv("PATH", tool_dir)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOOK_PYTHON", PYTHON)  # python is not on this PATH
 
 
 def _run(mode, cwd, payload=None, env=None, argv=None):
@@ -57,7 +69,7 @@ def _run(mode, cwd, payload=None, env=None, argv=None):
         text=True,
         encoding="utf-8",
         cwd=cwd,
-        env=env or _env(),
+        env=env or os.environ.copy(),
     )
 
 
@@ -155,7 +167,8 @@ def test_snapshot_survives_missing_gh(repo):
 
 def test_snapshot_lists_open_prs_with_checks(repo, tmp_path):
     """Setup: a fake gh. Action: snapshot. Assert: the PR line and check counts."""
-    p = _run("snapshot", repo, env=_env(extra_path=_fake_gh(tmp_path)))
+    path = os.pathsep.join([str(_fake_gh(tmp_path)), os.environ["PATH"]])
+    p = _run("snapshot", repo, env=dict(os.environ, PATH=path))
     assert p.returncode == 0
     text = _state(repo).read_text(encoding="utf-8")
     assert "- #7 Add widget [widget] draft checks: fail 1, pass 2" in text
