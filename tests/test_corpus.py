@@ -30,6 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = "https://kestrel-test.slack.com"
 EMPTY_AVOID = AvoidNames(names=(), identifiers=(), phrases=())
 runner = CliRunner()
+ANSWERED_ASK_COUNT = re.compile(
+    r"\b(?:(?:one|1)\b.{0,20}\b(?:root|plus)\b|root\b.{0,20}\b(?:one|1)\b)"
+    r".{0,40}\b(?:the|one|1)\s+repl(?:y|ies)\b",
+    re.IGNORECASE,
+)
 
 
 def world_data() -> dict[str, Any]:
@@ -368,12 +373,7 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
         ask_prompt,
         re.IGNORECASE,
     )
-    assert re.search(
-        r"\b(?:one|1)\b.{0,20}\broot\b.{0,20}\brepl|"
-        r"\broot\b.{0,20}\b(?:one|1)\b.{0,20}\brepl",
-        ask_prompt,
-        re.IGNORECASE,
-    )
+    assert ANSWERED_ASK_COUNT.search(ask_prompt)
     system = llm.requests[0].system
     folded = system.casefold()
     assert all(
@@ -392,6 +392,17 @@ def test_render_request_carries_context_rules_and_no_internal_ids(tmp_path: Path
         ("output", "json", "schema"),
     ):
         assert any(concept in folded for concept in concepts)
+
+
+@pytest.mark.parametrize(
+    ("text", "matches"),
+    [
+        ("Use 1 plus the reply.", True),
+        ("Use 1 root message and 3 replies.", False),
+    ],
+)
+def test_answered_ask_count_requires_exactly_one_reply(text: str, matches: bool) -> None:
+    assert bool(ANSWERED_ASK_COUNT.search(text)) is matches
 
 
 @pytest.mark.parametrize(
@@ -618,13 +629,20 @@ def test_render_rejects_invalid_thread_without_writes(tmp_path: Path, case: str,
 def test_indirection_allows_a_missing_claim_entity_and_empty_message_lists(tmp_path: Path) -> None:
     data = world_data()
     data["events"] = [data["events"][1]]
-    data["events"][0]["noise"]["indirection"] = True
-    world = World.model_validate(data)
+    direct_world = World.model_validate(data)
+    indirect_data = deepcopy(data)
+    indirect_data["events"][0]["noise"]["indirection"] = True
+    world = World.model_validate(indirect_data)
+    direct_prompt = (
+        request_for(direct_world, direct_world.events[0], EMPTY_AVOID).messages[0].content
+    )
+    indirect_prompt = request_for(world, world.events[0], EMPTY_AVOID).messages[0].content
+
+    assert direct_prompt != indirect_prompt
+    assert "indirection" in indirect_prompt.casefold()
     messages = rendered_messages(world.events[0])
     messages[0]["text"] = "The released configuration is now Rev B."
     messages[0]["files"] = []
-    prompt = request_for(world, world.events[0], EMPTY_AVOID).messages[0].content
-    assert "indirection" in prompt.casefold()
     manifest = Manifest(threads={})
     anchor = tmp_path / "anchor.jsonl"
     anchor.write_text("", encoding="utf-8")
@@ -787,8 +805,19 @@ def test_bundled_anchor_and_manifest_pin_the_nine_human_lines() -> None:
     anchor_lines = anchor.read_bytes().splitlines()
     event_lines = events.read_bytes().splitlines()
     assert len(anchor_lines) >= 9
-    assert all(line in event_lines for line in anchor_lines[:9])
-    lines = list(read_events(anchor, "https://kestrel-k2.slack.com"))[:9]
+    m1_fractions = {f"{value:06d}" for value in range(100, 1000, 100)}
+    m1_lines = [
+        line
+        for line in anchor_lines
+        if json.loads(line)["event_ts"].rpartition(".")[2] in m1_fractions
+    ]
+    assert len(m1_lines) == 9
+    assert all(line in event_lines for line in m1_lines)
+    lines = [
+        event
+        for event in read_events(anchor, "https://kestrel-k2.slack.com")
+        if event.event_ts.rpartition(".")[2] in m1_fractions
+    ]
     manifest = load_manifest(manifest_path)
     expected = {
         "N1-TORQUE": ("C0EXTCM", "1791898872.000100"),
