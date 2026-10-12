@@ -397,3 +397,28 @@ def test_world_golden_cli_missing_event_exits_one_with_event_name(
 
     assert result.exit_code == 1
     assert "SCHED-1" in result.output
+
+
+def test_derive_golden_skips_checklist_absences_after_done_touch() -> None:
+    raw = _world_data()
+    raw["project"]["gates"][0]["checklist"].append(
+        {
+            "id": "G1.verify",
+            "task": "Verify the build",
+            "owner": "ME",
+            "expected_cadence_days": 1,
+        }
+    )
+    raw["events"][1]["tasks"] = [
+        {"task": "G1.review", "effect": "done"},
+        {"task": "G1.verify", "effect": "evidence"},
+    ]
+    world = World.model_validate(raw)
+
+    golden = derive_golden(world, _manifest(world), _priors())
+
+    checklist = [absence for absence in golden.absences if absence.source == "checklist"]
+    assert not any(absence.task == "G1.review" and absence.day > 2 for absence in checklist)
+    assert [
+        (absence.day, absence.cites) for absence in checklist if absence.task == "G1.verify"
+    ] == [(4, "TOUCH"), (5, "TOUCH")]
