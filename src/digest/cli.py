@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import tempfile
@@ -11,7 +12,7 @@ from datetime import UTC, date, datetime, time
 from itertools import combinations
 from pathlib import Path
 from statistics import median
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 from zoneinfo import ZoneInfo
 
 import typer
@@ -23,6 +24,8 @@ from digest.absence import detect_absences
 from digest.corpus.avoid import load_avoid_names
 from digest.corpus.render import render_world
 from digest.daily.render import build_digest, render_digest, select_digest
+from digest.daily.select import Selection
+from digest.daily.slack import slack_message
 from digest.eval.extraction import run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
@@ -37,6 +40,9 @@ from digest.world.golden import derive_golden, write_golden
 from digest.world.load import load_world
 from digest.world.manifest import load_manifest
 from digest.world.schema import World
+
+if TYPE_CHECKING:
+    from slack_sdk.webhook import WebhookClient
 
 _DEMO_WORLD = "kestrel"
 _DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")
@@ -69,59 +75,44 @@ def demo(
     object, so it reads no API key and no `.env` file. It writes nothing outside the
     temporary directory.
     """
-    world_dir = Path("data") / "world" / _DEMO_WORLD
-    source = world_dir / "world.yaml"
-    try:
-        loaded = load_world(source)
-    except OSError as error:
-        _refuse(f"{source}: {error.strerror or error}")
-    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
-        _refuse(f"{source}: {error}")
-    if not 1 <= day <= loaded.days:
-        _refuse(f"--day must be from 1 to {loaded.days}, got {day}")
-    try:
-        priors = load_priors(DEFAULT_PRIORS_PATH)
-    except OSError as error:
-        _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
-    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
-        _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
-    # Settings would load API keys from the environment and `.env`. The demo reads only
-    # DIGEST_CASSETTES, and the client has no backend, so the mode is always replay.
-    cassettes = Path(
-        os.environ.get("DIGEST_CASSETTES") or Settings.model_fields["cassettes"].default
-    )
-    if not cassettes.is_dir() or not any(cassettes.glob("*.json")):
-        _refuse(f"cassette directory {cassettes} does not exist or holds no cassette file")
-    llm = LLM(None, Cassettes(cassettes), "replay")
-    today = loaded.date_of(day)
-    zone = ZoneInfo(loaded.timezone)
-    digests: list[str] = []
-    shown: list[set[str]] = []
-    # Windows can hold a handle on the store file after it closes. A cleanup error must not
-    # replace the output or the exit code.
-    with (
-        tempfile.TemporaryDirectory(prefix="digest-demo-", ignore_cleanup_errors=True) as tmp,
-        Store.open(Path(tmp) / f"{_DEMO_WORLD}.sqlite") as store,
-    ):
-        try:
-            total = _extract_days(
-                store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir
-            )
-            if total.failed:
-                noun = "thread" if total.failed == 1 else "threads"
-                _refuse(
-                    f"extract reported {total.failed} failed {noun} up to day {day}; "
-                    "the demo builds no digest from a partial extraction"
-                )
-            for user_id in _DEMO_READERS:
-                selection = select_digest(store, loaded, priors, user_id, today)
-                digests.append(render_digest(loaded, selection))
-                shown.append({line.item.item_id for line in selection.lines})
-        # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
-        except (CassetteMiss, ValueError, OSError) as error:
-            _refuse(str(error))
+    loaded, selections = _demo_selections(day)
+    digests = [render_digest(loaded, selection) for selection in selections]
+    shown = [{line.item.item_id for line in selection.lines} for selection in selections]
     typer.echo(f"\n\n{_RULE}\n\n".join(digests))
     typer.echo(f"\n{_overlap_line(*shown)}")
+
+
+@app.command()
+def post(
+    day: int = typer.Option(6, "--day", help="World day of the digests (1 is the first day)."),
+) -> None:
+    """Post the three demo digests to the Slack incoming webhook in SLACK_WEBHOOK_URL.
+
+    The command reads SLACK_WEBHOOK_URL from the environment, then from `.env`. It builds
+    the three digests as `digest demo` does and posts nothing until all three are built.
+    It posts one message per reader, in reader order. It stops at the first message that
+    Slack refuses. The command never constructs the settings object, so it reads no API
+    key. No output contains the webhook URL.
+    """
+    url = _webhook_url()
+    if url is None:
+        _refuse("SLACK_WEBHOOK_URL is not set in the environment or in .env")
+    loaded, selections = _demo_selections(day)
+    messages = [slack_message(loaded, selection) for selection in selections]
+    client = _webhook_client(url)
+    for selection, message in zip(selections, messages, strict=True):
+        reader = selection.profile.name
+        try:
+            response = client.send(text=message["text"], blocks=message["blocks"])
+        # OSError: urllib.error.URLError and socket errors. ValueError: a malformed URL.
+        except (OSError, ValueError) as error:
+            _refuse(f"cannot post the digest for {reader}: {error}".replace(url, "<webhook>"))
+        if response.status_code != 200:
+            _refuse(
+                f"Slack refused the digest for {reader}: status {response.status_code}, "
+                f"{response.body}".replace(url, "<webhook>")
+            )
+        typer.echo(f"posted the digest for {reader}")
 
 
 @app.command()
@@ -437,6 +428,106 @@ def world_golden(
         f"{path}: {len(golden.items)} items, {len(golden.absences)} absences, "
         f"{len(golden.distractors)} distractors"
     )
+
+
+def _demo_selections(day: int) -> tuple[World, list[Selection]]:
+    """Build the selections of the demo readers for a world day of the bundled world.
+
+    The function replays the bundled world into a temporary store one day at a time and
+    runs the extract stage at the end of each day from the recorded cassettes. It returns
+    the world and one selection for each reader of `_DEMO_READERS`, in the same order. A
+    cassette directory that does not exist or holds no cassette file stops the command
+    before any replay. A failed thread in any extract run stops the command before it
+    selects a digest. The function never constructs the settings object.
+    """
+    world_dir = Path("data") / "world" / _DEMO_WORLD
+    source = world_dir / "world.yaml"
+    try:
+        loaded = load_world(source)
+    except OSError as error:
+        _refuse(f"{source}: {error.strerror or error}")
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
+        _refuse(f"{source}: {error}")
+    if not 1 <= day <= loaded.days:
+        _refuse(f"--day must be from 1 to {loaded.days}, got {day}")
+    try:
+        priors = load_priors(DEFAULT_PRIORS_PATH)
+    except OSError as error:
+        _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
+        _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
+    # Settings would load API keys from the environment and `.env`. The demo reads only
+    # DIGEST_CASSETTES, and the client has no backend, so the mode is always replay.
+    cassettes = Path(
+        os.environ.get("DIGEST_CASSETTES") or Settings.model_fields["cassettes"].default
+    )
+    if not cassettes.is_dir() or not any(cassettes.glob("*.json")):
+        _refuse(f"cassette directory {cassettes} does not exist or holds no cassette file")
+    llm = LLM(None, Cassettes(cassettes), "replay")
+    today = loaded.date_of(day)
+    zone = ZoneInfo(loaded.timezone)
+    selections: list[Selection] = []
+    # Windows can hold a handle on the store file after it closes. A cleanup error must not
+    # replace the output or the exit code.
+    with (
+        tempfile.TemporaryDirectory(prefix="digest-demo-", ignore_cleanup_errors=True) as tmp,
+        Store.open(Path(tmp) / f"{_DEMO_WORLD}.sqlite") as store,
+    ):
+        try:
+            total = _extract_days(
+                store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir
+            )
+            if total.failed:
+                noun = "thread" if total.failed == 1 else "threads"
+                _refuse(
+                    f"extract reported {total.failed} failed {noun} up to day {day}; "
+                    "the demo builds no digest from a partial extraction"
+                )
+            for user_id in _DEMO_READERS:
+                selections.append(select_digest(store, loaded, priors, user_id, today))
+        # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
+        except (CassetteMiss, ValueError, OSError) as error:
+            _refuse(str(error))
+    return loaded, selections
+
+
+def _webhook_url() -> str | None:
+    """SLACK_WEBHOOK_URL from the environment, else from a `KEY=VALUE` line in `.env`.
+
+    The `.env` parser skips lines without `=`, accepts an `export ` prefix and removes one
+    pair of matching quotes. The last line for the key wins. An empty value is no value.
+    """
+    value = os.environ.get("SLACK_WEBHOOK_URL")
+    if value:
+        return value
+    try:
+        text = Path(".env").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _refuse(f".env: {error.strerror or error}")
+    for raw in text.splitlines():
+        key, sep, rest = raw.strip().removeprefix("export ").partition("=")
+        if sep and key.strip() == "SLACK_WEBHOOK_URL":
+            rest = rest.strip()
+            if len(rest) >= 2 and rest[0] == rest[-1] and rest[0] in "\"'":
+                rest = rest[1:-1]
+            value = rest
+    return value or None
+
+
+def _webhook_client(url: str) -> WebhookClient:
+    """A Slack webhook client that writes no log line, so no log line holds the URL."""
+    # slack-sdk is in the optional `slack` extra. A top-level import would stop every
+    # command when the extra is not installed.
+    try:
+        from slack_sdk.webhook import WebhookClient
+    except ImportError:
+        _refuse("digest post needs the slack extra; run uv sync --extra slack")
+    # The client logs the URL at DEBUG level and on a retry. A disabled logger drops both.
+    quiet = logging.getLogger("digest.slack_webhook")
+    quiet.disabled = True
+    return WebhookClient(url, logger=quiet, retry_handlers=[])
 
 
 def _extract_days(
