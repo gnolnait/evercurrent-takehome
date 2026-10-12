@@ -78,6 +78,10 @@ values for the entities the thread names; verification also covers `owner`, `due
 claim values against the cited text, with unit-aware numbers and user ids for people; the
 digest renders quoted and model text as plain text and links only constructed permalinks.
 
+Amended 2026-10-12 (SPEC v0.4.3): evidence entries and task links carry `channel_id`
+beside `message_ts`, because a Slack `ts` is unique only within a channel and merged
+items cite more than one channel.
+
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction
 
 Decision. Must-see is rule-based and never ranked away: asks addressed to the user,
@@ -104,6 +108,14 @@ contradictions, pending claims). A stretch `window_recency` term orders items in
 window longer than 36 hours and never applies to those items. Ranked-lane ties break on
 the newest evidence, then on item id. Plain age decay is rejected: it pushes down the
 items that matter more as they age.
+
+Amended 2026-10-12 (SPEC v0.4.3): every score term is 1 when its input is missing and
+stays in a band above zero. "Off" in the ablation means the term is 1; a term stays when
+it moves person-days or must-see recall by a configured minimum, and before person-days
+exists nDCG at 5 may also keep it (D21). Items merge only within one audience, and each
+reader reads a ledger view built by the same rules from the claims they can see. Open
+blockers, unanswered asks, absences, stale beliefs, contradictions, pending claims and
+undelivered closing lines stay candidates when their evidence is older than the window.
 
 ## D7. Slack integration: Bolt sync, Socket Mode, internal app, scheduler in-process
 
@@ -320,6 +332,11 @@ or question claim never supersedes, a target never supersedes a stated or measur
 resolves it: confirmation supersedes, restatement makes a contradiction routed to the key's
 owner, and silence past a cadence makes an absence.
 
+Amended 2026-10-12 (SPEC v0.4.3): a `spec_param` key also holds the parameter name, taken
+from the words before the value's first numeric token. Without it, two parameters on one
+part share a key and supersede each other. The world file already writes values in that
+form, so it needs no change; the ledger code derives the name.
+
 ## D20. Interfaces: one function layer, three thin adapters, MCP for assistants
 
 Decision. Queries and feedback over the store and the ranker are plain functions in
@@ -348,6 +365,12 @@ Amended 2026-10-11: the server targets protocol revision 2026-07-28 (stateless r
 no handshake, stdio still a standard transport) through the Python SDK 2.x. The design
 uses none of the features that revision deprecates (roots, sampling, logging) and no
 server-initiated request, so no migration path is needed.
+
+Amended 2026-10-12 (SPEC v0.4.3): the four write actions are one `feedback` tool with an
+action field, so nine read tools and one write tool fit the cap of ten. The v1 server is
+an administrative interface for the operator of the store: it applies no reader
+visibility check, and `query` reads every row. A reader-scoped server waits for a
+hosted deployment (docs/later.md).
 
 ## D21. The objective is stale-belief person-days
 
