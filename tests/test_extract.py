@@ -509,6 +509,20 @@ def request_text(delta_row: ThreadDelta, citable: tuple[Event, ...], kind: str) 
 
 
 @pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_list_root_when_first_revision_has_one_post(kind: str) -> None:
+    root = event(text="FIRST-REVISION-ROOT-ONLY")
+
+    text = request_text(delta(root, root=root), (root,), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" in root_section.lower()
+    assert "FIRST-REVISION-ROOT-ONLY" not in root_section
+    assert "FIRST-REVISION-ROOT-ONLY" in changed_section
+    assert text.count("FIRST-REVISION-ROOT-ONLY") == 1
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
 def test_requests_list_root_first_when_first_revision_includes_reply(kind: str) -> None:
     root = event(text="FIRST-REVISION-ROOT")
     reply = event(REPLY, text="FIRST-REVISION-REPLY")
