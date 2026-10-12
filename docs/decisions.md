@@ -82,6 +82,12 @@ Amended 2026-10-12 (SPEC v0.4.3): evidence entries and task links carry `channel
 beside `message_ts`, because a Slack `ts` is unique only within a channel and merged
 items cite more than one channel.
 
+Amended 2026-10-12 (status): two parts of the 2026-10-11 amendment are designed, not
+built. The code does not check a claim value against the cited text: `verify.py` resolves
+the entity, checks that the claim cites a message the item holds, and normalizes the
+value form. The prompt carries no ledger values, because the ledger is cut (SPEC section
+9). The value check, with a repair step before a drop, is in `docs/later.md`.
+
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction
 
 Decision. Must-see is rule-based and never ranked away: asks addressed to the user,
@@ -202,6 +208,10 @@ fail silently. The Slack boundary is tested by injecting fake retry handlers int
 slack_sdk's `retry_handlers` and with the bolt-python mock web API server pattern.
 `httpx2.alias_httpx()` is loaded as an early pytest plugin so any stray httpx import
 resolves to the same package.
+
+Amended 2026-10-12 (status): the `alias_httpx()` plugin is not loaded. No test patches
+httpx, and the forbidden import contract keeps `httpx2` inside `digest.llm`. The Slack
+boundary tests wait for the Slack client (D7), which is not built.
 
 ## D14. Naming
 
@@ -349,8 +359,9 @@ definition. One read-only `query` tool over SQL, with a row cap and a timeout an
 schema published as a resource, is the escape hatch for questions the fixed tools do
 not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
-Enforced by import-linter (`uv run lint-imports` in CI): a layers contract (cli; replay;
-store, llm and world as siblings; project; models and settings) and a forbidden
+Enforced by import-linter (`uv run lint-imports` in CI): a layers contract in `pyproject.toml` (cli;
+eval; daily; corpus; replay, extract and absence as siblings; store, llm and world as
+siblings; project and priors; models and settings) and a forbidden
 contract keeping `anthropic` and `httpx2` inside `digest.llm`.
 
 Why. A REST API alone needs a tool definition per assistant host; per-host function
