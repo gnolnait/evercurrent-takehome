@@ -888,3 +888,54 @@ def test_absences_cli_refuses_unready_store(
 
     assert result.exit_code == 1
     assert reason in result.output
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        pytest.param("not-sqlite", "store|database|sqlite", id="not-sqlite"),
+        pytest.param("wrong-schema", "schema version", id="wrong-schema"),
+    ],
+)
+def test_absences_cli_refuses_bad_store_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    reason: str,
+) -> None:
+    _copy_world_files(tmp_path)
+    store_path = tmp_path / "bad-store.sqlite"
+    if state == "not-sqlite":
+        store_path.write_text("this is not a SQLite database", encoding="utf-8")
+    else:
+        with Store.open(store_path) as store:
+            store.set_meta("schema_version", "999")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["absences", "--world", "kestrel", "--db", str(store_path)])
+
+    assert result.exit_code == 1
+    assert any(word in result.output.lower() for word in reason.split("|")), result.output
+    assert "Traceback" not in result.output
+    assert result.exc_info is None or result.exc_info[0] is SystemExit
+
+
+def test_absences_cli_refuses_until_without_offset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _copy_world_files(tmp_path)
+    store_path = tmp_path / "invalid-until.sqlite"
+    with Store.open(store_path) as store:
+        _set_replay_meta(store)
+        store.set_meta("until", "2026-10-16T06:59:59")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["absences", "--world", "kestrel", "--db", str(store_path)])
+
+    assert result.exit_code == 1
+    assert "until" in result.output.lower()
+    assert any(word in result.output.lower() for word in ("offset", "timezone", "utc")), (
+        result.output
+    )
+    assert "Traceback" not in result.output
+    assert result.exc_info is None or result.exc_info[0] is SystemExit

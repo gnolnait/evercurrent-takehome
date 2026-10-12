@@ -422,3 +422,50 @@ def test_derive_golden_skips_checklist_absences_after_done_touch() -> None:
     assert [
         (absence.day, absence.cites) for absence in checklist if absence.task == "G1.verify"
     ] == [(4, "TOUCH"), (5, "TOUCH")]
+
+
+@pytest.mark.parametrize("line", ["null", "[1]", '"x"'])
+def test_read_golden_rejects_non_object_line_with_location(tmp_path: Path, line: str) -> None:
+    path = tmp_path / "malformed.jsonl"
+    path.write_text(f"{line}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as caught:
+        read_golden(path)
+
+    message = str(caught.value)
+    assert str(path) in message
+    assert re.search(r"(?:line\s+|:)1\b", message, re.IGNORECASE), message
+
+
+@pytest.mark.parametrize("state", ["empty", "item-first"])
+def test_read_golden_requires_meta_line(tmp_path: Path, state: str) -> None:
+    path = tmp_path / "no-meta.jsonl"
+    if state == "empty":
+        path.write_text("", encoding="utf-8")
+    else:
+        world = World.model_validate(_world_data())
+        complete = tmp_path / "complete.jsonl"
+        write_golden(derive_golden(world, _manifest(world), _priors()), complete)
+        item_line = complete.read_text(encoding="utf-8").splitlines()[1]
+        path.write_text(f"{item_line}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as caught:
+        read_golden(path)
+
+    message = str(caught.value)
+    assert str(path) in message
+    if state == "item-first":
+        assert re.search(r"(?:line\s+|:)1\b", message, re.IGNORECASE), message
+
+
+def test_read_golden_requires_cadence_with_location(tmp_path: Path) -> None:
+    path = tmp_path / "missing-cadence.jsonl"
+    path.write_text('{"kind": "meta"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError) as caught:
+        read_golden(path)
+
+    message = str(caught.value)
+    assert str(path) in message
+    assert "ask_reply_cadence_days" in message
+    assert re.search(r"(?:line\s+|:)1\b", message, re.IGNORECASE), message
