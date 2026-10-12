@@ -744,6 +744,25 @@ def test_eval_matches_non_discriminating_claims_without_equal_values(
     assert report.claim_precision == pytest.approx(2 / 3)
 
 
+def test_eval_reports_value_agreement_for_found_non_discriminating_claims(
+    tmp_path: Path,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        scored_attribute="status",
+        golden_value="open",
+        extracted_value="12345",
+        scored_claim_only=True,
+        golden_ask_claim_value="review",
+        extracted_ask_claim_value=" review ",
+    )
+
+    report = _run(case)
+
+    assert report.claim_value_agreement == pytest.approx(1 / 2)
+    assert report.claim_value_agreement_n == 2
+
+
 @pytest.mark.parametrize("attribute", ["status", "spec_param", "lead_time", "priority"])
 def test_eval_does_not_find_non_discriminating_golden_claim_without_same_key(
     tmp_path: Path, attribute: str
@@ -881,6 +900,19 @@ def _section(text: str, name: str) -> str:
     return match.group(1)
 
 
+def _table_with_row(text: str, label: str) -> str:
+    tables = re.findall(r"(?:^\|.*\|\s*$\n?)+", text, re.MULTILINE)
+    table = next((candidate for candidate in tables if label.lower() in candidate.lower()), "")
+    assert table, label
+    return table
+
+
+def _row_with_label(table: str, label: str) -> str:
+    row = next((line for line in table.splitlines() if label.lower() in line.lower()), "")
+    assert row, label
+    return row
+
+
 def _assert_rate_n(text: str, labels: tuple[str, ...], n: int) -> None:
     normalized_labels = tuple(re.sub(r"[_-]+", " ", label.lower()) for label in labels)
     row = next(
@@ -923,6 +955,58 @@ def _assert_rate_n(text: str, labels: tuple[str, ...], n: int) -> None:
                 assert re.fullmatch(rf"(?:n\s*=\s*)?{n}", cells[n_column], re.IGNORECASE), candidate
                 return
     raise AssertionError(labels)
+
+
+def test_write_report_marks_claim_value_agreement_advisory_with_value_and_n(
+    tmp_path: Path,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        scored_attribute="status",
+        golden_value="open",
+        extracted_value="12345",
+        scored_claim_only=True,
+        golden_ask_claim_value="review",
+        extracted_ask_claim_value=" review ",
+    )
+    report_path = tmp_path / "report.md"
+
+    write_report(_run(case), report_path)
+
+    claims = _section(report_path.read_text(encoding="utf-8"), "claims")
+    table = _table_with_row(claims, "claim recall")
+    row = _row_with_label(table, "claim value agreement (non-discriminating)")
+    cells = [cell.strip().lower() for cell in row.strip("|").split("|")]
+    assert "0.5" in cells
+    assert "2" in cells
+    assert "advisory" in row.lower()
+
+
+def test_write_report_has_no_claim_value_agreement_when_none_are_found(
+    tmp_path: Path,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        scored_attribute="qty",
+        scored_entity="PN-1",
+        golden_value="12345",
+        extracted_value="12345",
+        scored_claim_only=True,
+    )
+    report_path = tmp_path / "report.md"
+
+    report = _run(case)
+    write_report(report, report_path)
+
+    assert report.claim_value_agreement is None
+    assert report.claim_value_agreement_n == 0
+    claims = _section(report_path.read_text(encoding="utf-8"), "claims")
+    table = _table_with_row(claims, "claim recall")
+    row = _row_with_label(table, "claim value agreement (non-discriminating)")
+    cells = [cell.strip().lower() for cell in row.strip("|").split("|")]
+    assert "—" in cells
+    assert "0" in cells
+    assert "advisory" in row.lower()
 
 
 def test_write_report_has_deterministic_tables_and_rate_counts(eval_case: EvalCase) -> None:
