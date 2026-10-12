@@ -1021,7 +1021,7 @@ pull request lands.
 
 B3.7 `anchor.jsonl` holds the human-authored anchor slice: the nine lines M1 shipped in
 `events.jsonl` (N1-TORQUE, S1-AGREE and S1-CUT) plus the lines that complete the
-40-message slice (U3: the user writes them), each thread listed in `manifest.json` with `authored:
+anchor slice (U3: nine lines in M2), each thread listed in `manifest.json` with `authored:
 human`; unit 3 creates `manifest.json` with those entries and the data pull request
 adds the rendered ones. `events.jsonl` keeps the nine lines until the data pull request regenerates it.
 
@@ -1334,8 +1334,9 @@ first claim on its gate (decisions table, B2.2, B2.5). On the Kestrel world this
 safety days 5 to 9, FAI day 4, battery days 4 and 5 and the go/no-go review days 7 and
 8; the texture task stays silent (B2.4).
 
-U3. Decided 2026-10-11: the user writes the remaining 31 lines of the 40-message anchor
-slice (SPEC section 6, D12). The data pull request waits for them; units 1 to 4 do not.
+U3. Decided 2026-10-12 (replaces the 2026-10-11 answer): the anchor slice ships with the
+nine human lines M1 wrote; SPEC section 6 and D12 say so, and growing it to 40
+messages is in `docs/later.md`. The data pull request does not wait for it.
 
 U4. Decided 2026-10-11: the two ask events and the private channel event stand as world
 content, with `must_see_for` `U0SC01` added to `ASK-PO` (B2.9). M2 records nothing

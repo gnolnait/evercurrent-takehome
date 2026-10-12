@@ -186,8 +186,9 @@ every extra mechanism is cost without signal for a one-week take-home.
 Decision. The world-first simulator renders Slack text with a GPT-class model, while
 Claude does extraction and linking. Amended 2026-10-08 by D15: the renderer calls the
 model through the gateway backend with the logical name `render`; the `openai` package
-is not used and the `corpus` extra leaves `pyproject.toml` in the M1 stubs commit. One 40-message
-slice is human-authored. The eval report states which models rendered and which
+is not used and the `corpus` extra leaves `pyproject.toml` in the M1 stubs commit. A nine-message slice (three
+threads) is human-authored; amended 2026-10-12, growing it to 40 messages is deferred
+(`docs/later.md`). The eval report states which models rendered and which
 extracted.
 
 Why. If the same family writes the chat and reads it back, extraction scores measure

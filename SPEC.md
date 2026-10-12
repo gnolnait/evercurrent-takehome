@@ -429,8 +429,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
   visibility check is tested, one external channel, and documents with a revision
   history whose file names carry revision tokens, including one stale pack sent to the
   CM and one PO placed against a superseded rev. The renderer's prompt carries a negative list of the
-  names and storylines used by public submissions to the same brief. One 40-message
-  slice is human-authored as an anchor.
+  names and storylines used by public submissions to the same brief. A nine-message slice
+  (three threads) is human-authored as an anchor; growing it to 40 messages is
+  deferred (`docs/later.md`).
 - `data/world/<name>/golden.jsonl`: labels derived from the script, not hand-written:
   items per day, claims and supersession, must-see per persona per day, absences.
 - `digest replay --world <name> --until <date>` and `digest run --user <id> --as-of <date>`

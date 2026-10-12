@@ -98,3 +98,7 @@ would promote it.
 - The author's digest showing where their own decision did not land (landing map read
   from the author's side).
 - Transient backoff for 429 and 5xx on the gateway during record runs.
+- Anchor slice to 40 messages. SPEC section 6 asked for a 40-message human-authored
+  slice; M2 ships nine. Add 31 human-written lines in two or three threads to
+  `data/world/kestrel/anchor.jsonl` with their `authored: human` manifest entries, then
+  re-render. Trigger: after the 2026-10-14 interview.
