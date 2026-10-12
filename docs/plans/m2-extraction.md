@@ -1312,9 +1312,18 @@ re-recorded, and a recording is committed only when the eval reports zero extrac
 failures (a failed call saves no cassette, so replay would raise `CassetteMiss`).
 
 Q5 Claim value forms (B1.5). `verify` normalizes two attributes after resolving the
-entity: a `rev` value drops a leading "Rev", "rev" or "Rev." and surrounding spaces and
-is upper-cased ("Rev B" -> "B"); a `qty` value that starts with a whole number becomes
-that number ("32 counted, 8 short" -> "32"). Other values are kept as given.
+entity. A value that does not match its form is kept as given; a wrong number is worse
+than an unmatched one.
+- `rev`: the value, with surrounding spaces removed, is a revision token (letters and
+  digits) with an optional prefix "rev" in any case, an optional ".", and optional
+  spaces. It becomes the token, upper-cased: "Rev B", "rev c", "REV. D", "RevB" and
+  " B " become "B", "C", "D", "B", "B". "Rev B and C" is kept as given.
+- `qty`: the value's first word is a whole number, written with digits or with
+  thousands commas, optionally followed by "/" and a whole number. The value becomes
+  that number without commas: "32 counted, 8 short" -> "32", "1,200 pcs" -> "1200",
+  "40/40" -> "40". A first word with any other character is kept as given: "32k",
+  "32-40", "3.5 kg", "32e3".
+Other values are kept as given.
 
 Q6 Exact match on discriminating fields only (B4.2, B4.3; SPEC section 7). A golden
 claim on `rev`, `gate_date`, `qty` or `owner` is found only with an equal normalized
