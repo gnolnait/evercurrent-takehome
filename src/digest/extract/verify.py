@@ -1,7 +1,8 @@
-"""Verification in code: quotes, ids and links the model returned (plan B1.5, D5)."""
+"""Verification in code: quotes, ids, links and claim value forms (plan B1.5, Q5, D5)."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import date
 
@@ -42,6 +43,10 @@ DROP_FIELDS = (
     "claims.stale",
     "tasks.stale",
 )
+
+# Plan Q5: a rev value without its "Rev" word; a qty value that starts with a whole number.
+_REV = re.compile(r"\s*(?:(?:Rev|rev)\s+|Rev\.\s*)?(\S.*?)\s*")
+_LEADING_QTY = re.compile(r"\s*(\d+)(?![.,]?\d)")
 
 
 class Verified(Frozen):
@@ -155,13 +160,22 @@ def _claims(
                 Claim(
                     entity=entity,
                     attribute=claim.attribute,
-                    value=claim.value,
+                    value=_claim_value(claim.attribute, claim.value),
                     channel_id=event.channel_id,
                     message_ts=claim.message_ts,
                     authority=_authority(event.user_id, glossary),
                 )
             )
     return claims
+
+
+def _claim_value(attribute: str, value: str) -> str:
+    """The value in its compared form (plan Q5). Only rev and qty change."""
+    if attribute == "rev" and (match := _REV.fullmatch(value)):
+        return match.group(1).upper()
+    if attribute == "qty" and (match := _LEADING_QTY.match(value)):
+        return match.group(1)
+    return value
 
 
 def _authority(user_id: str, glossary: Glossary) -> Authority:

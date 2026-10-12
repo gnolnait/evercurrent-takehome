@@ -1,4 +1,4 @@
-"""The triage and extraction prompts and their requests (plan B1.2, B1.3)."""
+"""The triage and extraction prompts and their requests (plan B1.2, B1.3, Q1 to Q3)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,16 @@ from digest.models import Event, Glossary, Item
 from digest.project import ProjectConfig
 from digest.store import ThreadDelta
 
-EXTRACT_PROMPT_VERSION = "m2.1"  # covers the triage and the extraction prompt
+EXTRACT_PROMPT_VERSION = "m2.2"  # triage and extraction prompts; m2.2 adds plan Q1 to Q3
 
 # One rule per line: a reader can find each rule of plan B1.3 on its own line.
 EXTRACT_SYSTEM = "\n".join(
     (
         "You read one Slack thread of a hardware engineering program and extract project items.",
-        "The user message lists, in this order: the glossary of entities and people, the open"
-        " checklist tasks, the existing items of this thread, the thread root and the changed"
-        " messages.",
+        "The user message lists, in this order: the glossary of entities and people, the checklist"
+        " tasks of gates on or after today, the existing items of this thread, the thread root"
+        " and the changed messages.",
+        "A thread root that is new in this delta is listed with the changed messages.",
         "Return items for new information only: a decision, a blocker, a risk, a schedule change,"
         " a spec change, a BOM change, an ask, or an fyi that a program member needs to know.",
         "Do not return an item again when a changed message adds nothing to an existing item.",
@@ -51,9 +52,10 @@ TRIAGE_SYSTEM = "\n".join(
         "You read one Slack thread of a hardware engineering program.",
         "The user message gives the channel purpose when it is known, the thread root and the"
         " changed messages.",
+        "A thread root that is new in this delta is listed with the changed messages.",
         "Give the probability, from 0 to 1, that the changed messages carry project information:"
-        " a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, or an"
-        " ask about the program.",
+        " a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask"
+        " about the program, or an fyi that a program member needs to know.",
         "Small talk, thanks and social messages are not project information.",
         "Write the rationale first, then the probability.",
     )
@@ -144,12 +146,22 @@ def _existing_section(existing: Sequence[Item]) -> str:
 
 
 def _thread_section(delta: ThreadDelta, citable: Sequence[Event], *, with_files: bool) -> str:
-    """The root, then the changed messages in ts order. A deleted row never enters a prompt."""
+    """The root section, then the changed messages in ts order (plan Q1).
+
+    A root among the delta's changed rows is listed once, under the changed messages, and the
+    root section says that it is new in this delta. Any other root is context in the root
+    section. A deleted row never enters a prompt.
+    """
     rows = sorted((row for row in citable if not row.deleted), key=lambda row: row.ts_us)
+    changed_ts = {row.ts for row in delta.changed}
     root = [row for row in rows if row.ts == delta.thread_ts]
-    changed = [row for row in rows if row.ts != delta.thread_ts]
+    new_root = bool(root) and delta.thread_ts in changed_ts
+    changed = [row for row in rows if new_root or row.ts != delta.thread_ts]
     lines = ["Thread root:"]
-    lines += [_message(row, with_files=with_files) for row in root] or ["not available"]
+    if new_root:
+        lines.append("new in this delta, listed under the changed messages")
+    else:
+        lines += [_message(row, with_files=with_files) for row in root] or ["not available"]
     lines.append("Changed messages, oldest first:")
     lines += [_message(row, with_files=with_files) for row in changed] or ["none"]
     return "\n".join(lines)
