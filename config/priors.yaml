@@ -8,7 +8,8 @@ absence:
   ask_reply_cadence_days: 2
 daily:
   # How much a role cares about an item type, before ownership and severity
-  # (M3 demo slice, plan B5.4). A missing entry counts as 0.5.
+  # (M3 demo slice, plan B5.4). Each value is above 0 and at most 1;
+  # a missing entry counts as 0.5.
   role_priors:
     ME: {decision: 0.9, blocker: 1.0, risk: 0.8, schedule_change: 0.7, spec_change: 1.0, bom_change: 0.8, ask: 0.8, fyi: 0.4, absence: 0.9}
     EE: {decision: 0.9, blocker: 1.0, risk: 0.8, schedule_change: 0.7, spec_change: 1.0, bom_change: 0.7, ask: 0.8, fyi: 0.4, absence: 0.9}

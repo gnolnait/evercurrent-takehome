@@ -1,4 +1,7 @@
-"""Choose a reader's lines: the visibility filter, the must-see lane and the ranked lane (plan B5.2 to B5.5)."""
+"""Choose a reader's lines: the visibility filter, the must-see lane and the ranked lane (plan B5.2 to B5.5).
+
+When the digest shows an ask absence line, the line of the ask in the same thread is left out.
+"""
 
 from __future__ import annotations
 
@@ -62,7 +65,7 @@ class Line(Frozen):
 class Selection(Frozen):
     profile: Profile
     day: date
-    lines: tuple[Line, ...]  # section order, must-see first, then score descending, then item_id
+    lines: tuple[Line, ...]  # section order; must-see by item_id, then ranked in the B5.4 order
     hidden: int  # items dropped by the visibility filter
 
 
@@ -84,14 +87,11 @@ def select(
     must_see: dict[Section, list[Line]] = {section: [] for section in SECTION_CAPS}
     ranked: dict[Section, list[Line]] = {section: [] for section in SECTION_CAPS}
     for item in [*current, *absences]:
-        visible = tuple(
-            entry for entry in item.evidence if can_see(world, profile, _channel_of(entry))
-        )
-        if not visible:
+        trimmed = _visible(world, profile, item)
+        if trimmed is None:
             hidden += 1
             continue
-        trimmed = item.model_copy(update={"evidence": visible})
-        section = SECTIONS[trimmed.type]
+        section = _section_of(trimmed, profile)
         rule = _must_see_rule(trimmed, profile, gates)
         if rule is not None:
             line = Line(item=trimmed, section=section, must_see=True, reason=rule, score=0)
@@ -103,13 +103,60 @@ def select(
     lines: list[Line] = []
     for section, cap in SECTION_CAPS.items():
         lines += sorted(must_see[section], key=lambda line: line.item.item_id)
-        lines += sorted(ranked[section], key=lambda line: (-line.score, line.item.item_id))[:cap]
+        lines += sorted(ranked[section], key=_rank_key)[:cap]
+    # After the caps and the threshold: a shown ask absence line replaces the ask it cites.
+    absent_asks = {
+        line.item.thread_id
+        for line in lines
+        if line.item.absence is not None and line.item.absence.source == "ask"
+    }
+    lines = [
+        line
+        for line in lines
+        if not (line.item.type == "ask" and line.item.thread_id in absent_asks)
+    ]
     return Selection(profile=profile, day=day, lines=tuple(lines), hidden=hidden)
 
 
+def _visible(world: World, profile: Profile, item: Item) -> Item | None:
+    """The item with only the evidence from its thread's channel, or None when the reader sees none.
+
+    The reader must see the thread's channel (plan B5.2). An evidence entry from another channel
+    is removed. The check fails closed.
+    """
+    channel_id = _thread_channel(item)
+    if not can_see(world, profile, channel_id):
+        return None
+    kept = tuple(entry for entry in item.evidence if _channel_of(entry) == channel_id)
+    if not kept:
+        return None
+    return item.model_copy(update={"evidence": kept})
+
+
+def _thread_channel(item: Item) -> str:
+    """The channel id in the item's `thread_id`, which has the form `<channel>:<thread_ts>`."""
+    return item.thread_id.partition(":")[0]
+
+
 def _channel_of(entry: Evidence) -> str:
-    """The channel id in the permalink; an empty string, which no reader can see, when absent."""
+    """The channel id in the permalink; an empty string, which matches no thread, when absent.
+
+    Evidence carries no `channel_id` yet. When it does, read it here.
+    """
     return entry.permalink.partition("/archives/")[2].partition("/")[0]
+
+
+def _section_of(item: Item, profile: Profile) -> Section:
+    """The item's section (plan B5.5). An ask absence goes to needs_you for the person asked."""
+    if item.absence is not None and item.absence.source == "ask" and item.owner == profile.user_id:
+        return "needs_you"
+    return SECTIONS[item.type]
+
+
+def _rank_key(line: Line) -> tuple[float, int, str]:
+    """Score to six significant figures, highest first; then newest evidence; then item_id."""
+    newest = max(ts_micros(entry.message_ts) for entry in line.item.evidence)
+    return (-float(f"{line.score:.6g}"), -newest, line.item.item_id)
 
 
 def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
