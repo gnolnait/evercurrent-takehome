@@ -52,9 +52,10 @@ def tool_dir(tmp_path_factory):
         # directory, git exits with a segmentation fault.
         return os.pathsep.join(os.path.dirname(p) for p in (shutil.which("git"), sh_exe()))
     # On POSIX, git and gh can share /usr/bin. The fence needs bash (for its
-    # `env bash` shebang) and dirname. The slow-fetch test runs sh and sleep.
+    # `env bash` shebang) and dirname. The startup fetch tests run sh, sleep
+    # and env.
     d = tmp_path_factory.mktemp("tools")
-    for name in ("git", "bash", "dirname", "sh", "sleep"):
+    for name in ("git", "bash", "dirname", "sh", "sleep", "env"):
         os.symlink(shutil.which(name), d / name)
     return str(d)
 
