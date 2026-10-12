@@ -41,6 +41,29 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" snapshot || :; fi; exit 0",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" print || :; fi; exit 0",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }
