@@ -1,11 +1,11 @@
 {
-  "kit_commit": "6303b350aa93fbd2abb776a1656450c62a72fb6a",
+  "kit_commit": "b69812ca85cba6fe1fe3e470c537cf0640848fc8",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
     ".claude/hooks/conftest.py": "0d8c9595b7b71f78fcf2fba4623d958c19a1e591ae5a2be785b63a86ce56207a",
     ".claude/hooks/context-snapshot": "e2ae5fafe77ec2eb847c759ef3ac095f10e94e9655dcf772156420c5d18a3897",
-    ".claude/hooks/context_snapshot.py": "a10b3024128a2e03a21620eacc5d0a68687b63beadb08a257449470db521d8cb",
+    ".claude/hooks/context_snapshot.py": "5ddc32ed44427b67e955837136ba4dfc9e9c22ba6f8de7fd4fa354f79c215a11",
     ".claude/hooks/git_commit_events.py": "cef0dca793259923e71ca97c46021961f3d057ef6670cf2cd5b08c3458d3aa10",
     ".claude/hooks/guard_runner": "1420a95433fe981d079210e1b11e798270ad398bec8edf066f0791a687b7745a",
     ".claude/hooks/guard_runner.py": "acf8b24266f23087e02e58b1cf024e01781d35c16c0942ecdc53598aaa18fc84",
@@ -25,7 +25,7 @@
     ".claude/hooks/prove_test_gate_actions.py": "367b9df76354a9b0b626295a36f252b1b0b75da2c2fba8e621049b7667714b5f",
     ".claude/hooks/prove_test_track_edit.py": "09816ae60e2523b4a2027c2bbcccd21c8e1c08acb50edf9ecdbef9e206fc16d9",
     ".claude/hooks/shell_segments.py": "5a737d3ad10e301f6e767d701dc85c2f75f64f3b2e898ac326036999217a2560",
-    ".claude/hooks/test_context_snapshot.py": "733f0c96c0243acd5c35e600e05f6c5f06c10f9a9b719284cbd252512b73ef03",
+    ".claude/hooks/test_context_snapshot.py": "3c7172bc94b7a23b3b663c47606d9e660a5eebaaaf3f46eca88773bccd2ee10c",
     ".claude/hooks/test_git_env_scrub.py": "bd5b5bcfde55cbe8b5c81b9abe871395b7e423a753740d445f80785fadb28d81",
     ".claude/hooks/test_guard_launch_fence.py": "f7a49030c5f8df1aa28508b0b30e1856144467dac3deba54800b341bc61b8e9a",
     ".claude/hooks/test_guard_runner.py": "9de6e688c24531cf3c455244754bae918b443dee42b07741140fe462bc296274",

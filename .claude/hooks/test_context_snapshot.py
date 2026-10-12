@@ -15,11 +15,13 @@ from pathlib import Path
 import pytest
 
 from context_snapshot import MAX_LINES, MAX_PRINT_CHARS
-from hooktest_support import IS_WINDOWS, PYTHON, launch
+from hooktest_support import IS_WINDOWS, PYTHON, launch, sh_exe
 
 HOOK_DIR = Path(__file__).parent
 HOOK_PY = HOOK_DIR / "context_snapshot.py"
 FENCE = HOOK_DIR / "context-snapshot"
+# The SessionStart timeout that a project's settings.json gives the hook.
+HOOK_TIMEOUT_S = 15
 
 GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
 
@@ -46,11 +48,13 @@ def tool_dir(tmp_path_factory):
     if IS_WINDOWS:
         # gh installs to its own directory, and the bash launcher from
         # hooktest_support supplies the MSYS tools that the fence uses.
-        return os.path.dirname(shutil.which("git"))
+        # A fetch from a local origin needs the MSYS sh: without its
+        # directory, git exits with a segmentation fault.
+        return os.pathsep.join(os.path.dirname(p) for p in (shutil.which("git"), sh_exe()))
     # On POSIX, git and gh can share /usr/bin. The fence needs bash (for its
-    # `env bash` shebang) and dirname.
+    # `env bash` shebang) and dirname. The slow-fetch test runs sh and sleep.
     d = tmp_path_factory.mktemp("tools")
-    for name in ("git", "bash", "dirname"):
+    for name in ("git", "bash", "dirname", "sh", "sleep"):
         os.symlink(shutil.which(name), d / name)
     return str(d)
 
@@ -92,21 +96,27 @@ def _notes(repo, sub, count, prefix="f"):
     return d
 
 
-def _fake_gh(tmp_path):
-    """A `gh` on PATH that answers `pr list` and `pr checks` with fixed JSON."""
+def _fake_gh(tmp_path, list_delay_s=0):
+    """A `gh` on PATH that answers `pr list` and `pr checks` with fixed JSON.
+
+    `pr list` first sleeps `list_delay_s` seconds, as on a slow network."""
     d = tmp_path / "fakebin"
     d.mkdir()
     script = d / "fake_gh.py"
     script.write_text(
-        "import json, sys\n"
-        "a = sys.argv[1:]\n"
-        "if a[:2] == ['pr', 'list']:\n"
-        "    print(json.dumps([{'number': 7, 'title': 'Add widget',"
-        " 'headRefName': 'widget', 'isDraft': True}]))\n"
-        "elif a[:2] == ['pr', 'checks']:\n"
-        "    print(json.dumps([{'bucket': 'pass'}, {'bucket': 'pass'},"
-        " {'bucket': 'fail'}]))\n"
-        "    sys.exit(1)\n"
+        (
+            "import json, sys, time\n"
+            "a = sys.argv[1:]\n"
+            "if a[:2] == ['pr', 'list']:\n"
+            "    time.sleep(%d)\n"
+            "    print(json.dumps([{'number': 7, 'title': 'Add widget',"
+            " 'headRefName': 'widget', 'isDraft': True}]))\n"
+            "elif a[:2] == ['pr', 'checks']:\n"
+            "    print(json.dumps([{'bucket': 'pass'}, {'bucket': 'pass'},"
+            " {'bucket': 'fail'}]))\n"
+            "    sys.exit(1)\n"
+        )
+        % list_delay_s
     )
     if IS_WINDOWS:
         (d / "gh.cmd").write_text('@"%s" "%s" %%*\n' % (PYTHON, script))
@@ -285,3 +295,99 @@ def test_spawn_handoff_is_not_the_newest_handwritten_handoff(repo):
     _run("spawn-hook", repo, payload=_spawn_payload(repo))
     assert _run("snapshot", repo).returncode == 0
     assert "- notes/handoffs/h000.md" in _state(repo).read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def origin(repo, tmp_path):
+    """A local bare clone of `repo` as its `origin`: no network. No fetch yet,
+    so `origin/main` exists only after the hook fetches."""
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(bare)], check=True)
+    _git(repo, "remote", "add", "origin", str(bare))
+    return bare
+
+
+@pytest.mark.parametrize("argv", [None, launch(FENCE)], ids=["python", "fence"])
+def test_startup_reports_behind_count_and_pr_titles(repo, origin, tmp_path, argv):
+    """Setup: the primary on origin/main, a linked worktree one commit behind,
+    a fake gh. Action: startup in the worktree. Assert: the fetch ran, the
+    count is for the worktree HEAD, PR titles show without check calls."""
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(wt), "base")
+    path = os.pathsep.join([str(_fake_gh(tmp_path)), os.environ["PATH"]])
+    p = _run("startup", wt, env=dict(os.environ, PATH=path), argv=argv)
+    assert p.returncode == 0
+    assert "git fetch failed" not in p.stdout
+    assert "- This checkout is 1 commit behind origin/main." in p.stdout
+    assert "- #7 Add widget [widget] draft" in p.stdout
+    assert "checks:" not in p.stdout
+
+
+def test_startup_degrades_to_a_note_when_fetch_fails(repo, origin, tmp_path):
+    """Setup: one good fetch, then an origin URL that does not exist. Action:
+    startup. Assert: exit 0, a fetch note, and the count from the last fetch."""
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+    _git(repo, "reset", "-q", "--hard", "base")
+    p = _run("startup", repo)
+    assert p.returncode == 0
+    assert "- git fetch failed or timed out." in p.stdout
+    assert "- This checkout is 1 commit behind origin/main." in p.stdout
+
+
+def test_startup_stops_a_slow_fetch_at_its_timeout(repo, origin):
+    """Setup: one good fetch, then an origin whose transport sleeps 30 s in a
+    child of git, as git-remote-https does on a slow network. Action: startup.
+    Assert: the run ends inside the 15 s hook timeout, with the note and the count."""
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "config", "protocol.ext.allow", "always")
+    _git(repo, "remote", "set-url", "origin", "ext::sh -c sleep% 30")
+    _git(repo, "reset", "-q", "--hard", "base")
+    t = time.monotonic()
+    p = _run("startup", repo)
+    assert time.monotonic() - t < HOOK_TIMEOUT_S
+    assert "- git fetch failed or timed out." in p.stdout
+    assert "- This checkout is 1 commit behind origin/main." in p.stdout
+
+
+def test_startup_lists_prs_while_a_slow_fetch_runs(repo, origin, tmp_path):
+    """Setup: a fetch that sleeps 30 s and a `gh pr list` that takes 6 s.
+    Action: startup. Assert: the PR titles show. One after the other, the
+    fetch timeout leaves `gh` too little of the 10 s budget."""
+    _git(repo, "config", "protocol.ext.allow", "always")
+    _git(repo, "remote", "set-url", "origin", "ext::sh -c sleep% 30")
+    path = os.pathsep.join([str(_fake_gh(tmp_path, list_delay_s=6)), os.environ["PATH"]])
+    p = _run("startup", repo, env=dict(os.environ, PATH=path))
+    assert "- git fetch failed or timed out." in p.stdout
+    assert "- #7 Add widget [widget] draft" in p.stdout
+
+
+def test_startup_fetch_cannot_prompt_for_credentials(repo, origin, tmp_path):
+    """Setup: an origin whose transport writes its environment to a file.
+    Action: startup. Assert: git and Git Credential Manager may not prompt,
+    because a prompt at session start waits for a person."""
+    log = (tmp_path / "env.txt").as_posix()
+    _git(repo, "config", "protocol.ext.allow", "always")
+    _git(repo, "remote", "set-url", "origin", "ext::sh -c env% >% " + log)
+    assert _run("startup", repo).returncode == 0
+    env = Path(log).read_text().splitlines()
+    assert "GIT_TERMINAL_PROMPT=0" in env
+    assert "GCM_INTERACTIVE=never" in env
+
+
+def test_startup_fetch_updates_origin_main_without_a_fetch_mapping(repo, origin):
+    """Setup: a fetch config that maps only `base`, as a single-branch clone
+    has. Action: startup. Assert: the fetch still writes origin/main."""
+    _git(repo, "config", "remote.origin.fetch", "+refs/heads/base:refs/remotes/origin/base")
+    _git(repo, "reset", "-q", "--hard", "base")
+    p = _run("startup", repo)
+    assert "- This checkout is 1 commit behind origin/main." in p.stdout
+
+
+def test_startup_prints_nothing_outside_a_git_tree(tmp_path):
+    """A session started outside git: exit 0 and no output."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    p = _run("startup", plain)
+    assert p.returncode == 0
+    assert p.stdout == ""
