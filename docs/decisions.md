@@ -30,8 +30,9 @@ default flips with one config value and the judge becomes Claude.
 - Extraction (bulk, nightly): Haiku-class. Cheap, fast, good enough for schema-filling
   when the schema is flat and the rationale field comes first.
 - Dedup adjudication, watch-prompt matching, low-confidence re-extraction: Sonnet-class.
-- Faithfulness judge: a different family (GPT) when a key is present, else Opus-class with
-  the known-bias caveat printed in the eval report.
+- Faithfulness judge: a family different from both the extractor and the corpus renderer
+  when a key is present (D12 amendment of 2026-10-12), else Opus-class with the
+  known-bias caveat printed in the eval report.
 Exact model ids and prices are read from the Anthropic docs at implementation time, not
 from memory, and recorded in `config/models.yaml`.
 
@@ -214,7 +215,7 @@ the generator's legibility, not the system. A researcher reviewer will look for 
 Amended 2026-10-12: the judge's model family differs from both the extractor and the
 corpus renderer. A judge from the renderer's family grades text its own family wrote.
 `config/models.yaml` maps `judge` and `render` to the same model; the judge moves to a
-third family before its first run. This replaces the GPT-class judge in D15.
+third family before its first run. This replaces the GPT-class judge in D2 and D15.
 
 ## D13. Testing the two external boundaries without network
 
