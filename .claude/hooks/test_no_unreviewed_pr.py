@@ -97,6 +97,7 @@ CREATES = [
     pytest.param("gh api graphql -F query=@mutation.graphql", id="graphql-query-file"),
     pytest.param("gh api https://api.github.com/graphql --input request.json",
                  id="graphql-full-url"),
+    pytest.param("gh api /graphql --input request.json", id="graphql-leading-slash"),
     pytest.param("curl https://api.github.com/graphql -d@request.json",
                  id="graphql-curl-glued-file"),
     pytest.param("curl api.github.com/graphql -d '{\"query\":\"mutation{createPullRequest}\"}'",
