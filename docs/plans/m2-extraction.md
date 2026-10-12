@@ -1092,7 +1092,7 @@ class ExtractionReport(Frozen):
     absence_fn: int
     absence_false_alarm_rate: float | None
     absence_recall: float | None
-    uncitable_tasks: tuple[str, ...]   # tasks inside a buffer with no link and no gate anchor on any day
+    uncitable_tasks: tuple[str, ...]   # tasks that on some day inside a buffer had no link and no gate anchor
     realism: dict[str, float]    # messages per thread and chars per message: mean, median, p90
     not_run: dict[str, str]      # metric -> reason
 
@@ -1146,7 +1146,7 @@ B4.4 Absences: detected and golden absences are keyed `(day, task)` for the chec
 source and `(day, ask event id)` for the ask source (the ask item's thread maps to the
 event through the manifest). `absence_false_alarm_rate = fp / (tp + fp)` and
 `absence_recall = tp / (tp + fn)`, None when the denominator is zero. `uncitable_tasks` lists the
-tasks that were inside a buffer on some day with no link and no gate anchor (B2.2) on any day.
+tasks that on some day inside a buffer had no link and no gate anchor (B2.2) on that day.
 
 B4.5 `models` comes from `Cassettes.recorded_models()`, a new method that reads every
 cassette under the root and maps each request's logical model to the set of concrete
@@ -1269,7 +1269,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Revision suffix on an entity mention | Split off and discarded; the id is kept | A mention at a revision is not a claim about the current revision; revisions enter as `rev` claim values, and the stale-action audit that reads mentioned revisions is M3 stretch (D24). |
 | Extraction prompt version per store | One; a different version refuses the run | New item ids are `thread#last_ts#n`, so two versions in one store would overwrite each other's items; a fresh store is how a bump is run, as replay restarts for an earlier day. |
 | Which evidence entry is the ask message | The first entry whose author is not the person asked; B1.3 and B1.5 keep the asking message first | `first_seen` moves when an update cites an earlier message, such as an unrelated root; the first-cited message does not, and the author rule covers a model that cites the reply first. |
-| Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. The gate anchor above applies only to a task with no link. |
+| Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. The gate anchor above applies only to a task with no link yet. |
 | Task link provenance | Each task link names the message that shows the progress | The silence clock counts from that message, as the golden counts from the scripted day; counting from the item's `last_updated` would let merged chatter reset it. |
 | Entity Jaccard | Reported as SPEC asks, with `entity_recall` beside it | Golden entity lists are claim entities only, so Jaccard penalizes correct context entities. |
 | One prompt version for the extract stage | `EXTRACT_PROMPT_VERSION` covers the triage and extraction prompts | A separate triage constant re-ran nothing on its own; one constant gives a prompt edit one visible effect. |
