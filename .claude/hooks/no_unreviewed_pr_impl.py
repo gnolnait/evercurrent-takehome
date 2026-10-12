@@ -28,20 +28,26 @@ allowed attempts, not merged PRs.
 Deletion trigger: remove this guard when more than 5 of the last 10 log lines
 have route "override". The count command is in the github skill.
 
-Detected (scan broadly): `gh pr create` and its alias `gh pr new`, the GraphQL
-createPullRequest mutation through `gh api` or an HTTP tool, and a REST POST to
-`repos/<o>/<r>/pulls` (an explicit POST, gh field flags, or curl data flags).
-The shared segmenter finds these inside chains, substitutions, `eval` and
-`bash -c`. Data (quoted arguments of other commands, heredoc bodies) does not
-match.
+Detected (scan broadly): `gh pr create` and its alias `gh pr new` (not with
+--help), and three API forms: the GraphQL createPullRequest mutation, a GraphQL
+request read from a file or stdin, and a REST POST to `repos/<o>/<r>/pulls`
+(an explicit POST, or gh field flags or curl data flags with no other method).
+The shared segmenter finds these inside chains and substitutions. The guard
+also reads `eval` strings and `bash -c` strings, including flag clusters such
+as `-lc`. Quoted arguments of other commands and heredoc bodies do not match.
+
+An API creation names a remote branch, not a local commit, so no review marker
+can match it. Only the override allows it.
 
 Fail closed: a command that also changes directory or moves HEAD (cd, pushd,
-popd, or a git checkout/switch/commit/reset/rebase/merge/pull/cherry-pick/am/
-revert) blocks, because the guard reads HEAD before the command runs. An
-unresolvable HEAD, `--head` branch or main checkout also blocks.
+popd, or git checkout/switch/commit/reset/rebase/merge/pull/cherry-pick/am/
+revert/update-ref/symbolic-ref) blocks, because the guard reads HEAD before the
+command runs. An unresolvable HEAD, `--head` branch or main checkout also
+blocks.
 
-Not detected: a user-defined gh alias, and an httpie POST that has only
-key=value items.
+Not detected: a user-defined gh alias; an httpie POST that has only key=value
+items; an unquoted `{owner}`/`{repo}` placeholder in an API path, because
+shell_segments splits the word at the braces (the merge guard shares this gap).
 """
 
 import datetime
@@ -63,7 +69,10 @@ PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 MAY_CREATE = ("gh", "pulls", "PullRequest")
 DIR_CHANGERS = {"cd", "pushd", "popd"}
 HEAD_MOVERS = {"checkout", "switch", "commit", "reset", "rebase", "merge",
-               "pull", "cherry-pick", "am", "revert"}
+               "pull", "cherry-pick", "am", "revert", "update-ref", "symbolic-ref"}
+HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+# A shell's -c option, alone or in a flag cluster such as -lc.
+SHELL_C_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 GH_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 CURL_DATA_FLAGS = ("-d", "--data", "--data-raw", "--data-binary",
                    "--data-urlencode", "--json", "--post-data", "--post-file")
@@ -97,14 +106,35 @@ def _flag_value(rest, short, long):
     return None
 
 
-def _is_post(toks):
-    for i, tok in enumerate(toks):
-        up = tok.upper()
-        if up in ("POST", "-XPOST", "--METHOD=POST", "--REQUEST=POST"):
+def _method(cmdword, rest):
+    """The explicit HTTP method of an API call, in upper case, or None."""
+    for i, tok in enumerate(rest):
+        if tok in ("-G", "--get"):
+            return "GET"
+        for flag in ("--method", "--request"):
+            if tok == flag and i + 1 < len(rest):
+                return rest[i + 1].upper()
+            if tok.startswith(flag + "="):
+                return tok[len(flag) + 1:].upper()
+        if tok == "-X" and i + 1 < len(rest):
+            return rest[i + 1].upper()
+        if tok.startswith("-X") and len(tok) > 2:
+            return tok[2:].upper()
+    # httpie gives the method as its first argument: `http POST <url>`.
+    if cmdword in HTTP_TOOLS and rest and rest[0].upper() in HTTP_METHODS:
+        return rest[0].upper()
+    return None
+
+
+def _opaque_body(rest):
+    """True when the request body comes from a file or stdin."""
+    for tok in rest:
+        if tok == "--input" or tok.startswith("--input="):
             return True
-        if tok in ("-X", "--method", "--request") and i + 1 < len(toks):
-            if toks[i + 1].upper() == "POST":
-                return True
+        # -F query=@x.graphql, -d @body.json, --data-binary @-
+        value = tok.split("=", 1)[1] if "=" in tok else tok
+        if value.startswith("@"):
+            return True
     return False
 
 
@@ -119,29 +149,35 @@ def _has_flag(toks, flags):
     return False
 
 
-def _create_kind(cmdword, rest, toks):
-    """Name the PR-creation form in one segment, or "" when there is none."""
+def _create_kind(cmdword, rest):
+    """Return (form, through_api) for a PR creation in one segment.
+
+    form is "" when the segment creates no PR.
+    """
     if cmdword == "gh":
+        if rest and rest[0] == "help":
+            return "", False
         for a, b in zip(rest, rest[1:]):
             if a == "pr" and b in ("create", "new"):
-                return "gh pr " + b
+                if "--help" in rest or "-h" in rest:
+                    return "", False
+                return "gh pr " + b, False
     is_api = (cmdword == "gh" and "api" in rest) or cmdword in HTTP_TOOLS
     if not is_api:
-        return ""
-    if any(GQL_CREATE.search(t) for t in toks):
-        return "GraphQL createPullRequest"
-    if any(PULLS_PATH.search(t) for t in toks):
-        explicit_get = False
-        for i, tok in enumerate(toks):
-            if tok in ("-X", "--method", "--request") and i + 1 < len(toks):
-                explicit_get = toks[i + 1].upper() != "POST"
-        if _is_post(toks):
-            return "REST POST .../pulls"
-        if not explicit_get:
-            flags = GH_FIELD_FLAGS if cmdword == "gh" else CURL_DATA_FLAGS
-            if _has_flag(rest, flags):
-                return "REST POST .../pulls"
-    return ""
+        return "", False
+    graphql = ("graphql" in rest) if cmdword == "gh" else any("/graphql" in t for t in rest)
+    if graphql:
+        if any(GQL_CREATE.search(t) for t in rest):
+            return "GraphQL createPullRequest", True
+        if _opaque_body(rest):
+            return "a GraphQL request read from a file or stdin", True
+        return "", False
+    if any(PULLS_PATH.search(t) for t in rest):
+        method = _method(cmdword, rest)
+        flags = GH_FIELD_FLAGS if cmdword == "gh" else CURL_DATA_FLAGS
+        if method == "POST" or (method is None and _has_flag(rest, flags)):
+            return "REST POST .../pulls", True
+    return "", False
 
 
 def _scan(cmd, found, movers, depth=0):
@@ -157,10 +193,11 @@ def _scan(cmd, found, movers, depth=0):
             _scan(" ".join(rest), found, movers, depth + 1)
             continue
         if cmdword in SHELLS:
-            if "-c" in rest:
-                idx = rest.index("-c")
-                if idx + 1 < len(rest):
-                    _scan(rest[idx + 1], found, movers, depth + 1)
+            for i, tok in enumerate(rest):
+                if SHELL_C_FLAG.match(tok):
+                    if i + 1 < len(rest):
+                        _scan(rest[i + 1], found, movers, depth + 1)
+                    break
             continue
         if cmdword in DIR_CHANGERS:
             movers.append(seg)
@@ -168,16 +205,17 @@ def _scan(cmd, found, movers, depth=0):
         if cmdword == "git" and any(t in HEAD_MOVERS for t in rest):
             movers.append(seg)
             continue
-        kind = _create_kind(cmdword, rest, toks)
+        kind, through_api = _create_kind(cmdword, rest)
         if kind:
-            found.append((kind, seg, prefix, cmdword, rest))
+            found.append((kind, through_api, seg, prefix, cmdword, rest))
 
 
 def _git(cwd, *args):
     try:
         result = subprocess.run(["git", "-C", cwd, *args],
                                 capture_output=True, text=True)
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError: an argument holds a NUL byte, so git cannot run.
         return ""
     if result.returncode != 0:
         return ""
@@ -283,6 +321,18 @@ def _missing_message(kind, sha, root, problems):
     return "\n".join(lines) + "\n"
 
 
+def _api_message(kind, detail):
+    return (
+        "BLOCKED: {0} creates a pull request through the API.\n"
+        "  detail: {1}\n\n"
+        "The request names a remote branch, not a local commit, so a review marker\n"
+        "cannot match it. To use a review marker, use gh pr create from the branch\n"
+        "checkout. For a trivial PR only, put an override with a reason on the same\n"
+        "command:\n"
+        '  {2}="<why no review>" gh api ...\n'
+    ).format(kind, detail, OVERRIDE_VAR)
+
+
 def _ambiguous_message(reason, detail):
     return (
         "BLOCKED: this command creates a pull request, and the review guard cannot\n"
@@ -313,7 +363,8 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
         if not root:
             raise _Ambiguous("cannot find the main checkout from %s" % hook_cwd)
         entries = []
-        for kind, seg, prefix, cmdword, rest in found:
+        for kind, through_api, seg, prefix, cmdword, rest in found:
+            # For an API creation this is HEAD, which only the log records.
             sha = _target_sha(hook_cwd, cmdword, rest)
             reason = _override_reason(prefix)
             if reason == "":
@@ -323,6 +374,8 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
                     % (OVERRIDE_VAR, OVERRIDE_VAR))
             if reason is not None:
                 route = "override"
+            elif through_api:
+                return True, _api_message(kind, seg)
             else:
                 route, problems = _evidence(root, sha)
                 if not route:
@@ -336,7 +389,7 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
                 "cwd": hook_cwd,
             })
     except _Ambiguous as exc:
-        return True, _ambiguous_message(str(exc), found[0][1])
+        return True, _ambiguous_message(str(exc), found[0][2])
     try:
         for entry in entries:
             _log(root, entry)
