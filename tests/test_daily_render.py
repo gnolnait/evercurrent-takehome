@@ -200,7 +200,9 @@ def test_render_digest_omits_empty_sections(world: World, profile: Profile) -> N
         assert absent_title not in rendered
 
 
-def test_render_digest_normal_line_without_owner_uses_none(world: World, profile: Profile) -> None:
+def test_render_digest_normal_line_without_owner_omits_owner(
+    world: World, profile: Profile
+) -> None:
     selected = selection(
         profile,
         line(item(item_id="UNOWNED", title="Unowned risk", owner=None), "risks"),
@@ -208,7 +210,8 @@ def test_render_digest_normal_line_without_owner_uses_none(world: World, profile
 
     rendered = render_digest(world, selected)
 
-    assert "- Unowned risk (PN-51010, G-TR1) - owner none" in rendered
+    assert "- Unowned risk (PN-51010, G-TR1)" in rendered.splitlines()
+    assert "owner none" not in rendered
 
 
 def test_render_digest_empty_day_and_hidden_footer(world: World, profile: Profile) -> None:
