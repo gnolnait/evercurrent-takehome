@@ -1686,3 +1686,94 @@ def test_extract_logs_structured_failure_without_message_text(
     assert fields["thread_id"] == f"C1:{ROOT}"
     assert fields["error_class"] in {"LLMOutputError", "LLMOutputInvalid"}
     assert "ANOTHER SECRET" not in str(fields)
+
+
+def test_cli_extract_failure_keeps_cursor_and_rerun_retries_thread(
+    cli_case: tuple[Path, Path],
+) -> None:
+    """Fail the last day; rerun it with a valid cassette; assert the item is written."""
+    db_path, cassette_path = cli_case
+    prepare_cli_store(db_path)
+    first_ts = "1791831600.000001"
+    second_ts = "1791918000.000001"
+    day_one = datetime(2026, 10, 13, 6, 59, 59, 999999, tzinfo=UTC)
+    day_two = datetime(2026, 10, 14, 6, 59, 59, 999999, tzinfo=UTC)
+    with Store.open(db_path) as store:
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Drop.", "probability": 0.0},
+            as_of=day_one,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+        run_extract(
+            store,
+            replay_llm(cassette_path),
+            glossary(),
+            project(),
+            priors(),
+            day_one,
+            ZONE,
+            CHANNEL_PURPOSES,
+        )
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data={},
+            as_of=day_two,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DELETE FROM stage_runs")
+        connection.execute("DELETE FROM triage")
+
+    first_result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
+    assert first_result.exit_code == 0, first_result.output
+    first_report = json.loads(first_result.output)
+    assert (first_report["failed"], first_report["items_written"]) == (1, 0)
+    with Store.open(db_path) as store:
+        cursor_after_failure = store.get_meta("extract_until")
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Keep.", "probability": 1.0},
+            extraction_data=extraction_data(
+                extracted_item(
+                    evidence=[ExtractedEvidence(message_ts=second_ts, quote="SECOND-DAY-REPLY")]
+                )
+            ),
+            as_of=day_two,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+
+    second_result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
+    assert second_result.exit_code == 0, second_result.output
+    second_report = json.loads(second_result.output)
+    with Store.open(db_path) as store:
+        written = store.items_for_thread(f"C1:{first_ts}")
+
+    assert (
+        cursor_after_failure,
+        second_report["threads"],
+        second_report["items_written"],
+        [item.evidence[-1].quote for item in written],
+    ) == ("2026-10-12", 1, 1, ["SECOND-DAY-REPLY"])
+
+
+def test_cli_extract_checks_prompt_version_when_every_day_is_done(
+    cli_case: tuple[Path, Path],
+) -> None:
+    """Complete all days with an old version; invoke extract; assert a version refusal."""
+    db_path, _ = cli_case
+    prepare_cli_store(db_path)
+    stored_version = "m1.old"
+    with Store.open(db_path) as store:
+        store.set_meta("extract_until", "2026-10-13")
+        store.set_meta("extract_prompt_version", stored_version)
+
+    result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
+
+    assert result.exit_code == 1, result.output
+    assert stored_version in result.output
+    assert EXTRACT_PROMPT_VERSION in result.output
