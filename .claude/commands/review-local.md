@@ -34,8 +34,9 @@ matched rule paths go into the dispatch prompt.
 
 ## 3. Dispatch and verify: the `review-local` workflow
 
-Run the saved workflow `.claude/workflows/review-local.js` with the Workflow tool, by
-name (`review-local`). If the name does not resolve, pass the file as `scriptPath`.
+Run `.claude/workflows/review-local.js` with the Workflow tool. Pass it as `scriptPath`,
+as an absolute path under `git rev-parse --show-toplevel` (the current checkout, not
+`<root>`). Do not run it by name: a name can load an older copy from the main checkout.
 Pass these `args`:
 
 - `base`, `head`: the SHAs from step 1.
@@ -64,7 +65,11 @@ more, and if it fails again, report it as not run.
 
 ## 4. Finish verification
 
-Map the workflow result onto the STEP 5 keys:
+The workflow ends with a task notification. Its `<result>` can be cut short and
+HTML-escapes `<`, `>` and `&`. Read the JSON file named in `<output-file>` and use its
+`result` key. Copy quotes from there.
+
+Map that result onto the STEP 5 keys:
 
 - `kept` goes to `findings`. Merge two kept findings that one fix resolves; the grouping
   step can miss a pair. Remove the `anchor`, `from_prior` and `from_lens` keys.
