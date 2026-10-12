@@ -32,6 +32,7 @@ FAKES = {
     "Slack app token": "xapp" + "-1-" + "A0123456789-1234567890123-" + "b" * 64,
     "OpenRouter key": "sk-or" + "-v1-" + "c" * 64,
     "Anthropic key": "sk-ant" + "-api03-" + "d" * 40,
+    "Slack refresh or rotated token": "xox" + "e-1-" + "e" * 64,
 }
 
 
@@ -107,3 +108,31 @@ def test_main_skips_main_and_detached(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("main", "HEAD"):
         monkeypatch.setattr(pr_open, "current_branch", lambda name=name: name)
         assert pr_open.main() == 0
+
+
+@pytest.fixture(autouse=True)
+def _no_push_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # prek sets this while pytest runs as a pre-push hook; each test sets its own.
+    monkeypatch.delenv("PRE_COMMIT_REMOTE_BRANCH", raising=False)
+
+
+def test_the_pushed_branch_is_checked_not_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PRE_COMMIT_REMOTE_BRANCH", "refs/heads/feat")
+    monkeypatch.setattr(pr_open, "current_branch", lambda: "main")
+    asked: list[str] = []
+
+    def merged(branch: str, run: object = None) -> int:
+        asked.append(branch)
+        return 17
+
+    monkeypatch.setattr(pr_open, "merged_pr", merged)
+    assert pr_open.main() == 1
+    assert asked == ["feat"]
+
+
+def test_an_open_fork_pr_does_not_mask_a_merged_pr() -> None:
+    prs: list[dict[str, object]] = [
+        {"number": 17, "state": "MERGED", "isCrossRepository": False},
+        {"number": 18, "state": "OPEN", "isCrossRepository": True},
+    ]
+    assert pr_open.merged_pr("feat", _runner(prs)) == 17
