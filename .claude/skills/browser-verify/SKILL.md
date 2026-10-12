@@ -29,14 +29,16 @@ page, or put them in a URL.
 
 ## 1. Start what you verify
 
-- **Live bot.** Start live mode in a background job with the command SPEC section 3 names
-  once M5 builds it. Wait for the app's own "connected" log event (Socket Mode) with a
-  bounded poll, not a blind sleep.
+- **Live bot.** Find the live-mode command in `digest --help` (M5 adds it). If there is
+  none, live mode is not built: stop and say so. Start it in a background job and wait
+  for the app's own "connected" log event (Socket Mode) with a bounded poll, not a blind
+  sleep.
 - **Web preview.** Add or reuse a `.claude/launch.json` entry and start it with
   `preview_start`; that opens the in-app Browser pane on the page. Poll the port until it
   answers before you read anything.
-- **Seeded corpus.** `digest seed` posts at a configurable pace. Seed a short slice (one
-  world day) for a check; a full world takes hours.
+- **Seeded corpus.** Read `digest seed --help` first. Use a pace or a day limit only if
+  the command offers one (pacing is M5 stretch); otherwise seed the smallest world the
+  command accepts.
 
 Start only what you need, and record the background job ids so you can stop exactly
 those at the end.
@@ -107,8 +109,9 @@ messages' permalinks in the report, and the user decides.
 
 The screen is one channel. Check a second one that does not pass through the browser:
 
-- The message as Slack stored it: `conversations.history` or `chat.getPermalink` with the
-  bot token, from a short script that prints ids and booleans only, never the token.
+- The message as Slack stored it: `conversations.history` (or `conversations.replies`
+  for a thread) with the bot token, from a short script that prints ids, block types and
+  booleans only, never the token. `chat.getPermalink` gives only the link for the report.
 - The app's structured log events for the step (for example the delivery event and its
   run id).
 - The store: an exposure row for the reader after Slack accepted the message (SPEC
