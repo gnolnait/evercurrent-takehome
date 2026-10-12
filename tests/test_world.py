@@ -15,6 +15,7 @@ from digest.cli import app
 from digest.models import Event
 from digest.settings import Settings
 from digest.world.load import load_world
+from digest.world.manifest import Manifest, ThreadRef, load_manifest, write_manifest
 from digest.world.schema import World
 
 runner = CliRunner()
@@ -437,7 +438,7 @@ def test_bundled_world_contains_planned_program() -> None:
         "America/Los_Angeles",
     )
     channels = {channel.name: channel.id for channel in world.channels}
-    assert len(world.channels) == 7
+    assert len(world.channels) == 8
     assert set(channels) == {
         "kestrel-program",
         "eng-mech",
@@ -446,6 +447,7 @@ def test_bundled_world_contains_planned_program() -> None:
         "dvt1-build",
         "ext-sunrise-cm",
         "plm-feed",
+        "kestrel-leads",
     }
     subsystems = {entity.id for entity in world.entities if entity.type == "subsystem"}
     assert subsystems == {"drive", "compute", "safety", "power", "chassis", "enclosure"}
@@ -570,7 +572,7 @@ def test_bundled_events_match_world_and_working_days() -> None:
 
     events = [Event.model_validate_json(line) for line in lines]
 
-    assert 8 <= len(events) <= 14
+    assert len(events) >= 8
     assert all(set(json.loads(line)) == set(Event.model_fields) for line in lines)
     assert [event.event_ts for event in events] == sorted(event.event_ts for event in events)
     channel_ids = {channel.id for channel in world.channels}
@@ -603,3 +605,132 @@ def test_bundled_world_pins_s3_thermal_cadence_absence() -> None:
     assert last_evidence_day == 2
     assert touched_days.isdisjoint(range(3, 7))
     assert 6 - last_evidence_day > task.expected_cadence_days
+
+
+def test_bundled_glossary_preserves_entities_and_people_in_file_order() -> None:
+    """Setup the bundled world; build its glossary; assert every field and file order."""
+    world = load_world(Path(__file__).resolve().parents[1] / "data/world/kestrel/world.yaml")
+    glossary = world.glossary()
+    assert [(e.id, e.type, e.description, e.aliases) for e in glossary.entities] == [
+        (e.id, e.type, e.description, e.aliases) for e in world.entities
+    ]
+    assert [(p.user_id, p.name, p.role, p.aliases, p.authority) for p in glossary.people] == [
+        (p.user_id, p.name, p.role, p.aliases, p.authority) for p in world.personas
+    ]
+    people = {person.user_id: person for person in glossary.people}
+    assert people["B0PLM01"].role is None
+    assert people["B0PLM01"].authority == "plm_bot"
+    assert people["U0CM01"].authority == "cm_stated"
+    no_aliases = next(entity for entity in world.entities if not entity.aliases)
+    assert next(entity for entity in glossary.entities if entity.id == no_aliases.id).aliases == ()
+
+
+def test_bundled_world_pins_private_channel_and_asks() -> None:
+    """Setup the bundled world; inspect the new events; assert privacy and ask facts."""
+    world = load_world(Path(__file__).resolve().parents[1] / "data/world/kestrel/world.yaml")
+    leads = next(channel for channel in world.channels if channel.id == "C0LEADS")
+    assert leads.private is True
+    assert {p.user_id for p in world.personas if leads.id in p.channels} == {"U0EM01", "U0PM01"}
+    assert any(p.kind == "human" and leads.id not in p.channels for p in world.personas)
+    events = {event.id: event for event in world.events}
+    safety = events["ASK-SAF"]
+    po = events["ASK-PO"]
+    assert safety.ask is not None
+    assert safety.ask.of == "U0FW01"
+    assert safety.ask.answered_day is None
+    assert po.ask is not None
+    assert po.ask.of == "U0SC01"
+    assert po.ask.answered_day == 5
+    assert events["LEADS-1"].channel == leads.id
+    assert events["LEADS-1"].claims == ()
+    for event in (safety, po, events["LEADS-1"]):
+        assert event.known_by[event.poster] == event.day
+
+
+def test_manifest_round_trip_is_byte_stable(tmp_path: Path) -> None:
+    """Setup unsorted thread references; write, read and write; assert canonical bytes."""
+    manifest = Manifest(
+        threads={
+            "Z-LAST": ThreadRef(channel_id="C2", thread_ts="1760000000.000002", authored="render"),
+            "A-FIRST": ThreadRef(channel_id="C1", thread_ts="1760000000.000001", authored="human"),
+        }
+    )
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    write_manifest(manifest, first)
+    loaded = load_manifest(first)
+    assert loaded == manifest
+    write_manifest(loaded, second)
+    expected = (
+        b"{\n"
+        b'  "threads": {\n'
+        b'    "A-FIRST": {\n'
+        b'      "authored": "human",\n'
+        b'      "channel_id": "C1",\n'
+        b'      "thread_ts": "1760000000.000001"\n'
+        b"    },\n"
+        b'    "Z-LAST": {\n'
+        b'      "authored": "render",\n'
+        b'      "channel_id": "C2",\n'
+        b'      "thread_ts": "1760000000.000002"\n'
+        b"    }\n"
+        b"  }\n"
+        b"}\n"
+    )
+    assert first.read_bytes() == second.read_bytes() == expected
+
+
+def test_load_manifest_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_manifest(tmp_path / "missing.json")
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "field"),
+    [
+        ((), True, "unexpected"),
+        (("threads", "E1"), True, "unexpected"),
+        (("threads", "E1"), "bot", "authored"),
+        (("threads", "E1"), "1760000000.1", "thread_ts"),
+        (("threads", "E1"), "176000000.000001", "thread_ts"),
+        (("threads", "E1"), "1760000000x000001", "thread_ts"),
+    ],
+    ids=[
+        "extra-root",
+        "extra-thread",
+        "bad-authored",
+        "short-fraction",
+        "short-seconds",
+        "bad-separator",
+    ],
+)
+def test_load_manifest_rejects_invalid_fields(
+    tmp_path: Path, path: tuple[str, ...], value: Any, field: str
+) -> None:
+    """Setup a manifest with one invalid field; load it; assert a validation error."""
+    raw: dict[str, Any] = {
+        "threads": {
+            "E1": {
+                "channel_id": "C1",
+                "thread_ts": "1760000000.000001",
+                "authored": "human",
+            }
+        }
+    }
+    target = raw
+    for key in path:
+        target = target[key]
+    target[field] = value
+    file = tmp_path / "manifest.json"
+    file.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValidationError, match=field):
+        load_manifest(file)
+
+
+def test_manifest_accepts_empty_threads(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text('{"threads": {}}', encoding="utf-8")
+    manifest = load_manifest(path)
+    assert manifest.threads == {}
+    write_manifest(manifest, path)
+    assert load_manifest(path) == manifest

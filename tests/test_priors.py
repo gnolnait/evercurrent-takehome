@@ -1,0 +1,75 @@
+from pathlib import Path
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from digest.priors import load_priors
+
+
+@pytest.mark.parametrize("ratio", [0.5, 3, 10])
+def test_load_priors_reads_file_and_derives_threshold(tmp_path: Path, ratio: float) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {"triage": {"miss_cost_ratio": ratio}, "absence": {"ask_reply_cadence_days": 1}}
+        ),
+        encoding="utf-8",
+    )
+    priors = load_priors(path)
+    assert priors.triage.miss_cost_ratio == ratio
+    assert priors.triage.keep_threshold == 1 / (1 + ratio)
+    assert priors.absence.ask_reply_cadence_days == 1
+
+
+def test_load_bundled_priors() -> None:
+    path = Path(__file__).resolve().parents[1] / "config/priors.yaml"
+    priors = load_priors(path)
+    assert priors.triage.miss_cost_ratio == 10
+    assert priors.triage.keep_threshold == 1 / 11
+    assert priors.absence.ask_reply_cadence_days == 2
+
+
+@pytest.mark.parametrize(
+    ("contents", "field"),
+    [
+        ("triage: {miss_cost_ratio: 0}\nabsence: {ask_reply_cadence_days: 2}", "miss_cost_ratio"),
+        ("triage: {miss_cost_ratio: -1}\nabsence: {ask_reply_cadence_days: 2}", "miss_cost_ratio"),
+        (
+            "triage: {miss_cost_ratio: 10}\nabsence: {ask_reply_cadence_days: 0}",
+            "ask_reply_cadence_days",
+        ),
+        (
+            "triage: {miss_cost_ratio: 10}\nabsence: {ask_reply_cadence_days: -1}",
+            "ask_reply_cadence_days",
+        ),
+        (
+            "triage: {miss_cost_ratio: 10}\nabsence: {ask_reply_cadence_days: 2}\nunexpected: true",
+            "unexpected",
+        ),
+        (
+            "triage: {miss_cost_ratio: 10, unexpected: true}\nabsence: {ask_reply_cadence_days: 2}",
+            "unexpected",
+        ),
+        (
+            "triage: {miss_cost_ratio: 10}\nabsence: {ask_reply_cadence_days: 2, unexpected: true}",
+            "unexpected",
+        ),
+        ("triage: {miss_cost_ratio: 10}", "absence"),
+    ],
+    ids=[
+        "zero-ratio",
+        "negative-ratio",
+        "zero-cadence",
+        "negative-cadence",
+        "extra-root",
+        "extra-triage",
+        "extra-absence",
+        "missing-absence",
+    ],
+)
+def test_load_priors_rejects_invalid_file(tmp_path: Path, contents: str, field: str) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text(contents, encoding="utf-8")
+    with pytest.raises(ValidationError, match=field):
+        load_priors(path)
