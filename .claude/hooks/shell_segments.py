@@ -64,9 +64,11 @@ tracking it leaks a new fail-open per rule. A `<<` there is still misread as a
 heredoc opener.
 
 The same holds for WHAT a command word names. `command_name` reads `gh.exe`, `GH`
-and a full Windows path as `gh`, and `windows_shell_code` finds the command that
-`powershell`, `pwsh` or `cmd` runs. Each guard calls these, so the three guards
-agree on which program runs.
+and a full Windows path as `gh`; all three guards call it. `windows_shell_code`
+finds the command that `powershell`, `pwsh` or `cmd` runs; the merge and signing
+guards scan that command. The commit guard does not: it treats a Windows shell
+whose text names git and commit as unreadable, and fails closed on a protected
+branch.
 """
 
 import re
@@ -644,17 +646,23 @@ def windows_shell_code(args):
     """Return the code texts that `powershell`, `pwsh` or `cmd` runs from its
     `args`. Return None for an encoded command, which cannot be read.
 
-    After a command flag (`-Command` or a prefix of it, `/c`, `/k`, or Git
-    Bash's `//c`), the remaining arguments are one command. With no command
-    flag, each operand is its own text: `powershell "gh pr merge"` runs it, and
-    an option value such as `Bypass` names no program the guards know.
+    A flag starts with `-`, `--`, `/` or Git Bash's `//`. After a command flag
+    (`-Command` or a prefix of it, `/c`, `/k`), the remaining arguments are one
+    command. With no command flag, PowerShell runs the bare operands as one
+    command. An option value (`-ExecutionPolicy Bypass`) can come first, so each
+    tail of the arguments that starts at an operand is a candidate. A backslash is a path separator in both
+    shells, so it becomes a slash before a guard reads the text.
     """
     for i, arg in enumerate(args):
-        low = arg.lower()
-        if low.startswith("-e") and not low.startswith("-ex"):
-            return None  # -EncodedCommand and its prefixes; -ex is -ExecutionPolicy
-        if low in ("/c", "/k", "//c", "//k") or (
-            low.startswith("-c") and ("-command".startswith(low) or low.startswith("-command"))
-        ):
-            return [" ".join(args[i + 1 :])]
-    return [a for a in args if not a.startswith(("-", "/"))]
+        flag = arg.lower().lstrip("-/") if arg[:1] in ("-", "/") else ""
+        if flag == "ec" or (flag and "encodedcommand".startswith(flag)):
+            return None
+        if flag == "k" or (flag and ("command".startswith(flag) or flag.startswith("command"))):
+            return [_slashes(" ".join(args[i + 1 :]))]
+    return [
+        _slashes(" ".join(args[i:])) for i, arg in enumerate(args) if arg[:1] not in ("-", "/")
+    ]
+
+
+def _slashes(code):
+    return code.replace("\\", "/")
