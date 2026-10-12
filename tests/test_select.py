@@ -621,6 +621,26 @@ def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
     assert selection.lines[0].must_see is False
 
 
+def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
+    ask = item("ask", type="ask", owner="UEMPTY")
+    missing = absence(
+        "ask-absence",
+        source="ask",
+        asker="UASKER",
+        owner="UEMPTY",
+        affected_roles=(),
+    ).model_copy(update={"thread_id": ask.thread_id})
+    table = priors(
+        role_priors={"ME": {"ask": 1.0, "absence": 0.1}},
+        min_score=0.03,
+    )
+
+    selection = choose([ask], [missing], table=table)
+
+    assert [(line.item.item_id, line.section) for line in selection.lines] == [("ask", "needs_you")]
+    assert selection.lines[0].must_see is False
+
+
 def test_ranked_ties_use_newest_evidence_then_item_id() -> None:
     table = priors(
         role_priors={
