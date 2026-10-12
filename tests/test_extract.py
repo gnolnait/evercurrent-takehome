@@ -963,20 +963,33 @@ def test_verify_two_outputs_for_one_existing_item_merge_in_output_order(tmp_path
 
 
 @pytest.mark.parametrize(
-    ("root_is_citable", "expected_claims", "expected_links", "claim_drops", "task_drops"),
-    [(True, [("C", "plm_bot")], [("evidence", ROOT)], 0, 0), (False, [], [], 1, 1)],
-    ids=["citable", "held-not-citable"],
+    (
+        "case",
+        "expected_claims",
+        "expected_links",
+        "claim_drops",
+        "task_drops",
+    ),
+    [
+        ("citable", [("C", "plm_bot")], [("evidence", ROOT)], 0, 0),
+        ("held-not-citable", [], [], 1, 1),
+        ("changed-not-evidence", [], [], 1, 0),
+    ],
+    ids=["citable", "held-not-citable", "changed-not-evidence"],
 )
 def test_verify_update_links_may_cite_held_evidence_only_when_citable(
-    root_is_citable: bool,
+    case: str,
     expected_claims: list[tuple[str, str]],
     expected_links: list[tuple[str, str]],
     claim_drops: int,
     task_drops: int,
 ) -> None:
+    root_is_citable = case != "held-not-citable"
     held_ts = ROOT if root_is_citable else "1759999999.000001"
     held = event(held_ts, user_id="B1", text="PN-31010 Rev C released.")
     reply = event(REPLY, text="The update is ready.")
+    changed = event(LATER, text="PN-31010 Rev C released in another message.")
+    claim_ts = LATER if case == "changed-not-evidence" else held_ts
     existing_item = stored_item(
         evidence=(Evidence(message_ts=held_ts, quote="PN-31010 Rev C", permalink=held.permalink),),
         claims=(),
@@ -985,14 +998,24 @@ def test_verify_update_links_may_cite_held_evidence_only_when_citable(
     incoming = extracted_item(
         item_id="I1",
         evidence=[ExtractedEvidence(message_ts=REPLY, quote="update is ready")],
-        claims=[ExtractedClaim(entity="PN-31010", attribute="rev", value="C", message_ts=held_ts)],
-        tasks=[ExtractedTask(task="today.task", effect="evidence", message_ts=held_ts)],
+        claims=[ExtractedClaim(entity="PN-31010", attribute="rev", value="C", message_ts=claim_ts)],
+        tasks=(
+            []
+            if case == "changed-not-evidence"
+            else [ExtractedTask(task="today.task", effect="evidence", message_ts=held_ts)]
+        ),
     )
     citable = {REPLY: reply} | ({ROOT: held} if root_is_citable else {})
+    if case == "changed-not-evidence":
+        citable[LATER] = changed
 
     result = verify(
         Extraction(rationale="Cite held evidence.", items=[incoming]),
-        delta(reply, root=held if root_is_citable else None),
+        delta(
+            reply,
+            *((changed,) if case == "changed-not-evidence" else ()),
+            root=held if root_is_citable else None,
+        ),
         citable,
         glossary(),
         {"today.task": project().task("today.task")},
@@ -1072,9 +1095,23 @@ def test_run_extract_sets_version_records_triage_and_writes_provenance(tmp_path:
         ]
 
 
-def test_run_extract_sets_prompt_version_only_with_first_write(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("triage_data", "extraction", "expected_counts"),
+    [
+        ({"rationale": "Keep.", "probability": 1.0}, extraction_data(extracted_item()), (1, 0, 1)),
+        ({"rationale": "Drop.", "probability": 0.0}, None, (0, 1, 0)),
+    ],
+    ids=["item-write", "triage-drop"],
+)
+def test_run_extract_sets_prompt_version_only_with_first_write(
+    tmp_path: Path,
+    triage_data: dict[str, Any],
+    extraction: dict[str, Any] | None,
+    expected_counts: tuple[int, int, int],
+) -> None:
     cassette_path = tmp_path / "cassettes"
-    with Store.open(tmp_path / "version-on-write.sqlite") as store:
+    db_path = tmp_path / "version-on-write.sqlite"
+    with Store.open(db_path) as store:
         empty_report = run_extract(
             store,
             replay_llm(cassette_path),
@@ -1090,8 +1127,8 @@ def test_run_extract_sets_prompt_version_only_with_first_write(tmp_path: Path) -
         put_stage_cassettes(
             cassette_path,
             store,
-            triage_data={"rationale": "Keep.", "probability": 1.0},
-            extraction_data=extraction_data(extracted_item()),
+            triage_data=triage_data,
+            extraction_data=extraction,
             channel_purposes=CHANNEL_PURPOSES,
         )
         write_report = run_extract(
@@ -1106,10 +1143,14 @@ def test_run_extract_sets_prompt_version_only_with_first_write(tmp_path: Path) -
         )
 
         assert (empty_report.items_written, version_after_empty_run) == (0, None)
-        assert (write_report.items_written, store.get_meta("extract_prompt_version")) == (
-            1,
-            EXTRACT_PROMPT_VERSION,
+        assert (write_report.kept, write_report.dropped, write_report.items_written) == (
+            expected_counts
         )
+        decision = store.triage_decision(f"C1:{ROOT}", ROOT, EXTRACT_PROMPT_VERSION, "classify")
+        assert decision is not None and decision.kept is bool(write_report.kept)
+        assert store.get_meta("extract_prompt_version") == EXTRACT_PROMPT_VERSION
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT status FROM stage_runs").fetchall() == [("ok",)]
 
 
 def test_run_extract_refuses_different_store_prompt_version(tmp_path: Path) -> None:
@@ -1506,16 +1547,19 @@ def test_cli_extract_rerun_resumes_after_last_processed_day(
 
 
 @pytest.mark.parametrize(
-    "contents",
+    ("contents", "clean_refusal"),
     [
-        pytest.param("triage: [\n", id="yaml-syntax"),
+        pytest.param("triage: [\n", True, id="yaml-syntax"),
         pytest.param(
             "triage:\n  miss_cost_ratio: 0\nabsence:\n  ask_reply_cadence_days: 2\n",
+            False,
             id="validation",
         ),
     ],
 )
-def test_cli_extract_priors_error_names_file(cli_case: tuple[Path, Path], contents: str) -> None:
+def test_cli_extract_priors_error_names_file(
+    cli_case: tuple[Path, Path], contents: str, clean_refusal: bool
+) -> None:
     db_path, _ = cli_case
     prepare_cli_store(db_path)
     priors_path = Path("config/priors.yaml")
@@ -1524,7 +1568,9 @@ def test_cli_extract_priors_error_names_file(cli_case: tuple[Path, Path], conten
     result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
 
     assert result.exit_code == 1, result.output
-    assert priors_path.as_posix() in result.output
+    if clean_refusal:
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert priors_path.as_posix() in result.output.replace("\\", "/")
 
 
 def test_cli_extract_refuses_store_without_until(cli_case: tuple[Path, Path]) -> None:
