@@ -922,3 +922,136 @@ def test_cli_world_render_reports_failures(
         assert re.search(r"avoid|Alex", result.output, re.IGNORECASE)
     else:
         assert re.search(r"cassette|no cassette", result.output, re.IGNORECASE)
+
+
+def test_render_requires_anchor_when_manifest_has_human_entries(tmp_path: Path) -> None:
+    world = small_world()
+    human = world.events[0]
+    anchor_row = anchor_event(world, human)
+    manifest = Manifest(
+        threads={
+            human.id: ThreadRef(
+                channel_id=anchor_row.channel_id,
+                thread_ts=anchor_row.thread_ts,
+                authored="human",
+            )
+        }
+    )
+    anchor = tmp_path / "missing-anchor.jsonl"
+    events_out = tmp_path / "events.jsonl"
+    manifest_out = tmp_path / "manifest.json"
+    llm = replay_llm(tmp_path, world, manifest)
+
+    with pytest.raises(ValueError, match=re.escape(str(anchor))):
+        render_world(world, llm, anchor, manifest, EMPTY_AVOID, events_out, manifest_out)
+
+    assert not events_out.exists()
+    assert not manifest_out.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("day_offset", 10_000_000), ("minutes_after_start", 10**15)],
+)
+def test_render_rejects_out_of_range_model_offsets_without_writes(
+    tmp_path: Path, field: str, value: int
+) -> None:
+    data = world_data()
+    data["events"] = [data["events"][1]]
+    world = World.model_validate(data)
+    event = world.events[0]
+    messages = deepcopy(rendered_messages(event))
+    messages[0][field] = value
+    manifest = Manifest(threads={})
+    llm = replay_llm(tmp_path, world, manifest, overrides={event.id: messages})
+    request = request_for(world, event, EMPTY_AVOID)
+    events_out = tmp_path / "events.jsonl"
+    manifest_out = tmp_path / "manifest.json"
+    events_out.write_bytes(b"unchanged events")
+    manifest_out.write_bytes(b"unchanged manifest")
+
+    with pytest.raises(RenderError) as excinfo:
+        render_world(
+            world,
+            llm,
+            tmp_path / "missing-anchor.jsonl",
+            manifest,
+            EMPTY_AVOID,
+            events_out,
+            manifest_out,
+        )
+
+    message = str(excinfo.value)
+    assert event.id in message
+    assert re.search(r"offset|range|timestamp|date", message, re.IGNORECASE)
+    assert request_key(request) in message
+    assert events_out.read_bytes() == b"unchanged events"
+    assert manifest_out.read_bytes() == b"unchanged manifest"
+
+
+def test_render_rejects_messages_that_move_backwards_in_model_order(tmp_path: Path) -> None:
+    data = world_data()
+    data["events"] = [data["events"][1]]
+    world = World.model_validate(data)
+    event = world.events[0]
+    messages = deepcopy(rendered_messages(event))
+    messages[1]["minutes_after_start"] = 10
+    messages[2]["minutes_after_start"] = 5
+    manifest = Manifest(threads={})
+    llm = replay_llm(tmp_path, world, manifest, overrides={event.id: messages})
+    events_out = tmp_path / "events.jsonl"
+    manifest_out = tmp_path / "manifest.json"
+
+    with pytest.raises(RenderError, match=event.id):
+        render_world(
+            world,
+            llm,
+            tmp_path / "missing-anchor.jsonl",
+            manifest,
+            EMPTY_AVOID,
+            events_out,
+            manifest_out,
+        )
+
+    assert not events_out.exists()
+    assert not manifest_out.exists()
+
+
+def test_render_request_uses_the_world_description_without_repeating_program() -> None:
+    data = world_data()
+    data["description"] = "A compact autonomous warehouse mover."
+    data["project"]["name"] = data["program"]
+    world = World.model_validate(data)
+
+    prompt = request_for(world, world.events[1], EMPTY_AVOID).messages[0].content
+
+    assert data["description"] in prompt
+    assert f"{data['program']}. {data['program']}." not in prompt
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "invalid_content"),
+    [
+        (
+            Path("data/world/small/manifest.json"),
+            '{"threads": {}, "unexpected": true}\n',
+        ),
+        (
+            Path("data/world/avoid-names.yaml"),
+            "names: []\nidentifiers: []\nphrases: []\nunexpected: true\n",
+        ),
+    ],
+)
+def test_cli_world_render_names_invalid_input_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: Path,
+    invalid_content: str,
+) -> None:
+    prepare_cli_world(tmp_path, monkeypatch, None)
+    relative_path.write_text(invalid_content, encoding="utf-8", newline="\n")
+
+    result = runner.invoke(app, ["world", "render", "--world", "small"])
+
+    assert result.exit_code == 1, result.output
+    assert str(relative_path) in result.output
