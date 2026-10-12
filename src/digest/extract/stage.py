@@ -53,7 +53,7 @@ def run_extract(
     zone: ZoneInfo,
     channel_purposes: Mapping[str, str],
 ) -> ExtractReport:
-    _refuse_other_prompt_version(store)
+    refuse_other_prompt_version(store)
     day = as_of.astimezone(zone).date()
     # The prompt lists the tasks of gates on or after the day; a link may name only those.
     tasks = {task.id: task for gate in project.gates if gate.date >= day for task in gate.checklist}
@@ -119,7 +119,7 @@ def run_extract(
     )
 
 
-def _refuse_other_prompt_version(store: Store) -> None:
+def refuse_other_prompt_version(store: Store) -> None:
     """Refuse a store tied to another prompt version."""
     stored = store.get_meta("extract_prompt_version")
     if stored is not None and stored != EXTRACT_PROMPT_VERSION:

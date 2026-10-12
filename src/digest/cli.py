@@ -14,7 +14,7 @@ import yaml
 from pydantic import ValidationError
 
 from digest import __version__
-from digest.extract.stage import ExtractReport, run_extract
+from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
 from digest.llm.cassette import CassetteMiss
 from digest.llm.client import from_settings
@@ -75,7 +75,8 @@ def extract(
 ) -> None:
     """Triage and extract pending thread deltas, one working day at a time, up to the store's day.
 
-    A run starts at the day after the meta key `extract_until` and records that key after each day.
+    A run starts at the day after the meta key `extract_until`. After a day with no failed
+    thread, the run sets that key to the day. A failed thread stays pending for the next day.
     """
     settings = Settings()
     path = db or settings.db or Path("data") / f"{world or settings.world}.sqlite"
@@ -119,6 +120,7 @@ def extract(
             drops=dict.fromkeys(DROP_FIELDS, 0),
         )
         try:
+            refuse_other_prompt_version(store)
             llm = from_settings(settings)
             for day in range(1, loaded.days + 1):
                 today = loaded.date_of(day)
@@ -131,7 +133,8 @@ def extract(
                     store, llm, glossary, loaded.project, priors, as_of, zone, purposes
                 )
                 total = total.plus(report)
-                store.set_meta("extract_until", today.isoformat())
+                if report.failed == 0:
+                    store.set_meta("extract_until", today.isoformat())
         # CassetteMiss: replay found no recording. ValueError: a missing API key, a store of
         # another prompt version or a malformed `extract_until`. OSError: no model ids file.
         except (CassetteMiss, ValueError, OSError) as error:
