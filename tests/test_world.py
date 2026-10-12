@@ -638,9 +638,11 @@ def test_bundled_world_pins_private_channel_and_asks() -> None:
     assert safety.ask is not None
     assert safety.ask.of == "U0FW01"
     assert safety.ask.answered_day is None
+    assert safety.must_see_for == ("U0FW01",)
     assert po.ask is not None
     assert po.ask.of == "U0SC01"
     assert po.ask.answered_day == 5
+    assert po.must_see_for == ("U0SC01",)
     assert events["LEADS-1"].channel == leads.id
     assert events["LEADS-1"].claims == ()
     for event in (safety, po, events["LEADS-1"]):
