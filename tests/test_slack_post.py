@@ -294,6 +294,7 @@ def prepare_post(
     (cassettes / "unused.json").write_text("{}", encoding="utf-8")
     monkeypatch.chdir(ROOT)
     monkeypatch.setenv("DIGEST_CASSETTES", str(cassettes))
+    monkeypatch.setattr(cli, "_env_value", lambda key: None)
     monkeypatch.setattr(cli, "_webhook_url", lambda: webhook_url)
     monkeypatch.setattr(cli, "_extract_days", extract)
     monkeypatch.setattr("digest.daily.render.detect_absences", lambda *args, **kwargs: [])
@@ -315,10 +316,11 @@ def prepare_dm(
 ) -> FakeWebhookClient:
     webhook_client = FakeWebhookClient()
     prepare_post(tmp_path, monkeypatch, webhook_client, extract=extract)
-    if token is None:
-        monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
-    else:
-        monkeypatch.setenv("SLACK_BOT_TOKEN", token)
+    monkeypatch.setattr(
+        cli,
+        "_env_value",
+        lambda key: token if key == "SLACK_BOT_TOKEN" else None,
+    )
 
     def client_for(value: str) -> FakeSlackWebClient:
         assert value == token
