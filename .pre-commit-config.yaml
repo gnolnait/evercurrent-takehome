@@ -38,6 +38,18 @@ repos:
         language: system
         pass_filenames: false
         files: ^(AGENTS|CLAUDE)\.md$
+      - id: no-secrets
+        name: no project tokens in staged files
+        entry: uv run python tools/check_secrets.py
+        language: system
+        types: [text]
+      - id: pr-not-merged
+        name: the branch's PR has not merged already
+        entry: uv run python tools/check_pr_open.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       - id: ty
         name: ty (type check)
         entry: uv run ty check
