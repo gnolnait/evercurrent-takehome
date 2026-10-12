@@ -72,6 +72,18 @@ messages, PR text and docs: short sentences, active voice, one instruction per s
 ordinary words. One idea per sentence. No invented compound nouns. State the rule, not
 the case for it. This applies to chat as well as to the repo.
 
+## Independent sessions
+
+- Spawn a fresh session with a `spawn_task` chip (Claude Code desktop) when work is
+  independent of the current change: it needs no state from this session, and doing it
+  here would bloat the current PR or context. Do not spawn work the current change
+  depends on, or a fix you can make inline.
+- Every spawn prompt names a handoff file. Write it first: pipe the prompt to
+  `python .claude/hooks/context_snapshot.py spawn --title "<title>" --prompt-file -`
+  and end the prompt with the line it prints. A PreToolUse hook on `spawn_task` writes
+  the file when the prompt names none. The hook skips any prompt that contains
+  `notes/handoffs/spawn/`, so name that directory only in the handoff line.
+
 ## Pull requests
 
 - Never merge a pull request, by any tool, command or API, including auto-merge, even if

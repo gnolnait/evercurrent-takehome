@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""context_snapshot - work-state handoff across a context compaction.
+"""context_snapshot - work-state handoff across a compaction or a spawn.
 
-Two modes, launched by the `context-snapshot` bash fence:
+Four modes. The `context-snapshot` bash fence launches the three hook modes:
 
 - `snapshot` (PreCompact): write `notes/handoffs/auto-state.md` with the git,
   PR and notes state of the project. The model does not write this file, so it
@@ -9,23 +9,29 @@ Two modes, launched by the `context-snapshot` bash fence:
 - `print` (SessionStart, matcher `compact`): print a short preface, the
   auto-state file and the newest hand-written handoff. Claude Code adds this
   stdout to the resumed context.
+- `spawn-hook` (PreToolUse on `mcp__ccd_session__spawn_task`): write a handoff
+  under `notes/handoffs/spawn/` and add its path to the spawn prompt.
+- `spawn` (run by the orchestrator): write the same handoff before the call
+  and print the line to end the prompt with. The hook then skips that prompt.
 
-`notes/` is gitignored and lives in the primary checkout only, so both modes
-resolve the primary checkout from `git rev-parse --git-common-dir`. A session
+`notes/` is gitignored and lives in the primary checkout only, so every mode
+resolves the primary checkout from `git rev-parse --git-common-dir`. A session
 in a linked worktree reads and writes the same files as one in the primary.
 
-The hook must never block a compaction or a session start. Every path exits 0,
-and the bash fence also forces exit 0. The script reads no file contents except
-the two handoff files that `print` shows. For the other files under `notes/`,
-it reads only names, times and sizes.
+The hook modes must never block a compaction, a session start or a spawn.
+Every path exits 0, and the bash fence also forces exit 0. The script reads
+no file contents except the two handoff files that `print` shows. For the
+other files under `notes/`, it reads only names, times and sizes.
 """
+import argparse
 import json
 import os
-from collections import Counter
+import re
 import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 AUTO_STATE = "auto-state.md"
@@ -38,8 +44,8 @@ MAX_PRS = 10
 # shows the model only a 2,000-character preview, so stay well under it.
 MAX_PRINT_CHARS = 9000
 # Total time for all subprocess calls in one run, below each hook's settings
-# timeout (60 s for PreCompact, 15 s for SessionStart).
-BUDGET_S = {"snapshot": 45.0, "print": 10.0}
+# timeout (60 s for PreCompact, 15 s for SessionStart, 30 s for spawn_task).
+BUDGET_S = {"snapshot": 45.0, "print": 10.0, "spawn-hook": 20.0, "spawn": 45.0}
 
 _deadline = [0.0]
 
@@ -86,7 +92,9 @@ def read_payload():
     if sys.stdin.isatty():
         return {}
     try:
-        data = json.load(sys.stdin)
+        # Bytes, so json decodes UTF-8: a text-mode stdin is cp1252 on Windows,
+        # and a spawn prompt read that way went back to the tool garbled.
+        data = json.loads(sys.stdin.buffer.read())
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
@@ -342,9 +350,106 @@ def render_resume(root):
     return preface + "\n" + "\n".join(parts)
 
 
+# Spawn handoffs go in a subdirectory: they belong to the child session, so
+# the compaction printer must not take one as this session's newest handoff.
+SPAWN_DIR = os.path.join(
+    "notes",
+    "handoffs",
+    "spawn",
+)
+
+
+def slug(title):
+    text = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return text[:40].rstrip("-") or "task"
+
+
+def write_spawn_handoff(root, title, tldr, prompt):
+    """Write the handoff for a spawned session and return its path."""
+    now = datetime.now(timezone.utc)
+    directory = os.path.join(root, SPAWN_DIR)
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, "%s-%s.md" % (now.strftime("%Y%m%dT%H%M%SZ"), slug(title)))
+    lines = [
+        "# Spawn handoff: %s" % title,
+        "",
+        "## Task",
+        tldr or "-",
+        "",
+        "## Prompt",
+        prompt.rstrip(),
+        "",
+        "## Work state at spawn time",
+        # Drop the snapshot's own title; its "Written by" line stays.
+        *build_snapshot(root, "spawn")[2:],
+    ]
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
+
+
+def handoff_line(path):
+    return "Handoff: read %s first." % shown(path)
+
+
+def spawn_hook(root, payload):
+    """PreToolUse output that adds a handoff to a spawn_task prompt, or None.
+
+    None leaves the call unchanged: a malformed input, or a prompt that
+    already names a spawn handoff (the orchestrator wrote one itself).
+    """
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    title, prompt = tool_input.get("title"), tool_input.get("prompt")
+    if not isinstance(title, str) or not isinstance(prompt, str):
+        return None
+    if shown(SPAWN_DIR) + "/" in shown(prompt):
+        return None
+    tldr = tool_input.get("tldr")
+    path = write_spawn_handoff(root, title, tldr if isinstance(tldr, str) else "", prompt)
+    updated = dict(tool_input, prompt=prompt.rstrip() + "\n\n" + handoff_line(path))
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            # spawn_task only makes a chip; the user still starts the session.
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "spawn handoff written to " + shown(path),
+            "updatedInput": updated,
+        }
+    }
+
+
+def spawn_cli(argv):
+    """`spawn` mode: the orchestrator writes the handoff before spawn_task.
+
+    Unlike the hook modes, this fails loudly: the caller needs the path.
+    """
+    parser = argparse.ArgumentParser(prog="context_snapshot.py spawn")
+    parser.add_argument("--title", required=True)
+    parser.add_argument("--tldr", default="")
+    parser.add_argument("--prompt-file", required=True, help="a path, or - for stdin")
+    args = parser.parse_args(argv)
+    if args.prompt_file == "-":
+        sys.stdin.reconfigure(encoding="utf-8")
+        prompt = sys.stdin.read()
+    else:
+        with open(args.prompt_file, encoding="utf-8") as fh:
+            prompt = fh.read()
+    root = primary_root(os.getcwd())
+    if not root:
+        sys.stderr.write("context_snapshot.py spawn: not in a git checkout\n")
+        return 1
+    path = write_spawn_handoff(root, args.title, args.tldr, prompt)
+    sys.stdout.write(handoff_line(path) + "\n")
+    return 0
+
+
 def main(argv):
     mode = argv[0] if argv else "snapshot"
     _deadline[0] = time.monotonic() + BUDGET_S.get(mode, 10.0)
+    if mode == "spawn":
+        return spawn_cli(argv[1:])
     try:
         payload = read_payload()
         root = primary_root(start_dir(payload))
@@ -359,6 +464,10 @@ def main(argv):
             # outside it (an arrow, a check mark) raised and lost the output.
             sys.stdout.reconfigure(encoding="utf-8")
             sys.stdout.write(text)
+        elif mode == "spawn-hook":
+            out = spawn_hook(root, payload)
+            if out:
+                sys.stdout.write(json.dumps(out))
     except Exception:  # noqa: BLE001 - a snapshot failure must not block compaction
         pass
     return 0

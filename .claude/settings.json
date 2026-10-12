@@ -28,6 +28,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "mcp__ccd_session__spawn_task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/context-snapshot\"; if [ -x \"$f\" ]; then \"$f\" spawn-hook || :; fi; exit 0",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
