@@ -530,7 +530,9 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   the Haiku-class model through the gateway (core) against Jev (TypeSafe's native API,
   needs its key) and Laya (local, Linux) on the same inputs.
 
-Online (design only in v1): open rate, thumbs, mute rate, time-to-first-action.
+Online (design only in v1): App Home opens (`app_home_opened`), clicks on URL buttons,
+thumbs, mute rate, replies and time-to-first-action. A bot cannot see whether a user
+read its DM, so open rate is not a metric.
 
 ## 8. Acceptance criteria
 

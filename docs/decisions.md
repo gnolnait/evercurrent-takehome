@@ -142,6 +142,15 @@ part carries the run id in message metadata so retries post only missing parts; 
 invalid tokens stop retries and mark the install inactive; auth failures, and a run with
 scheduled recipients that delivered nothing, raise an admin alert.
 
+Amended 2026-10-12 (design): the event listener writes the raw event to the store before
+it acknowledges. Bolt acknowledges before the listener runs, so a crash after the ack
+loses the event, and Slack does not send it again. The reconciliation read runs before
+each digest build, not once a night, and reads `conversations.replies` for threads with
+recent activity, because `conversations.history` returns top-level messages only. A
+commercial app outside the Marketplace gets one history request per minute with 15
+messages, so a product deployment needs a Marketplace listing and the HTTP Events API;
+a Socket Mode app cannot be listed.
+
 ## D8. Web preview: server-rendered, no frontend build
 
 Decision. FastAPI plus Jinja2 plus htmx. Pages: digest for a user and date, item detail
@@ -199,6 +208,11 @@ extracted.
 
 Why. If the same family writes the chat and reads it back, extraction scores measure
 the generator's legibility, not the system. A researcher reviewer will look for this.
+
+Amended 2026-10-12: the judge's model family differs from both the extractor and the
+corpus renderer. A judge from the renderer's family grades text its own family wrote.
+`config/models.yaml` maps `judge` and `render` to the same model; the judge moves to a
+third family before its first run.
 
 ## D13. Testing the two external boundaries without network
 
@@ -420,6 +434,14 @@ one lookup. Contradictions routed to a person stay honest states in the ledger.
 
 Would change it. More than two edge kinds, or queries that walk more than one hop:
 then the `relations` table in later.md.
+
+Amended 2026-10-12: the trigger is met on paper, because the owned-set rule and the
+blast radius walk more than one hop. When edges are built, they go in the `relations`
+table and one recursive query with a hop limit walks them; a graph database is not
+needed at this scale. Each edge records its source: a system of record (PLM, the
+tracker, the gate plan) or chat extraction. Only system-of-record edges at one hop
+reach the must-see lane. A chat-extracted edge, or a second hop, goes to the ranked
+lane until its precision is measured, because errors multiply per hop.
 
 ## D23. Evaluation gates
 
