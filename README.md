@@ -12,20 +12,21 @@ selects and renders a different digest for each reader.
 
 No API key is needed. The demo replays recorded model calls (cassettes) for a synthetic
 ten-day robotics program, Kestrel K2, and prints three digests for day 6: a mechanical
-engineer, a supply chain lead and an engineering manager.
+engineer, a supply chain engineer and an engineering manager.
 
 ```bash
 uv sync --all-extras --dev
 uv run digest demo
 ```
 
-The run takes a few seconds. A digest shows the sections that have lines (Needs you,
+The run takes about 5 s on a laptop; a test holds it under 60 s. A digest shows the sections that have lines (Needs you,
 Not happened, Decisions, Risks, FYI), with a source link for every line. The last line
 gives the pairwise item overlap of the three digests. `--day N` picks another world day
 (1 to 10).
 
-On Windows, clone into a short path such as `C:\dc`: one dependency installs a file
-whose full path can pass the 260-character limit, and the import then fails.
+On Windows, clone into a short path such as `C:\dc`. The `anthropic` package installs
+`anthropic/types/cache_miss_previous_message_not_found.py`; under a deep folder its full
+path passes the 260-character limit, the file is not written, and the import fails.
 
 ## What a reader sees, and why
 
@@ -35,8 +36,10 @@ whose full path can pass the 260-character limit, and the import then fails.
   entity they own, a schedule change on a gate they own, a checklist task of their role
   (or any, for the engineering manager) that went silent, and an ask they made or
   received that has no reply.
-- Other lines are ranked by importance, the role's interest in the item type, and the
-  reader's ownership, above a threshold.
+- Other lines are ranked by importance (type and severity) times the role's interest in
+  the item type times personal relevance (1.0 for an owned entity, 0.8 for the reader's
+  role, else 0.4). A line needs a score of at least 0.15, and each section shows at most
+  5 ranked lines (3 for Not happened).
 
 ## How well extraction works
 
@@ -53,8 +56,8 @@ name carries the world's last day. Every rate is given with its n.
 | Citation validity | 1.0 | 73 |
 
 Claim values match exactly on revision, gate date, quantity and owner; other attributes
-match on entity and attribute, and an advisory row reports how many of those also agree
-on value. The corpus is small and synthetic: 132 messages in 35 threads.
+match on entity and attribute, and an advisory row reports the share of those that also
+agree on value. The corpus is small and synthetic: 132 messages in 35 threads.
 
 ## Scope
 
