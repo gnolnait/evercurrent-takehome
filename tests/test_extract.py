@@ -909,8 +909,8 @@ def test_verify_new_item_sets_ids_times_permalink_authority_and_nulls() -> None:
         {},
     )
     item, second_item = result.items
-    assert item.item_id == f"{delta_row.thread_id}#{delta_row.last_ts}#0"
-    assert second_item.item_id == f"{delta_row.thread_id}#{delta_row.last_ts}#1"
+    assert item.item_id == f"{delta_row.thread_id}#{ROOT}#0"
+    assert second_item.item_id == f"{delta_row.thread_id}#{ROOT}#1"
     assert delta_row.last_ts != max(entry.message_ts for entry in item.evidence)
     assert item.entities == ("PN-31010",)
     assert item.owner is None and item.due is None
@@ -924,6 +924,103 @@ def test_verify_new_item_sets_ids_times_permalink_authority_and_nulls() -> None:
     assert [claim.entity for claim in item.claims] == ["PN-31010", "PN-31010"]
     assert [claim.authority for claim in item.claims] == ["owner_stated", "hearsay"]
     assert result.drops == dict.fromkeys(DROP_FIELDS, 0)
+
+
+@pytest.mark.parametrize("evidence_order", [(REPLY, ROOT), (ROOT, REPLY)])
+def test_verify_stable_id_uses_earliest_evidence(evidence_order: tuple[str, ...]) -> None:
+    delta_row, citable, tasks = verify_context()
+    raw = extracted_item(
+        evidence=[
+            ExtractedEvidence(message_ts=stamp, quote=citable[stamp].text)
+            for stamp in evidence_order
+        ]
+    )
+
+    result = verify(
+        Extraction(rationale="Anchor to the earliest citation.", items=[raw]),
+        delta_row,
+        citable,
+        glossary(),
+        tasks,
+        {},
+    )
+
+    assert [item.item_id for item in result.items] == [f"{delta_row.thread_id}#{ROOT}#0"]
+
+
+def test_verify_stable_id_survives_delta_growth() -> None:
+    delta_row, citable, tasks = verify_context()
+    root = citable[ROOT]
+    extraction = Extraction(rationale="The same root fact.", items=[extracted_item()])
+
+    root_only = verify(extraction, delta(root, root=root), {ROOT: root}, glossary(), tasks, {})
+    with_reply = verify(extraction, delta_row, citable, glossary(), tasks, {})
+
+    assert (
+        [item.item_id for item in root_only.items]
+        == [item.item_id for item in with_reply.items]
+        == [f"{delta_row.thread_id}#{ROOT}#0"]
+    )
+
+
+def test_verify_stable_id_numbers_shared_anchor_after_update() -> None:
+    root = event()
+    delta_row = delta(root, root=root)
+    old = stored_item()
+    extraction = Extraction(
+        rationale="An update does not consume a new id.",
+        items=[
+            extracted_item(item_id=old.item_id),
+            extracted_item(title="First new item"),
+            extracted_item(title="Second new item"),
+        ],
+    )
+
+    result = verify(extraction, delta_row, {ROOT: root}, glossary(), {}, {old.item_id: old})
+
+    assert [item.item_id for item in result.items if item.item_id != old.item_id] == [
+        f"{delta_row.thread_id}#{ROOT}#0",
+        f"{delta_row.thread_id}#{ROOT}#1",
+    ]
+
+
+@pytest.mark.parametrize(("occupied", "expected_k"), [((0,), 1), ((0, 1), 2), ((0, 2), 1)])
+def test_verify_stable_id_skips_existing_ids(occupied: tuple[int, ...], expected_k: int) -> None:
+    root = event()
+    delta_row = delta(root, root=root)
+    existing = {
+        item_id: stored_item(item_id=item_id)
+        for k in occupied
+        for item_id in [f"{delta_row.thread_id}#{ROOT}#{k}"]
+    }
+
+    result = verify(
+        Extraction(rationale="Keep existing ids reserved.", items=[extracted_item()]),
+        delta_row,
+        {ROOT: root},
+        glossary(),
+        {},
+        existing,
+    )
+
+    assert [item.item_id for item in result.items] == [f"{delta_row.thread_id}#{ROOT}#{expected_k}"]
+
+
+@pytest.mark.parametrize("item_id", ["I1", f"C1:{ROOT}#{LATER}#7"])
+def test_verify_stable_id_preserves_updated_id(item_id: str) -> None:
+    delta_row, citable, tasks = verify_context()
+    old = stored_item(item_id=item_id)
+
+    result = verify(
+        Extraction(rationale="Update the existing item.", items=[extracted_item(item_id=item_id)]),
+        delta_row,
+        citable,
+        glossary(),
+        tasks,
+        {item_id: old},
+    )
+
+    assert [item.item_id for item in result.items] == [item_id]
 
 
 def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> None:
