@@ -64,6 +64,10 @@ class ExtractionReport(Frozen):
     claims_extracted_matched: int
     claim_recall: float | None  # claims_found / claims_golden
     claim_precision: float | None  # claims_extracted_matched / claims_extracted
+    # Of the found golden claims on other attributes than DISCRIMINATING_ATTRIBUTES, the share
+    # whose thread has a claim with the same key and an equal normalized value (advisory).
+    claim_value_agreement: float | None
+    claim_value_agreement_n: int
     evidence_entries: int  # delivered evidence entries, the n of citation_validity
     entity_jaccard: float | None  # mean over matched items with golden entities
     entity_jaccard_n: int
@@ -125,6 +129,7 @@ def run_extraction_eval(
     paired = {item.item_id for item in pairs.values()}
     scored = [item for item in items if item.thread_id in golden_threads | distractor_threads]
     claims = _claim_counts(golden.items, by_thread)
+    agreeing, agreement_n = _value_agreement(golden.items, by_thread)
     jaccard, jaccard_n, entities_golden, entities_found = _entity_counts(golden.items, pairs)
     kept = {event_id: any(row.kept for row in rows) for event_id, rows in decisions.items()}
     golden_keys = {
@@ -157,6 +162,8 @@ def run_extraction_eval(
         claims_extracted_matched=claims[3],
         claim_recall=_ratio(claims[1], claims[0]),
         claim_precision=_ratio(claims[3], claims[2]),
+        claim_value_agreement=_ratio(agreeing, agreement_n),
+        claim_value_agreement_n=agreement_n,
         evidence_entries=evidence_entries,
         entity_jaccard=jaccard,
         entity_jaccard_n=jaccard_n,
@@ -349,12 +356,16 @@ def _carries(item: Item, claim: GoldenClaim) -> bool:
 def _claim_key(claim: GoldenClaim | Claim) -> tuple[str, str, str | None]:
     """The match key: entity, attribute and, on a discriminating attribute, the value.
 
-    The value is normalized with `normalize_space` and lower case. On any other attribute
-    the value is None, so two claims on the same entity and attribute match.
+    The value is normalized with `_normalized`. On any other attribute the value is None,
+    so two claims on the same entity and attribute match.
     """
     if claim.attribute not in DISCRIMINATING_ATTRIBUTES:
         return (claim.entity, claim.attribute, None)
-    return (claim.entity, claim.attribute, normalize_space(claim.value).lower())
+    return (claim.entity, claim.attribute, _normalized(claim.value))
+
+
+def _normalized(value: str) -> str:
+    return normalize_space(value).lower()
 
 
 def _agrees(golden: GoldenItem, pairs: Mapping[str, Item]) -> bool:
@@ -435,6 +446,33 @@ def _claim_counts(
     ]
     matched = sum(1 for thread, claim in extracted if _claim_key(claim) in keys[thread])
     return len(golden_claims), found, len(extracted), matched
+
+
+def _value_agreement(
+    golden_items: Sequence[GoldenItem], by_thread: Mapping[str, list[Item]]
+) -> tuple[int, int]:
+    """Found golden claims on other attributes than DISCRIMINATING_ATTRIBUTES: agreeing, all.
+
+    A found claim agrees when a claim in its thread has the same entity, the same attribute
+    and an equal normalized value.
+    """
+    agreeing = total = 0
+    for golden in golden_items:
+        items = by_thread.get(_thread_of(golden), [])
+        for claim in golden.claims:
+            if claim.attribute in DISCRIMINATING_ATTRIBUTES or not any(
+                _carries(item, claim) for item in items
+            ):
+                continue
+            total += 1
+            value = (claim.entity, claim.attribute, _normalized(claim.value))
+            if any(
+                (own.entity, own.attribute, _normalized(own.value)) == value
+                for item in items
+                for own in item.claims
+            ):
+                agreeing += 1
+    return agreeing, total
 
 
 def _entity_counts(
@@ -556,6 +594,11 @@ def write_report(report: ExtractionReport, path: Path) -> None:
             [
                 ("claim recall", report.claim_recall, report.claims_golden),
                 ("claim precision", report.claim_precision, report.claims_extracted),
+                (
+                    "claim value agreement (non-discriminating) (advisory)",
+                    report.claim_value_agreement,
+                    report.claim_value_agreement_n,
+                ),
                 ("golden claims found", report.claims_found, ""),
                 ("extracted claims matched", report.claims_extracted_matched, ""),
                 ("entity jaccard", report.entity_jaccard, report.entity_jaccard_n),
