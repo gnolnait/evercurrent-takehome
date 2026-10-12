@@ -172,10 +172,11 @@ B6.1 `render_digest` writes, in order: a header line with the reader's name, rol
 the date; then each non-empty section with a title ("Needs you", "Not happened",
 "Decisions", "Risks", "FYI"); each line as `- <title> (<entity ids>) - owner <name>`,
 without the owner part when the item has no owner, and, indented below it, the summary, then `source: <permalink>` for each
-visible evidence entry; an absence line reads `- Not happened: <task> for <gate> - <N>
-working days silent, <consumed>/<buffer> buffer days used` or, for an ask,
-`- Not happened: <asker> asked <owner>, no reply for <N> working days`, each with its
-source link; a must-see line is marked `[must see]`. A day with no line renders one
+visible evidence entry; an absence line reads `- Not happened: <task text> (<owner role>) for <gate> - <N>
+working days silent, <consumed>/<buffer> buffer days used`, with the task text from the
+world's checklist, or, for an ask, `- Not happened: <asker> asked <owner>, no reply for
+<N> working days`; below an absence line come its summary (for an ask, what was asked)
+and its source link; a must-see line is marked `[must see]`. A day with no line renders one
 line saying there is nothing new for the reader. A footer line says how many items the
 visibility filter hid, when that is above zero.
 
@@ -183,14 +184,18 @@ B6.2 `build_digest` reads items with `store.items(as_of)` and absences with
 `detect_absences`, selects and renders. It refuses (ValueError naming the reason) a
 store without `meta.until`, with pending extract deltas, or whose `meta.until` is not the
 end of `day` in the world's zone: the store keeps only each item's latest version, so a
-digest for an earlier day needs a store replayed exactly to that day.
+digest for an earlier day needs a store replayed exactly to that day. The refusal for a
+store replayed past the day tells the operator to replay a new store (a fresh `--db`)
+to that day and extract it, since replay does not move back.
 
 B6.3 `digest run` prints `build_digest` and exits 0; it exits 1 with the reason on a
 refused store, an unknown user or a bot. `digest demo` exits 0, prints three digests,
 then one line with the realized pairwise item overlap of the three (SPEC A1): for each
 reader pair, the Jaccard index of the item ids their digests show, to two decimals. It
 reads no API key: it never constructs the settings object that loads keys from the
-environment, and it builds the model client in replay mode only. It never writes outside
+environment, and it builds the model client in replay mode only. Before any replay it checks
+that the cassette directory exists and holds cassettes, else it exits 1 naming the
+directory. It never writes outside
 a temporary directory and finishes in under 60 seconds on the bundled data. A missing
 cassette exits 1 with the `CassetteMiss` message; an extract run with a failed thread
 exits 1 naming the failed-thread count, before any digest is built. The golden-implied
