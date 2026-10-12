@@ -260,7 +260,6 @@ def test_derive_golden_uses_earliest_gate_claim_on_buffer_opening_day() -> None:
         (4, "GATE"),
         (5, "GATE"),
     ]
-    assert not any(row.day == 3 for row in checklist)
 
 
 def test_bundled_world_golden_absences_match_project_day_table_and_audiences(

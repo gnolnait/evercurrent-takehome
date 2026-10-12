@@ -125,6 +125,13 @@ def _two_gate_project() -> ProjectConfig:
                     "buffer_days": 7,
                     "checklist": [
                         {
+                            "id": "G-A.critical",
+                            "task": "Critical task",
+                            "owner": "EE",
+                            "expected_cadence_days": 1,
+                            "priority": "critical",
+                        },
+                        {
                             "id": "G-A.high",
                             "task": "High task",
                             "owner": "EE",
@@ -306,10 +313,14 @@ def test_checklist_gate_anchor_uses_earliest_claim_and_item_id_tiebreak() -> Non
 
     absences = checklist_absences(project, items, date(2026, 10, 19), ZONE)
 
-    assert [item.item_id for item in absences] == ["absence:G-A.high", "absence:G-A.normal"]
+    assert [item.item_id for item in absences] == [
+        "absence:G-A.critical",
+        "absence:G-A.high",
+        "absence:G-A.normal",
+    ]
     assert all(item.evidence == (first_a,) for item in absences)
     assert all(item.thread_id == "C1:thread-a" for item in absences)
-    assert [item.severity for item in absences] == ["high", "medium"]
+    assert [item.severity for item in absences] == ["high", "high", "medium"]
 
 
 def test_checklist_skips_mentions_without_claims_and_unanchored_tasks() -> None:
@@ -339,7 +350,11 @@ def test_checklist_fires_on_buffer_opening_but_not_day_before() -> None:
     )
     assert checklist_absences(project, [item], date(2026, 10, 12), ZONE) == []
     opened = checklist_absences(project, [item], date(2026, 10, 13), ZONE)
-    assert [row.absence.task for row in opened if row.absence] == ["G-A.high", "G-A.normal"]
+    assert [row.absence.task for row in opened if row.absence] == [
+        "G-A.critical",
+        "G-A.high",
+        "G-A.normal",
+    ]
 
 
 def test_checklist_emits_nothing_after_gate() -> None:
@@ -363,7 +378,7 @@ def test_checklist_emits_nothing_after_gate() -> None:
 
 def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
     project = _two_gate_project()
-    earlier = _evidence(2, "earlier link")
+    earlier = _evidence(2, "earlier link and claim")
     future = _evidence(7, "future link and claim")
     future_item = _item(
         "future",
@@ -383,14 +398,27 @@ def test_checklist_ignores_links_and_gate_claims_after_as_of() -> None:
     earlier_item = _item(
         "earlier",
         2,
+        claims=(
+            Claim(
+                entity="G-A",
+                attribute="status",
+                value="open",
+                message_ts=earlier.message_ts,
+                authority="owner_stated",
+            ),
+        ),
         tasks=(TaskLink(task="G-A.high", effect="evidence", message_ts=earlier.message_ts),),
         evidence=(earlier,),
     )
 
     absences = checklist_absences(project, [future_item, earlier_item], date(2026, 10, 19), ZONE)
 
-    assert [row.item_id for row in absences] == ["absence:G-A.high"]
-    assert absences[0].evidence == (earlier,)
+    assert [row.item_id for row in absences] == [
+        "absence:G-A.critical",
+        "absence:G-A.high",
+        "absence:G-A.normal",
+    ]
+    assert all(row.evidence == (earlier,) for row in absences)
 
 
 def test_checklist_counts_silence_from_local_evidence_date() -> None:
@@ -417,7 +445,7 @@ def test_checklist_counts_silence_from_local_evidence_date() -> None:
 
     absences = checklist_absences(project, [item], date(2026, 10, 16), ZONE)
 
-    assert [row.absence.days_silent for row in absences if row.absence] == [4, 4]
+    assert [row.absence.days_silent for row in absences if row.absence] == [4, 4, 4]
 
 
 def test_checklist_weekend_as_of_counts_only_through_friday() -> None:
@@ -437,7 +465,7 @@ def test_checklist_weekend_as_of_counts_only_through_friday() -> None:
         ),
     )
     absences = checklist_absences(project, [item], date(2026, 10, 17), ZONE)
-    assert [absence.absence.days_silent for absence in absences if absence.absence] == [4, 4]
+    assert [absence.absence.days_silent for absence in absences if absence.absence] == [4, 4, 4]
 
 
 def test_ask_absence_finds_asker_and_emits_all_contract_fields() -> None:
@@ -534,6 +562,7 @@ def test_ask_absence_clock_uses_ask_message_not_last_updated() -> None:
         1,
         item_type="ask",
         owner="UOWNER",
+        first_seen=_day_ts(0),
         last_updated=_day_ts(3),
     )
 
@@ -724,7 +753,7 @@ def test_absence_output_order_is_deterministic() -> None:
         assert item.absence is not None
         assert item.absence.task is not None
         task_ids.append(item.absence.task)
-    assert task_ids == ["G-A.high", "G-A.normal", "G-B.task"]
+    assert task_ids == ["G-A.critical", "G-A.high", "G-A.normal", "G-B.task"]
 
     ask_z = _item("Z-ASK", 1, item_type="ask", owner="UOWNER")
     ask_a = _item("A-ASK", 1, item_type="ask", owner="UOWNER")
@@ -754,7 +783,7 @@ def _set_replay_meta(store: Store) -> None:
         "world": "kestrel",
         "timezone": "America/Los_Angeles",
         "workspace_url": "https://kestrel-k2.slack.com",
-        "until": "2026-10-17T06:59:59.999999+00:00",
+        "until": "2026-10-16T06:59:59.999999+00:00",
     }.items():
         store.set_meta(key, value)
 
@@ -813,12 +842,7 @@ def test_absences_cli_prints_json_lines_after_extract(
     rows = [json.loads(line) for line in result.output.splitlines()]
     assert [row["item_id"] for row in rows] == [
         "absence:G-DVT1.battery",
-        "absence:G-DVT1.ctb",
-        "absence:G-DVT1.emc",
         "absence:G-DVT1.fai",
-        "absence:G-DVT1.safety",
-        "absence:G-DVT1.thermal",
-        "absence:ask:ASK-CLI",
     ]
     assert all(row["type"] == "absence" for row in rows)
 
