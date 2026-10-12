@@ -791,8 +791,8 @@ def _set_replay_meta(store: Store) -> None:
 def _write_ready_cli_store(store: Store) -> None:
     _set_replay_meta(store)
     anchor = _evidence(1, "schedule")
-    ask = _item("ASK-CLI", 2, item_type="ask", owner="U0FW01", affected_roles=("FW", "EM"))
-    ask_event = _event(ask, "U0EM01", 2)
+    ask = _item("ASK-CLI", 1, item_type="ask", owner="U0FW01", affected_roles=("FW", "EM"))
+    ask_event = _event(ask, "U0EM01", 1)
     store.upsert_events([ask_event])
     store.record_stage_run(
         StageRun(
@@ -842,7 +842,11 @@ def test_absences_cli_prints_json_lines_after_extract(
     rows = [json.loads(line) for line in result.output.splitlines()]
     assert [row["item_id"] for row in rows] == [
         "absence:G-DVT1.battery",
+        "absence:G-DVT1.ctb",
+        "absence:G-DVT1.emc",
         "absence:G-DVT1.fai",
+        "absence:G-DVT1.thermal",
+        "absence:ask:ASK-CLI",
     ]
     assert all(row["type"] == "absence" for row in rows)
 
