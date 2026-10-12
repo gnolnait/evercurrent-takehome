@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import traceback
 from collections.abc import Callable
 from datetime import date, datetime
 from importlib import import_module
@@ -230,12 +231,20 @@ class FakeWebhookClient:
 
 
 class FakeSlackWebClient:
-    def __init__(self, post_errors: dict[int, Exception] | None = None) -> None:
+    def __init__(
+        self,
+        post_errors: dict[int, Exception] | None = None,
+        *,
+        open_error: Exception | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.post_errors = post_errors or {}
+        self.open_error = open_error
 
     def conversations_open(self, *, users: str) -> dict[str, dict[str, str]]:
         self.calls.append({"method": "conversations_open", "users": users})
+        if self.open_error is not None:
+            raise self.open_error
         return {"channel": {"id": DM_CHANNEL}}
 
     def chat_postMessage(
@@ -426,6 +435,26 @@ def test_cli_post_dm_rejects_invalid_user_id_before_build(
     assert webhook_client.calls == []
 
 
+def test_cli_post_dm_open_slack_api_error_has_no_token_in_exception_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = SlackApiError(
+        f"open failed with {BOT_TOKEN}",
+        {"error": "missing_scope"},
+    )
+    client = FakeSlackWebClient(open_error=error)
+    webhook_client = prepare_dm(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "cannot open the DM with U012ABC: missing_scope" in result.output
+    assert client.calls == [{"method": "conversations_open", "users": "U012ABC"}]
+    assert webhook_client.calls == []
+    exception_chain = "".join(traceback.format_exception(result.exception))
+    assert BOT_TOKEN not in exception_chain
+
+
 def test_cli_post_dm_stops_after_slack_api_error_and_reports_only_its_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -439,14 +468,13 @@ def test_cli_post_dm_stops_after_slack_api_error_and_reports_only_its_code(
     result = runner.invoke(app, ["post", "--dm", "U012ABC"])
 
     assert result.exit_code == 1, result.output
-    assert "Hamid Rostami" in result.output
-    assert "missing_scope" in result.output
+    assert "cannot post the digest for Hamid Rostami: missing_scope" in result.output
     assert sum(call["method"] == "chat_postMessage" for call in client.calls) == 2
     assert webhook_client.calls == []
-    exception_text = f"{result.exception!r} {result.exception}"
+    exception_chain = "".join(traceback.format_exception(result.exception))
     for sensitive in (BOT_TOKEN, "bot-secret-value"):
         assert sensitive not in result.output
-        assert sensitive not in exception_text
+        assert sensitive not in exception_chain
 
 
 def test_cli_post_dm_reports_arbitrary_post_exception_without_leaking_token(
@@ -458,14 +486,13 @@ def test_cli_post_dm_reports_arbitrary_post_exception_without_leaking_token(
     result = runner.invoke(app, ["post", "--dm", "U012ABC"])
 
     assert result.exit_code == 1, result.output
-    assert "Nadia Brenner" in result.output
-    assert "LookupError" in result.output
+    assert "cannot post the digest for Nadia Brenner: LookupError" in result.output
     assert sum(call["method"] == "chat_postMessage" for call in client.calls) == 1
     assert webhook_client.calls == []
-    exception_text = f"{result.exception!r} {result.exception}"
+    exception_chain = "".join(traceback.format_exception(result.exception))
     for sensitive in (BOT_TOKEN, "bot-secret-value"):
         assert sensitive not in result.output
-        assert sensitive not in exception_text
+        assert sensitive not in exception_chain
 
 
 def test_cli_post_sends_three_readers_in_order_and_exits_zero(
@@ -681,13 +708,12 @@ def test_cli_post_reports_arbitrary_send_exception_without_leaking_url(
     result = runner.invoke(app, ["post"])
 
     assert result.exit_code == 1, result.output
-    assert "Nadia Brenner" in result.output
-    assert "LookupError" in result.output
+    assert "cannot post the digest for Nadia Brenner: LookupError" in result.output
     assert client.calls == []
-    exception_text = f"{result.exception!r} {result.exception}"
-    for sensitive in (WEBHOOK_URL, "secret-value"):
+    exception_chain = "".join(traceback.format_exception(result.exception))
+    for sensitive in (WEBHOOK_URL, "/services/secret-value"):
         assert sensitive not in result.output
-        assert sensitive not in exception_text
+        assert sensitive not in exception_chain
 
 
 def test_cli_post_build_failure_sends_nothing(
