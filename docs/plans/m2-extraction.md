@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.8, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.9, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -67,12 +67,11 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
   persists `Item`; extraction writes it; the absence detector reads and produces it;
   the eval compares it. `Glossary` is built by `World.glossary()` and consumed by
   extraction, so neither package imports the other.
-- Prompt versions. Each prompt module exports its version constants
-  (`EXTRACT_PROMPT_VERSION` and `TRIAGE_PROMPT_VERSION`, `RENDER_PROMPT_VERSION`), short
-  strings such as `"m2.1"`. A change to prompt text bumps it. `stage_runs` keys on `EXTRACT_PROMPT_VERSION`,
-  and a store holds one such version, so a bump runs on a fresh store (B1.6); the
-  `triage` table keys on `TRIAGE_PROMPT_VERSION`, which re-triages nothing on its own
-  (B1.6). The cassette key already
+- Prompt versions. Each prompt module exports one version constant
+  (`EXTRACT_PROMPT_VERSION` for the triage and extraction prompts together,
+  `RENDER_PROMPT_VERSION`), a short string such as `"m2.1"`. A change to either prompt's
+  text bumps it. `stage_runs` and the `triage` table key on `EXTRACT_PROMPT_VERSION`, and
+  a store holds one such version, so a bump runs on a fresh store (B1.6). The cassette key already
   carries the prompt text (M1 B2.1), so a bump also records fresh cassettes.
 - Stage-run model column. `stage_runs.model` and `triage.model` hold the logical model
   name (`extract`, `classify`), not the concrete id, so a store built from gateway
@@ -318,8 +317,7 @@ class TriageOutput(Frozen):
 `digest/extract/prompts.py`
 
 ```python
-EXTRACT_PROMPT_VERSION = "m2.1"
-TRIAGE_PROMPT_VERSION = "m2.1"
+EXTRACT_PROMPT_VERSION = "m2.1"  # covers the triage and the extraction prompt
 EXTRACT_SYSTEM: str                # static; rules, output instructions, abstention rule
 TRIAGE_SYSTEM: str
 def extract_request(delta: ThreadDelta, glossary: Glossary, project: ProjectConfig, as_of: date, existing: Sequence[Item], citable: Sequence[Event]) -> LLMRequest
@@ -395,8 +393,10 @@ class World(Frozen):
 CLI: `digest extract [--world NAME] [--db PATH]`. Opens the store as `replay` does,
 refuses a store without `meta.until` or `meta.world`, loads the world named in `meta`,
 builds the glossary and the project from it, loads priors, builds the client from
-`Settings`, runs `run_extract` with `as_of = meta.until` and the zone from
-`meta.timezone`, and prints the report as JSON. Exit 1 with the reason on a refused store, a cassette miss in replay mode or a
+`Settings`, and runs `run_extract` once per working day from the world's first day to
+`meta.until` (each `as_of` the end of that day in `meta.timezone`), so its requests are
+the one-day deltas the eval records and replay finds the same cassettes; it prints the
+summed report as JSON. A `--world` that differs from `meta.world` is refused. Exit 1 with the reason on a refused store, a cassette miss in replay mode or a
 missing key in record mode.
 
 ### Schema
@@ -458,7 +458,7 @@ blocker, risk, schedule, spec or BOM change, or an ask about the program). `kept
 `probability >= priors.triage.keep_threshold`. A probability outside `[0, 1]` fails
 validation; in record or live mode the client retries once and a second failure raises
 `LLMOutputError`, in replay mode it raises at once (M1 B2.5, tested there; unit 1 tests
-the replay case). The decision carries `TRIAGE_PROMPT_VERSION`, `model="classify"`,
+the replay case). The decision carries `EXTRACT_PROMPT_VERSION`, `model="classify"`,
 the threshold used and `decided_at = now`.
 
 B1.3 `extract_request` has a static system prompt (`EXTRACT_SYSTEM`) and one user
@@ -531,7 +531,7 @@ to `EXTRACT_PROMPT_VERSION` with the first write; different, the run is refused 
 `replay` does for an earlier day; the eval always uses one). It then iterates
 `store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of)`. For each delta it builds `citable` (the root plus the changed rows,
 deleted rows excluded, keyed by ts) and looks up
-`store.triage_decision(thread_id, last_ts, TRIAGE_PROMPT_VERSION, "classify")`; when
+`store.triage_decision(thread_id, last_ts, EXTRACT_PROMPT_VERSION, "classify")`; when
 none exists it calls `triage` and records the decision. A dropped thread records an
 `ok` stage run for `extract` at `last_ts` and writes nothing, so it is not revisited
 until the thread changes. A kept thread calls `llm.extract(extract_request(...),
@@ -541,9 +541,8 @@ records a `failed` run, logs `extract_failed` with the thread id and the error c
 counts `failed`, and continues with the next thread. A `CassetteMiss` is logged as `extract_cassette_miss`
 with the thread id and re-raised unchanged: strict replay is the contract (SPEC section 6). Running twice on an unchanged store writes
 nothing the second time, and the second report's `threads` equals the first run's
-`failed` (a failed run leaves the thread pending, M1 B1.7), zero when none failed. Because dropped threads
-record an extract run, a change to `TRIAGE_PROMPT_VERSION` alone re-triages nothing:
-bump `EXTRACT_PROMPT_VERSION` with it.
+`failed` (a failed run leaves the thread pending, M1 B1.7), zero when none failed. One version constant covers both
+prompts, so a triage prompt edit re-runs the stage like an extraction prompt edit.
 
 B1.7 The thread delta a kept thread extracts is the one `thread_deltas("extract", ...)`
 returned: since the last `ok` extract run, root included. A thread dropped at revision
@@ -700,8 +699,10 @@ def write_golden(golden: Golden, path: Path) -> None     # JSONL: one meta line,
 def read_golden(path: Path) -> Golden
 ```
 
-CLI: `digest absences [--world NAME] [--db PATH]` opens the store as `extract` does and
-prints the absence items as of `meta.until` as JSON lines. `digest world golden [--world
+CLI: `digest absences [--world NAME] [--db PATH]` opens the store as `extract` does,
+refuses (exit 1, "run digest extract first") while `thread_deltas("extract", ...)` as of
+`meta.until` is non-empty, and prints the absence items as of `meta.until` as JSON
+lines. `digest world golden [--world
 NAME]` reads `world.yaml`, `manifest.json` and `config/priors.yaml`, writes
 `data/world/<name>/golden.jsonl`, and prints the counts; it exits 1 when the manifest
 lacks an event that is not a distractor.
@@ -787,7 +788,7 @@ Dates are ISO strings.
 B2.7 `digest world golden` on the Kestrel world with a complete manifest writes the file
 and exits 0; with a manifest missing a non-distractor event it exits 1 naming the
 event. `digest absences` on a replayed store prints one JSON line per absence item and
-exits 0; on a store with no `meta.until` it exits 1.
+exits 0; on a store with no `meta.until`, or with pending extract deltas, it exits 1.
 
 B2.8 World validation (unit 2 code, on fields the stubs commit adds): an event has `ask` exactly when
 its kind is `ask`; `ask.of` is a human persona who is a member of the event's channel and
@@ -930,8 +931,9 @@ negative-name list, the message count is at least one, the root is by the event'
 `day_offset` 0, a reply never precedes the root, every computed `ts` falls on `date_of(d
 + day_offset)` in the world's zone, and for an ask no message other than the last is by
 `ask.of`; when `answered_day` is set the thread has at least two messages and the last is
-by `ask.of` on that day, and when it is None no message is by `ask.of`. A failed check raises `RenderError` naming the event and the rule; nothing is
-written. The schema enforces posters and reactors through the per-event Literals, so
+by `ask.of` on that day, and when it is None no message is by `ask.of`. A failed check raises `RenderError` naming the event, the rule and the cassette key of
+the request (`request_key`), so the operator can delete that cassette and re-render;
+nothing is written. The schema enforces posters and reactors through the per-event Literals, so
 an unknown poster cannot occur.
 
 B3.4 `render_world` reads `anchor.jsonl` (human-authored lines in the `read_events`
@@ -1048,9 +1050,10 @@ headline rows. Exit 1 on a cassette miss in replay mode.
 B4.1 The eval replays the world one day at a time: for `d` in `1..days`, `replay_world`
 to `date_of(d)`, then `run_extract` and `detect_absences` both as of the end of that day
 in the world's zone (the same `as_of`); it collects the absence items per day and the drop counts. It reads `golden.jsonl`
-and `manifest.json` from the world directory and raises `ValueError` when the golden
-file's `ask_reply_cadence_days` differs from the priors in force, so stale labels never
-score a detector run.
+and `manifest.json` from the world directory, re-derives the golden set from `world.yaml`,
+the manifest and the priors in force, and raises `ValueError` ("run digest world golden")
+when the two differ, so a stale label file never scores a run; the file's meta line makes
+a cadence change the visible cause.
 
 B4.2 Matching: an extracted item belongs to the golden item whose manifest thread equals
 `item.thread_id`. A golden item is thread-matched when its thread has at least one
@@ -1144,8 +1147,9 @@ Runs after units 1 to 4 have merged and the user has put `OPENROUTER_API_KEY` in
    return schema-conforming JSON. If the Claude call does not, extraction cassettes are
    recorded through `anthropic_api` (D15 "would change it") and the plan records it.
 2. `DIGEST_MODE=record uv run digest world render` writes `events.jsonl`,
-   `manifest.json` and the render cassettes. A `RenderError` is fixed by deleting that
-   event's cassette and re-running (record mode returns a stored response otherwise).
+   `manifest.json` and the render cassettes. A `RenderError` names the cassette to
+   delete; re-running then records a fresh response (record mode returns a stored
+   response otherwise).
 3. `uv run digest world golden` writes `golden.jsonl`.
 4. `DIGEST_MODE=record uv run digest eval` records the triage and extraction cassettes
    and writes `reports/eval-<date>.md`.
@@ -1209,6 +1213,9 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. U2 offers the mention rule as an alternative. |
 | Task link provenance | Each task link names the message that shows the progress | The silence clock counts from that message, as the golden counts from the scripted day; counting from the item's `last_updated` would let merged chatter reset it. |
 | Entity Jaccard | Reported as SPEC asks, with `entity_recall` beside it | Golden entity lists are claim entities only, so Jaccard penalizes correct context entities. |
+| One prompt version for the extract stage | `EXTRACT_PROMPT_VERSION` covers the triage and extraction prompts | A separate triage constant re-ran nothing on its own; one constant gives a prompt edit one visible effect. |
+| `digest extract` steps one day at a time | The CLI runs the stage per working day up to `meta.until` | A multi-day delta is a different request from the one-day deltas the eval records, so replay would miss its cassettes. |
+| Golden freshness | The eval re-derives the golden set and refuses a difference | A cadence check alone misses a world or manifest edit. |
 | Entity mention check and `indirection` | Events with the knob are exempt | The knob asks the renderer to imply the value; forcing the id into the text would cancel the noise the degradation curve measures. |
 | `due` and dates in output schemas | Strings parsed in code | `format: date` support differs across backends; parsing in code drops and counts. |
 
