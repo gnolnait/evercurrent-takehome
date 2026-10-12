@@ -506,7 +506,7 @@ validation; in record or live mode the client retries once and a second failure 
 the replay case). The decision carries `EXTRACT_PROMPT_VERSION`, `model="classify"`,
 the threshold used and `decided_at = now`.
 
-B1.3 `extract_request` has a static system prompt (`EXTRACT_SYSTEM`) and one user
+B1.3 (amended by Q1, Q3 and Q7) `extract_request` has a static system prompt (`EXTRACT_SYSTEM`) and one user
 message with, in this order: the glossary (entity id, type, description, aliases; people
 with user id, name, role, aliases), the checklist tasks of every gate whose date is on or after `as_of` (task id, task
 text, owner role, gate id and gate date), the existing items of the thread (item_id, type, title, status,
@@ -1124,7 +1124,7 @@ the manifest and the priors in force, and raises `ValueError` ("run digest world
 when the two differ, so a stale label file never scores a run; the file's meta line makes
 a cadence change the visible cause.
 
-B4.2 Matching: an extracted item belongs to the golden item whose manifest thread equals
+B4.2 (amended by Q6) Matching: an extracted item belongs to the golden item whose manifest thread equals
 `item.thread_id`. A golden item is thread-matched when its thread has at least one
 item. It is matched (objective fields, SPEC section 7) when one item in its thread
 carries every golden claim (same entity and attribute, `normalize_space(value).lower()`
@@ -1143,7 +1143,7 @@ thread with no message in the store was never run: the eval raises `ValueError` 
 it. A manifest missing a non-distractor event raises `ValueError` naming the event. Items in a distractor thread, and items in a
 golden thread matched to no golden item, are `unmatched`.
 
-B4.3 Claims: a golden claim is found when an item in its thread carries a claim with
+B4.3 (amended by Q6) Claims: a golden claim is found when an item in its thread carries a claim with
 the same entity and attribute and `normalize_space(value).lower()` equal;
 `claim_recall` is found golden claims over golden claims and `claim_precision` is
 extracted claims in golden threads equal to some golden claim over those extracted
@@ -1172,7 +1172,7 @@ message, mean, median and p90; with no rendered thread `realism` is empty and `n
 says so. The comparison to DISCO statistics is a `not_run` row ("no reference statistics
 in the repo"); M2 does not read a reference file.
 
-B4.7 `write_report` writes markdown with one table per section (extraction by type,
+B4.7 (the Q6 agreement row's n is `claim_value_agreement_n`) `write_report` writes markdown with one table per section (extraction by type,
 claims, triage, absences, drops, realism, models, not run) and `n` beside every rate,
 read from the report's own counts (`golden`, `extracted`, `claims_golden`,
 `claims_extracted`, `evidence_entries`, `entity_jaccard_n`, `entities_golden`, the
@@ -1362,7 +1362,7 @@ sees.
 | 1 | Claims and task links on an update | A claim or link may cite any merged evidence message that is in `citable` (root and changed rows); its authority is that message author's. |
 | 1 | Two outputs name one existing item | The second merges against the result of the first, in output order; one item is written. |
 | 1 | **visible** Resume cursor | B1.9's `extract_until` moves only past a day whose run had no failed thread. Known limit: a re-run after a day where one thread passes after an earlier failure while another fails extracts the first thread again from its oldest revision, because `Store.thread_deltas` (M1) reports it pending at the earlier day. The eval runs a fresh store once and is not affected. |
-| 1 | Prompt rules | The extraction prompt holds the exact sentences "For an ask, the owner is the person asked, not the person who asks." and "A question about a task is not evidence, and a status roll-up that lists a task as open is not evidence." |
+| 1 | Prompt rules | The extraction prompt holds the exact sentences "For an ask, the owner is the person asked, not the person who asks." and, since Q7, "A task link needs a progress report: a question about a task, or a status roll-up that lists a task as open, is not a task link. A question can still be an ask item." |
 | 2 | Absence `due` *(code)* | A checklist absence's `due` is the gate date; an ask absence keeps the ask's `due`. |
 | 2 | Same-day evidence *(code)* | When the latest touch or the earliest gate claim falls on a day with two events, the one earlier in `world.yaml` is earlier. Golden output order stays B2.6's `(day, event_id)`. |
 | 2 | Golden order | `derive_golden` returns items, absences and distractors in the order `write_golden` writes them, so a written and re-read file equals the value. |

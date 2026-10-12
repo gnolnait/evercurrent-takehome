@@ -164,6 +164,9 @@ default day 6:
   world schema is a role only.
 - `personal_relevance` is not the neutral 1 for a reader who owns nothing. Each of the
   three demo readers owns entities.
+- A checklist absence also reaches the EM (user ruling, 2026-10-12). SPEC section 3
+  sends it to the task's role only, and the golden labels keep that audience, so a
+  golden-implied overlap target (M3 proper) must add the EM.
 - The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The `daily.role_priors`
   table in `config/priors.yaml` has a value for every role and every item type,
   so the default does not apply to the bundled config.
