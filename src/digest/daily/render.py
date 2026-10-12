@@ -14,6 +14,7 @@ from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.priors import Priors
+from digest.project import ChecklistTask
 from digest.store import Store
 from digest.world.schema import World
 
@@ -29,12 +30,13 @@ SECTION_TITLES: Mapping[Section, str] = {
 def render_digest(world: World, selection: Selection) -> str:
     """The digest as plain text: a header, the non-empty sections, the hidden-items footer."""
     names = {persona.user_id: persona.name for persona in world.personas}
+    tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
     profile = selection.profile
     blocks = [f"Daily digest for {profile.name} ({profile.role}) - {selection.day.isoformat()}"]
     for section, title in SECTION_TITLES.items():
         lines = [line for line in selection.lines if line.section == section]
         if lines:
-            blocks.append("\n".join([title, *(_line(line, names) for line in lines)]))
+            blocks.append("\n".join([title, *(_line(line, names, tasks) for line in lines)]))
     if not selection.lines:
         blocks.append(f"Nothing new for {profile.name}.")
     if selection.hidden > 0:
@@ -54,7 +56,7 @@ def select_digest(store: Store, world: World, priors: Priors, user_id: str, day:
     Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not
     exactly the end of `day` in the world's zone, or a store with extract deltas pending.
     The store keeps only the latest version of each item, so a store replayed past `day`
-    cannot show `day`. Raise KeyError for an unknown user and ValueError for a bot. The
+    cannot show `day`: its refusal names a fresh store as the remedy. Raise KeyError for an unknown user and ValueError for a bot. The
     caller checks that the store holds the world: replay stores the world directory name,
     and `world` does not carry it.
     """
@@ -72,11 +74,16 @@ def select_digest(store: Store, world: World, priors: Priors, user_id: str, day:
             f"store {store.path} meta key 'until' is {until!r}, "
             "not an ISO timestamp with a UTC offset"
         )
+    if replayed > as_of:
+        raise ValueError(
+            f"store {store.path} is replayed until {until}, past the end of day {day} "
+            f"({as_of.isoformat()}), and keeps no earlier item versions; use a fresh --db, "
+            f"replay it to day {day}, then run digest extract"
+        )
     if replayed != as_of:
         raise ValueError(
-            f"store {store.path} is replayed until {until}, not the end of day {day} "
-            f"({as_of.isoformat()}); run digest replay --until {day} on a store that is not "
-            "replayed past that day"
+            f"store {store.path} is replayed until {until}, before the end of day {day} "
+            f"({as_of.isoformat()}); run digest replay --until {day}, then digest extract"
         )
     if store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of):
         raise ValueError(
@@ -92,8 +99,13 @@ def select_digest(store: Store, world: World, priors: Priors, user_id: str, day:
     return select(world, profile, items, absences, priors, day)
 
 
-def _line(line: Line, names: Mapping[str, str]) -> str:
-    """One line, then its indented summary (not for an absence) and source links."""
+def _line(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> str:
+    """One line, then its indented summary and source links.
+
+    A checklist absence takes the task text and owner role from the world's checklist.
+    """
     item = line.item
     detail = item.absence
     if detail is None:
@@ -102,17 +114,19 @@ def _line(line: Line, names: Mapping[str, str]) -> str:
         head = f"- {_plain(item.title)}{entities}{owner}"
         body = [f"  {_plain(item.summary)}"]
     elif detail.source == "checklist":
+        task = tasks.get((detail.gate or "", detail.task or ""))
+        what = f"{task.task} ({task.owner})" if task else detail.task
         head = (
-            f"- Not happened: {detail.task} for {detail.gate} - "
+            f"- Not happened: {what} for {detail.gate} - "
             f"{_days(detail.days_silent)} silent, "
             f"{detail.buffer_consumed}/{detail.buffer_days} buffer days used"
         )
-        body = []
+        body = [f"  {_plain(item.summary)}"]
     else:
         asker = names.get(detail.asker, detail.asker) if detail.asker else "someone"
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
         head = f"- Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
-        body = []
+        body = [f"  {_plain(item.summary)}"]
     if line.must_see:
         head += " [must see]"
     sources = [f"  source: {entry.permalink}" for entry in item.evidence]

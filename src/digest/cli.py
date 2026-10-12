@@ -63,8 +63,9 @@ def demo(
 
     The command replays the bundled world into a temporary store one day at a time and runs
     the extract stage at the end of each day from the recorded cassettes. It prints the three
-    digests, then the pairwise item overlap of the three. A failed thread in any extract run
-    stops the command before it builds a digest. The command never constructs the settings
+    digests, then the pairwise item overlap of the three. A cassette directory that does not
+    exist or holds no cassette file stops the command before any replay. A failed thread in
+    any extract run stops the command before it builds a digest. The command never constructs the settings
     object, so it reads no API key and no `.env` file. It writes nothing outside the
     temporary directory.
     """
@@ -86,8 +87,12 @@ def demo(
         _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
     # Settings would load API keys from the environment and `.env`. The demo reads only
     # DIGEST_CASSETTES, and the client has no backend, so the mode is always replay.
-    cassettes = os.environ.get("DIGEST_CASSETTES") or Settings.model_fields["cassettes"].default
-    llm = LLM(None, Cassettes(Path(cassettes)), "replay")
+    cassettes = Path(
+        os.environ.get("DIGEST_CASSETTES") or Settings.model_fields["cassettes"].default
+    )
+    if not cassettes.is_dir() or not any(cassettes.glob("*.json")):
+        _refuse(f"cassette directory {cassettes} does not exist or holds no cassette file")
+    llm = LLM(None, Cassettes(cassettes), "replay")
     today = loaded.date_of(day)
     zone = ZoneInfo(loaded.timezone)
     digests: list[str] = []
