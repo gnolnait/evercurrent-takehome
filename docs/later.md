@@ -64,8 +64,11 @@ would promote it.
 - Subscription CLI backends (`claude -p`, `codex exec`) for recording cassettes at
   zero marginal cost. Replaced in v0.3 by the single gateway backend (D15). Trigger:
   gateway spend becomes material, or the gateway stops honouring JSON schemas.
-- MCP server over HTTP with per-user tokens for hosted assistants. The v1 server is
-  stdio for local assistants. Trigger: a hosted deployment.
+- MCP server over HTTP with per-user tokens for hosted assistants. Each tool applies the
+  reader's visibility check, and `query` reads per-reader views (an SQLite authorizer
+  denies the base tables). The v1 server is stdio for local assistants and is an
+  administrative interface with no reader check. Trigger: a hosted deployment, or a
+  second person using one store.
 - Learned ranking. Impressions and feedback are logged from day one; a learning-to-rank
   step or Thompson-sampled exploration slots come after thousands of labelled
   impressions exist.
