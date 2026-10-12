@@ -229,6 +229,16 @@ anything over the network in replay mode, and it reads no model API key.
   further posts. No output, log line or error ever contains the webhook URL.
 - The source links point to the synthetic workspace `kestrel-k2.slack.com`, which does
   not exist; the README says so.
+- Hardening (review round, 2026-10-12). Every mrkdwn text object sets `verbatim: true`,
+  so Slack does not turn a bare URL, `@here` or `#channel` in model text into a link or
+  a mention; the explicit `<permalink|source>` links still work. The URL must start
+  with `https://hooks.slack.com/`, else exit 1 naming the variable, before any build.
+  `.env` is read as UTF-8 with or without a byte-order mark, or as UTF-16 when it starts
+  with a UTF-16 byte-order mark (the PowerShell 5.1 default); an unreadable file exits 1
+  naming `.env`. An unquoted value ends at ` #` (an inline comment), as python-dotenv
+  reads it. Any exception from a send exits 1 naming the reader and the exception type
+  only, never its message. The client keeps the SDK's connection-error retry with its
+  logger off.
 
 ## Tests
 
