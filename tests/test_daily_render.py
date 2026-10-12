@@ -420,14 +420,63 @@ def has_extract_cassette(root: Path) -> bool:
     return False
 
 
-def test_demo_overlap_line_reports_pairwise_jaccard_to_two_decimals() -> None:
+def test_demo_overlap_line_reports_distinct_pairwise_jaccard_to_two_decimals() -> None:
     overlap = cli.__dict__["_overlap_line"](
         {"ITEM-1", "ITEM-2"},
         {"ITEM-2", "ITEM-3"},
-        {"ITEM-1", "ITEM-2", "ITEM-3", "ITEM-4"},
+        {"ITEM-1", "ITEM-2", "ITEM-4"},
     )
 
-    assert overlap == ("Item overlap: ME/supply_chain 0.33, ME/EM 0.50, supply_chain/EM 0.50")
+    assert overlap == ("Item overlap: ME/supply_chain 0.33, ME/EM 0.67, supply_chain/EM 0.25")
+
+
+def test_demo_overlap_line_reports_zero_for_two_empty_digests() -> None:
+    overlap = cli.__dict__["_overlap_line"](set(), set(), {"ITEM-1"})
+
+    assert overlap == ("Item overlap: ME/supply_chain 0.00, ME/EM 0.00, supply_chain/EM 0.00")
+
+
+def test_cli_demo_prints_item_overlap_last_without_cassettes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channels = ("C0ENGME", "C0KPROG", "C0SUPCH")
+    items = []
+    for number, channel in enumerate(channels, start=1):
+        source = evidence(number).model_copy(
+            update={"permalink": f"{WORKSPACE}/archives/{channel}/p1760000000{number:06d}"}
+        )
+        items.append(
+            item(
+                item_id=f"ITEM-{number}",
+                thread_id=f"{channel}:{TS}",
+                title=f"Decision {number}",
+                affected_roles=("ME", "supply_chain", "EM"),
+                evidence=(source,),
+            )
+        )
+
+    def extract_known_items(store: Store, *args: object, **kwargs: object) -> ExtractReport:
+        set_replay_meta(store, until="2026-10-20T06:59:59.999999+00:00")
+        store.upsert_items(items, prompt_version="m2.1", model="extract")
+        return ExtractReport(
+            threads=0,
+            kept=0,
+            dropped=0,
+            failed=0,
+            items_written=len(items),
+            drops=dict.fromkeys(DROP_FIELDS, 0),
+        )
+
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setattr(cli, "_extract_days", extract_known_items)
+    monkeypatch.setattr("digest.daily.render.detect_absences", lambda *args, **kwargs: [])
+
+    result = runner.invoke(app, ["demo"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[-1] == (
+        "Item overlap: ME/supply_chain 0.33, ME/EM 0.67, supply_chain/EM 0.67"
+    )
 
 
 def test_cli_demo_reports_only_cassette_miss_without_constructing_settings(
@@ -448,9 +497,8 @@ def test_cli_demo_reports_only_cassette_miss_without_constructing_settings(
 
     result = runner.invoke(app, ["demo"])
 
-    assert result.exit_code in (0, 1), result.output
-    if result.exit_code == 1:
-        assert re.search(r"no cassette for key", result.output, re.IGNORECASE), result.output
+    assert result.exit_code == 1, result.output
+    assert re.search(r"no cassette for key", result.output, re.IGNORECASE), result.output
 
 
 def test_cli_demo_exits_one_and_reports_failed_extract_threads(
