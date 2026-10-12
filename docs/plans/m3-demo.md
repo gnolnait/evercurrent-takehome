@@ -36,7 +36,7 @@ A stubs commit on `m3-stubs` lands first, by pull request: the interfaces below 
   `digest.replay | digest.extract | digest.absence` layer; it reads items, events and
   absences from the store and the world, and calls no model.
 - Determinism: same store, world, reader and day give the same bytes. No wall-clock
-  time; ties break on `item_id`.
+  time; ranked ties break as B5.4 says, so the order never depends on input order.
 - The reader is a world persona. A persona with `kind: bot` is refused.
 - Text from the model and from Slack is rendered as plain text; only permalinks built by
   code are links.
@@ -74,7 +74,7 @@ class Line(Frozen):
 class Selection(Frozen):
     profile: Profile
     day: date
-    lines: tuple[Line, ...]           # section order, must-see first, then score descending, then item_id
+    lines: tuple[Line, ...]           # section order; must-see by item_id, then ranked in the B5.4 order
     hidden: int                       # items dropped by the visibility filter
 
 def select(world: World, profile: Profile, items: Sequence[Item], absences: Sequence[Item],
@@ -129,26 +129,42 @@ B5.4 Ranked lane: every other visible open item gets
   phase re-weighting is M3 proper).
 - `personal_relevance`: 1.0 when an item entity is owned by the reader, 0.8 when the
   item's `affected_roles` include the reader's role, else 0.4.
-An item below the threshold `priors.daily.min_score` (default 0.15) is left out. `reason`
+An item below the threshold `priors.daily.min_score` (default 0.15) is left out.
+Ranked lines are ordered by score, highest first. Scores equal to six significant figures
+break on the item's newest evidence, the greatest `message_ts` among its evidence
+entries, newest first, then on `item_id` ascending (SPEC 5.6). Must-see lines are in
+`item_id` order, above the ranked lines. `reason`
 names the three terms with their values.
 
-B5.5 Sections: `ask` items go to `needs_you`; an ask absence where the reader is the
-person asked also goes to `needs_you` and replaces the line of the ask item it cites
-(same thread), so one ask never shows twice; every other absence goes to `not_happened`; `decision`, `schedule_change`, `spec_change`,
+B5.5 Sections: `ask` items go to `needs_you`. An ask absence replaces the line of the
+ask item it cites (same thread) for every reader who gets the absence, so one ask never
+shows twice; an ask in another thread keeps its line. The ask absence goes to
+`needs_you` when the reader is the person asked, else to `not_happened`, as every other
+absence does; `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
 section holds its must-see lines plus up to its cap of ranked lines. Resolved items are
 left out. Items are those with `last_updated` at or before the end of `day` in the
 world's zone; absences are `detect_absences` as of that day.
 
-B5.6 Gaps to SPEC v0.4.3 that the slice keeps, each with no effect on the bundled demo:
+B5.6 Gaps to SPEC v0.4.3 that the slice keeps. None changes the bundled demo at its
+default day 6:
 - No digest window. Every demo digest is a first digest. SPEC's first window is five
-  working days, and the corpus starts on Monday 2026-10-12, so the window holds every
-  item up to day 6. The window is M3 proper.
+  working days back; from day 6 (Monday 2026-10-19) that reaches day 1, the corpus
+  start, so it holds every item. From day 7 on, the slice also shows older items that
+  a first window leaves out. The window is M3 proper.
+- B5.1 leaves out entities whose `owner` is the reader's user id: `Entity.owner` in the
+  world schema is a role only.
+- `personal_relevance` is not the neutral 1 for a reader who owns nothing. Each of the
+  three demo readers owns entities.
 - M2 evidence entries carry no `channel_id`. M2 does not merge items, so every evidence
   entry comes from the item's thread, and the thread's channel stands in for it (B5.2).
   When the model carries `channel_id`, B5.2 reads it.
-- The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The bundled table has a
-  value for every role and type, so the default does not apply to it.
+- The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The table that the stubs
+  commit adds to `config/priors.yaml` has a value for every role and every item type,
+  so the default does not apply to the bundled config.
+- Newest evidence is the greatest `message_ts`, not the greatest `event_ts` of the
+  current message versions: an edit does not make an item newer. Items carry no
+  `event_ts`. This changes only the order of tied lines.
 
 B6.1 `render_digest` writes, in order: a header line with the reader's name, role and
 the date; then each non-empty section with a title ("Needs you", "Not happened",
