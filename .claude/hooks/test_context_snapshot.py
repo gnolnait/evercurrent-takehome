@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ def _git(repo, *args):
 
 @pytest.fixture
 def repo(tmp_path):
-    """A primary checkout with one commit and `main` one commit ahead of `base`."""
+    """A primary checkout with two commits and `main` one commit ahead of `base`."""
     r = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", "-b", "main", str(r)], check=True)
     _git(r, "commit", "-q", "--allow-empty", "-m", "one")
@@ -174,17 +175,24 @@ def test_snapshot_lists_open_prs_with_checks(repo, tmp_path):
     assert "- #7 Add widget [widget] draft checks: fail 1, pass 2" in text
 
 
-def test_print_shows_both_files(repo):
-    """Setup: state file and a handoff. Action: print. Assert: both in stdout."""
+@pytest.mark.parametrize("argv", [None, launch(FENCE)], ids=["python", "fence"])
+def test_print_shows_both_files(repo, argv):
+    """Setup: a handoff, then a newer state file, as PreCompact leaves them.
+    Action: print, through python and the fence. Assert: each file once, the
+    age of the state file, and non-cp1252 text intact."""
     d = repo / "notes" / "handoffs"
     d.mkdir(parents=True)
+    now = time.time()
+    (d / "next.md").write_text("HANDOFF-BODY → ✓\n", encoding="utf-8")
+    os.utime(d / "next.md", (now - 1200, now - 1200))
     _state(repo).write_text("STATE-BODY\n")
-    (d / "next.md").write_text("HANDOFF-BODY\n")
-    p = _run("print", repo, payload={"cwd": str(repo), "source": "compact"})
+    os.utime(_state(repo), (now - 600, now - 600))
+    p = _run("print", repo, payload={"cwd": str(repo), "source": "compact"}, argv=argv)
     assert p.returncode == 0
     assert p.stdout.startswith("Context was compacted.")
-    assert "auto-state.md ===\nSTATE-BODY" in p.stdout
-    assert "next.md ===\nHANDOFF-BODY" in p.stdout
+    assert "The auto-state file was written 10 minutes ago." in p.stdout
+    assert p.stdout.count("auto-state.md ===\nSTATE-BODY") == 1
+    assert "next.md ===\nHANDOFF-BODY → ✓" in p.stdout
 
 
 def test_print_cuts_long_handoff_under_hook_output_cap(repo):
