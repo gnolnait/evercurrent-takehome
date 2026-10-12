@@ -73,3 +73,22 @@ def test_load_priors_rejects_invalid_file(tmp_path: Path, contents: str, field: 
     path.write_text(contents, encoding="utf-8")
     with pytest.raises(ValidationError, match=field):
         load_priors(path)
+
+
+def test_load_priors_yaml_error_names_file(tmp_path: Path) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text("triage: [", encoding="utf-8")
+    with pytest.raises(yaml.YAMLError) as excinfo:
+        load_priors(path)
+    assert str(path) in str(excinfo.value)
+
+
+def test_load_priors_validation_error_notes_file(tmp_path: Path) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text(
+        "triage: {miss_cost_ratio: 0}\nabsence: {ask_reply_cadence_days: 2}",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        load_priors(path)
+    assert str(path) in "".join(excinfo.value.__notes__)

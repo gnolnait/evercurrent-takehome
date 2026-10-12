@@ -734,3 +734,35 @@ def test_manifest_accepts_empty_threads(tmp_path: Path) -> None:
     assert manifest.threads == {}
     write_manifest(manifest, path)
     assert load_manifest(path) == manifest
+
+
+@pytest.mark.parametrize(("contents", "line"), [('{"threads": {', 1), ('{\n"threads": {', 2)])
+def test_load_manifest_json_error_names_file_and_line(
+    tmp_path: Path, contents: str, line: int
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(contents, encoding="utf-8")
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(path)
+    assert f"{path}:{line}:" in str(excinfo.value)
+
+
+def test_load_manifest_validation_error_notes_file(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "threads": {
+                    "E1": {
+                        "channel_id": "C1",
+                        "thread_ts": "1760000000.000001",
+                        "authored": "bot",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        load_manifest(path)
+    assert str(path) in "".join(excinfo.value.__notes__)
