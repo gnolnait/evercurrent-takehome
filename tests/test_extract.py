@@ -398,6 +398,10 @@ def test_triage_request_carries_only_citable_thread_content_and_probability_rule
     assert re.search(r"probabil", f"{request.system}\n{text}", re.IGNORECASE)
 
 
+def test_triage_system_counts_an_fyi_as_project_information() -> None:
+    assert "an fyi that a program member needs to know" in TRIAGE_SYSTEM.lower()
+
+
 def test_triage_replay_rejects_invalid_probability_without_retry(tmp_path: Path) -> None:
     row = event()
     delta_row = delta(row, root=row)
@@ -468,12 +472,30 @@ def test_extract_request_orders_sections_filters_rows_and_states_rules() -> None
         assert word in system
     assert "For an ask, the owner is the person asked, not the person who asks." in EXTRACT_SYSTEM
     assert re.search(r"done.*complete|complete.*done", system, re.DOTALL)
-    assert (
-        "A question about a task is not evidence, and a status roll-up that lists a task as open "
-        "is not evidence." in EXTRACT_SYSTEM
-    )
     assert re.search(r"tasks?.*list", system, re.DOTALL)
     assert any(word in system for word in ("run", "result", "review", "sign-off", "received"))
+
+
+def test_extract_system_requires_progress_for_task_links() -> None:
+    assert (
+        "A task link needs a progress report: a question about a task, or a status roll-up that "
+        "lists a task as open, is not a task link. A question can still be an ask item."
+        in EXTRACT_SYSTEM
+    )
+
+
+def test_extract_system_omits_old_task_question_rule() -> None:
+    assert "A question about a task is not evidence" not in EXTRACT_SYSTEM
+
+
+def test_extract_system_names_tasks_by_gate_date_without_calling_them_open() -> None:
+    system = EXTRACT_SYSTEM.lower()
+    assert "the checklist tasks of gates on or after today" in system
+    assert "open checklist tasks" not in system
+
+
+def test_extract_prompt_version_is_m2_3() -> None:
+    assert EXTRACT_PROMPT_VERSION == "m2.3"
 
 
 def test_extract_request_handles_missing_root_and_omits_world_event_ids() -> None:
@@ -485,12 +507,78 @@ def test_extract_request_handles_missing_root_and_omits_world_event_ids() -> Non
     assert "Only changed message" in text
 
 
-def test_extract_request_lists_root_once_when_first_revision_includes_it() -> None:
-    root = event(text="FIRST-REVISION-ROOT")
-    request = extract_request(
-        delta(root, root=root), glossary(), project(), date(2026, 10, 13), (), (root,)
+def request_text(delta_row: ThreadDelta, citable: tuple[Event, ...], kind: str) -> str:
+    request = (
+        triage_request(delta_row, "Mechanical work", citable)
+        if kind == "triage"
+        else extract_request(delta_row, glossary(), project(), date(2026, 10, 13), (), citable)
     )
-    assert request.messages[0].content.count("FIRST-REVISION-ROOT") == 1
+    return request.messages[0].content
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_list_root_when_first_revision_has_one_post(kind: str) -> None:
+    root = event(text="FIRST-REVISION-ROOT-ONLY")
+
+    text = request_text(delta(root, root=root), (root,), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" in root_section.lower()
+    assert "FIRST-REVISION-ROOT-ONLY" not in root_section
+    assert "FIRST-REVISION-ROOT-ONLY" in changed_section
+    assert text.count("FIRST-REVISION-ROOT-ONLY") == 1
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_list_root_first_when_first_revision_includes_reply(kind: str) -> None:
+    root = event(text="FIRST-REVISION-ROOT")
+    reply = event(REPLY, text="FIRST-REVISION-REPLY")
+
+    text = request_text(delta(root, reply, root=root), (root, reply), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" in root_section.lower()
+    assert "FIRST-REVISION-ROOT" not in root_section
+    assert "FIRST-REVISION-ROOT" in changed_section
+    assert text.count("FIRST-REVISION-ROOT") == 1
+    assert changed_section.index("FIRST-REVISION-ROOT") < changed_section.index(
+        "FIRST-REVISION-REPLY"
+    )
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_list_edited_root_first_when_later_delta_includes_reply(kind: str) -> None:
+    root = event(text="EDITED-ROOT", event_ts=LATER)
+    reply = event(REPLY, text="CHANGED-REPLY", event_ts=LATER)
+    delta_row = delta(root, reply, root=root, last_ts=LATER).model_copy(update={"since_ts": ROOT})
+
+    text = request_text(delta_row, (root, reply), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" in root_section.lower()
+    assert "EDITED-ROOT" not in root_section
+    assert "EDITED-ROOT" in changed_section
+    assert text.count("EDITED-ROOT") == 1
+    assert changed_section.index("EDITED-ROOT") < changed_section.index("CHANGED-REPLY")
+
+
+@pytest.mark.parametrize("kind", ["triage", "extract"])
+def test_requests_keep_unchanged_root_as_context_on_later_revision(kind: str) -> None:
+    root = event(text="UNCHANGED-ROOT")
+    reply = event(REPLY, text="LATER-REVISION-REPLY")
+    delta_row = delta(reply, root=root).model_copy(update={"since_ts": ROOT})
+
+    text = request_text(delta_row, (root, reply), kind)
+
+    root_section, heading, changed_section = text.partition("Changed messages, oldest first:")
+    assert heading
+    assert "new in this delta" not in root_section.lower()
+    assert "UNCHANGED-ROOT" in root_section.rsplit("Thread root:", maxsplit=1)[-1]
+    assert "UNCHANGED-ROOT" not in changed_section
+    assert text.count("UNCHANGED-ROOT") == 1
 
 
 @pytest.mark.parametrize(
@@ -706,6 +794,59 @@ def test_verify_quote_matches_only_its_cited_message_after_space_normalization(
     )
     assert bool(result.items) is kept
     assert result.drops == dict.fromkeys(DROP_FIELDS, 0) | {"evidence.quote": 0 if kept else 1}
+
+
+@pytest.mark.parametrize(
+    ("attribute", "raw", "expected"),
+    [
+        ("rev", "Rev B", "B"),
+        ("rev", "rev c", "C"),
+        ("rev", "Rev. D", "D"),
+        ("rev", "REV. D", "D"),
+        ("rev", "RevB", "B"),
+        ("rev", "Rev B and C", "Rev B and C"),
+        ("rev", " B ", "B"),
+        ("qty", "32 counted, 8 short", "32"),
+        ("qty", "1,200 pcs", "1200"),
+        ("qty", "40/40", "40"),
+        ("qty", "50", "50"),
+        ("qty", "about 32 counted", "about 32 counted"),
+        ("qty", "32k", "32k"),
+        ("qty", "32-40", "32-40"),
+        ("qty", "3.5 kg", "3.5 kg"),
+        ("qty", "32e3", "32e3"),
+        ("gate_date", "2026-10-22", "2026-10-22"),
+        ("status", "In Progress", "In Progress"),
+    ],
+)
+def test_verify_normalizes_revision_and_quantity_claim_values(
+    attribute: Any, raw: str, expected: str
+) -> None:
+    root = event(text=raw)
+    delta_row = delta(root, root=root)
+    extraction = Extraction(
+        rationale="Check claim value forms.",
+        items=[
+            extracted_item(
+                evidence=[ExtractedEvidence(message_ts=ROOT, quote=raw)],
+                claims=[
+                    ExtractedClaim(
+                        entity="PN-31010",
+                        attribute=attribute,
+                        value=raw,
+                        message_ts=ROOT,
+                    )
+                ],
+            )
+        ],
+    )
+
+    result = verify(extraction, delta_row, {ROOT: root}, glossary(), {}, {})
+
+    (verified_item,) = result.items
+    assert [(claim.attribute, claim.value) for claim in verified_item.claims] == [
+        (attribute, expected)
+    ]
 
 
 @pytest.mark.parametrize("field", DROP_FIELDS)

@@ -52,7 +52,7 @@ a test fail. Both write `.test-proof/<sha>.json`.
 
 ## Test structure
 
-**Tests live in `tests/`**, mirroring the `src/digest/` module they cover. A test that
+**Tests live in `tests/`**, mirroring the module under `src/` that they cover. A test that
 needs no special harness is a regular test — don't reach for a heavyweight
 fixture/marker out of imitation.
 
@@ -105,7 +105,7 @@ test.
 ## Measuring coverage
 
 - Signature: a changed-line coverage claim is needed.
-- Fix: `uv run pytest --cov=digest --cov-report=term-missing`.
+- Fix: `uv run pytest --cov=<package> --cov-report=term-missing`.
 - Trap signatures: coverage claims without a report from a real run.
 
 
