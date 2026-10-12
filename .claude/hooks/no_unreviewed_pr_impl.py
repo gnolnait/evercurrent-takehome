@@ -85,6 +85,9 @@ DIR_CHANGERS = {"cd", "pushd", "popd"}
 LEADING_CD = re.compile(
     r"""^\s*cd\s+("[^"$`\\]+"|'[^']+'|[^\s;&|<>()$`\\"'{}~*?\[]+)\s*&&""")
 MSYS_DRIVE = re.compile(r"^/([A-Za-z])(/|$)")
+# A background `&`: not part of &&, >&, &>, |& or 2>&1. It backgrounds the
+# whole list before it, the leading cd included. A quoted `&` counts too.
+BACKGROUND = re.compile(r"(?<![&>|])&(?![&>])")
 HEAD_MOVERS = {"checkout", "switch", "commit", "reset", "rebase", "merge",
                "pull", "cherry-pick", "am", "revert", "update-ref"}
 HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
@@ -237,6 +240,8 @@ def _leading_cd(cmd, base):
         # Git Bash spells C:/x as /c/x.
         path = MSYS_DRIVE.sub(lambda d: d.group(1).upper() + ":/", path)
     if not (os.path.isabs(path) or path.startswith(".")):
+        return base, cmd
+    if BACKGROUND.search(cmd, m.end()):
         return base, cmd
     return os.path.normpath(os.path.join(base, path)), cmd[m.end():]
 
