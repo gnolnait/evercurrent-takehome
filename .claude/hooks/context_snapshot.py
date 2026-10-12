@@ -268,7 +268,7 @@ def snapshot(root, trigger):
     path = os.path.join(root, "notes", "handoffs", AUTO_STATE)
     lines = build_snapshot(root, trigger)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    tmp = os.path.join(os.path.dirname(path), ".%s.tmp" % AUTO_STATE)  # dot: never a handoff
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
     os.replace(tmp, path)
