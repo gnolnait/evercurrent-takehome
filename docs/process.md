@@ -64,6 +64,7 @@ A unit is one milestone slice from SPEC.md section 8, small enough to review in 
   this Codex version; `app-server` is a separate JSON-RPC protocol we do not need yet.
   Codex never commits or pushes; the rules trip-wire refuses it and it hands back diffs.
 - Claude lenses: `/review-local --base main` dispatches the lens agents and writes
-  `.review/<sha>/verdict.json`.
+  `.review/<sha>/verdict.json` in the main checkout, also when it runs in a linked
+  worktree.
 - Hooks: `.claude/hooks` guards block commits to main, PR merges, signing bypass, and any
   commit or push while a test edit lacks a RED-GREEN proof.
