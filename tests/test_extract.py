@@ -464,9 +464,25 @@ def test_extract_request_orders_sections_filters_rows_and_states_rules() -> None
     assert "scenario" not in combined
     for word in ("new", "item_id", "verbatim", "null", "owner", "due", "rationale"):
         assert word in system
-    assert re.search(r"ask.{0,120}(owner|asked)|(owner|asked).{0,120}ask", system, re.DOTALL)
+    assert re.search(
+        r"\bask\b.{0,120}\b(owner|asked)\b|\b(owner|asked)\b.{0,120}\bask\b",
+        system,
+        re.DOTALL,
+    )
     assert re.search(r"done.*complete|complete.*done", system, re.DOTALL)
-    assert re.search(r"(question|roll-up).{0,160}\bnot\b|\bnot\b.{0,160}(question|roll-up)", system)
+    assert re.search(
+        r"\b(question|query)\b(?=.{0,160}\btask\b)"
+        r"(?=.{0,160}\b(not|no)\b.{0,80}\b(evidence|progress)\b)",
+        system,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"\b(status\s+(roll[\s-]*up|summary)|roll[\s-]*up)\b"
+        r"(?=.{0,160}\btask\b)(?=.{0,160}\bopen\b)"
+        r"(?=.{0,160}\b(not|no)\b.{0,80}\b(evidence|progress)\b)",
+        system,
+        re.DOTALL,
+    )
     assert re.search(r"tasks?.*list", system, re.DOTALL)
     assert any(word in system for word in ("run", "result", "review", "sign-off", "received"))
 
@@ -668,18 +684,23 @@ def drop_case(
 
 
 @pytest.mark.parametrize(
-    ("quote", "message_ts", "kept"),
+    ("quote", "message_ts", "cited_text", "kept"),
     [
-        ("", ROOT, False),
-        (" \t\n ", ROOT, False),
-        ("PN-31010   Rev C\nreleased", ROOT, True),
-        ("Second evidence", ROOT, False),
+        ("", ROOT, None, False),
+        (" \t\n ", ROOT, None, False),
+        ("PN-31010   Rev C\nreleased", ROOT, None, True),
+        ("PN-31010 Rev C released", ROOT, "PN-31010\nRev  C released complete.", True),
+        ("Second evidence", ROOT, None, False),
     ],
 )
 def test_verify_quote_matches_only_its_cited_message_after_space_normalization(
-    quote: str, message_ts: str, kept: bool
+    quote: str, message_ts: str, cited_text: str | None, kept: bool
 ) -> None:
     delta_row, citable, tasks = verify_context()
+    if cited_text is not None:
+        root = event(text=cited_text)
+        citable[ROOT] = root
+        delta_row = delta(root, citable[REPLY], root=root)
     result = verify(
         Extraction(
             rationale="Check quote.",
@@ -701,7 +722,10 @@ def test_verify_quote_matches_only_its_cited_message_after_space_normalization(
 def test_verify_counts_each_drop_and_preserves_valid_items(field: str) -> None:
     extraction, delta_row, citable, tasks, existing = drop_case(field)
     result = verify(extraction, delta_row, citable, glossary(), tasks, existing)
-    assert result.drops == dict.fromkeys(DROP_FIELDS, 0) | {field: 1}
+    expected_drops = dict.fromkeys(DROP_FIELDS, 0) | {field: 1}
+    if field in {"claims.stale", "tasks.stale"}:
+        expected_drops["evidence.stale"] = 1
+    assert result.drops == expected_drops
     if field in {"evidence.unknown_message", "evidence.quote", "item_id.unknown"}:
         assert result.items == ()
     else:
@@ -800,8 +824,8 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
         owner=None,
         affected_roles=("ME",),
         evidence=(
-            Evidence(message_ts=old_uncited_ts, quote="uncited old quote", permalink="old-link"),
             Evidence(message_ts=ROOT, quote="old root quote", permalink="old-root-link"),
+            Evidence(message_ts=old_uncited_ts, quote="uncited old quote", permalink="old-link"),
             Evidence(message_ts=stale_ts, quote="stale quote", permalink="stale-link"),
         ),
         first_seen=old_uncited_ts,
@@ -822,8 +846,8 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
         confidence="high",
         status="resolved",
         evidence=[
-            ExtractedEvidence(message_ts=ROOT, quote="replacement quote"),
             ExtractedEvidence(message_ts=REPLY, quote="new quote"),
+            ExtractedEvidence(message_ts=ROOT, quote="replacement quote"),
             ExtractedEvidence(message_ts=REPLY, quote="new quote"),
         ],
         claims=[
@@ -849,11 +873,13 @@ def test_verify_update_merges_evidence_unions_links_and_replaces_scalars() -> No
     )
     (updated,) = result.items
     assert [(e.message_ts, e.quote) for e in updated.evidence] == [
-        (old_uncited_ts, "uncited old quote"),
         (ROOT, "replacement quote"),
+        (old_uncited_ts, "uncited old quote"),
         (REPLY, "new quote"),
     ]
-    assert updated.evidence[0] == existing_item.evidence[0]
+    assert updated.evidence[0] == Evidence(
+        message_ts=ROOT, quote="replacement quote", permalink=root.permalink
+    )
     assert [(c.attribute, c.value, c.message_ts) for c in updated.claims] == [
         ("rev", "B", old_uncited_ts),
         ("status", "complete", REPLY),
@@ -1225,7 +1251,7 @@ def prepare_cli_store(db_path: Path, *, until: bool = True, world: bool = True) 
         store.upsert_events(
             [
                 event(first_ts, thread_ts=first_ts, event_ts=first_ts, text="FIRST-DAY-THREAD"),
-                event(second_ts, thread_ts=second_ts, event_ts=second_ts, text="SECOND-DAY-THREAD"),
+                event(second_ts, thread_ts=first_ts, event_ts=second_ts, text="SECOND-DAY-REPLY"),
             ]
         )
         if world:
@@ -1238,23 +1264,51 @@ def prepare_cli_store(db_path: Path, *, until: bool = True, world: bool = True) 
 def test_cli_extract_prints_json_report(cli_case: tuple[Path, Path]) -> None:
     db_path, cassette_path = cli_case
     prepare_cli_store(db_path)
+    day_one = datetime(2026, 10, 13, 6, 59, 59, 999999, tzinfo=UTC)
+    day_two = datetime(2026, 10, 14, 6, 59, 59, 999999, tzinfo=UTC)
     with Store.open(db_path) as store:
-        for as_of in (
-            datetime(2026, 10, 13, 6, 59, 59, 999999, tzinfo=UTC),
-            datetime(2026, 10, 14, 6, 59, 59, 999999, tzinfo=UTC),
-        ):
-            put_stage_cassettes(
-                cassette_path,
-                store,
-                triage_data={"rationale": "Drop.", "probability": 0.0},
-                as_of=as_of,
-                channel_purposes=CHANNEL_PURPOSES,
-            )
+        put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Drop.", "probability": 0.0},
+            as_of=day_one,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+        first_report = run_extract(
+            store,
+            replay_llm(cassette_path),
+            glossary(),
+            project(),
+            priors(),
+            day_one,
+            ZONE,
+            CHANNEL_PURPOSES,
+        )
+        assert (first_report.threads, first_report.dropped) == (1, 1)
+        day_two_requests = put_stage_cassettes(
+            cassette_path,
+            store,
+            triage_data={"rationale": "Drop.", "probability": 0.0},
+            as_of=day_two,
+            channel_purposes=CHANNEL_PURPOSES,
+        )
+    day_two_content = day_two_requests[0].messages[0].content
+    assert "FIRST-DAY-THREAD" in day_two_content
+    assert "SECOND-DAY-REPLY" in day_two_content
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DELETE FROM stage_runs")
+        connection.execute("DELETE FROM triage")
     result = runner.invoke(app, ["extract", "--world", "tiny", "--db", str(db_path)])
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
-    assert report["threads"] == 2
-    assert report["dropped"] == 2
+    assert (
+        report["threads"],
+        report["kept"],
+        report["dropped"],
+        report["failed"],
+        report["items_written"],
+    ) == (2, 0, 2, 0, 0)
+    assert report["drops"] == dict.fromkeys(DROP_FIELDS, 0)
 
 
 def test_cli_extract_refuses_store_without_until(cli_case: tuple[Path, Path]) -> None:
