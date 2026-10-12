@@ -13,14 +13,19 @@ from typer.testing import CliRunner
 
 import digest.cli as cli_module
 from digest.cli import app
-from digest.eval.extraction import ExtractionReport, run_extraction_eval, write_report
+from digest.eval.extraction import (
+    ExtractionReport,
+    _verified_entries,
+    run_extraction_eval,
+    write_report,
+)
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION, extract_request, triage_request
 from digest.extract.schema import Extraction, TriageOutput
 from digest.extract.verify import DROP_FIELDS
 from digest.llm import LLMRequest, LLMResponse, Message
 from digest.llm.cassette import Cassettes, request_key
 from digest.llm.client import LLM
-from digest.models import Event
+from digest.models import Event, Evidence, Item
 from digest.priors import AbsencePriors, Priors, TriagePriors
 from digest.replay import replay_world
 from digest.store import Store
@@ -724,6 +729,43 @@ def test_eval_reports_each_objective_field_miss(tmp_path: Path) -> None:
     assert report.by_type["ask"].golden_matched == 0
 
 
+def test_verified_entries_keys_messages_by_channel_and_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Set up equal message times; verify the citation against its channel's message."""
+    shared_ts = "1791907200.000001"
+    cited = _event("CENG", "eng", shared_ts, "The cited test passed.", "UASKER")
+    other = _event("CNOISE", "social", shared_ts, "Lunch moved to noon.", "UOWNER")
+    item = Item(
+        item_id="I-CITATION",
+        thread_id=cited.thread_id,
+        type="fyi",
+        title="Cited result",
+        summary="The cited test passed.",
+        entities=(),
+        owner=None,
+        due=None,
+        affected_roles=(),
+        severity="low",
+        confidence="high",
+        evidence=(
+            Evidence(
+                channel_id=cited.channel_id,
+                message_ts=shared_ts,
+                quote="cited test passed",
+                permalink=cited.permalink,
+            ),
+        ),
+        first_seen=shared_ts,
+        last_updated=shared_ts,
+    )
+
+    with Store.open(":memory:") as store:
+        monkeypatch.setattr(store, "events_in_thread", lambda *_: [cited, other])
+
+        assert _verified_entries(store, [item], datetime.max.replace(tzinfo=UTC)) == 1
+
+
 @pytest.mark.parametrize("attribute", ["status", "spec_param", "lead_time", "priority"])
 def test_eval_matches_non_discriminating_claims_without_equal_values(
     tmp_path: Path, attribute: str
@@ -1004,7 +1046,7 @@ def test_write_report_has_no_claim_value_agreement_when_none_are_found(
     table = _table_with_row(claims, "claim recall")
     row = _row_with_label(table, "claim value agreement (non-discriminating)")
     cells = [cell.strip().lower() for cell in row.strip("|").split("|")]
-    assert "—" in cells
+    assert "n/a" in cells
     assert "0" in cells
     assert "advisory" in row.lower()
 
