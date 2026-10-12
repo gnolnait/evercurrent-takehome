@@ -95,6 +95,10 @@ CREATES = [
     pytest.param('bash -lc "gh pr create --fill"', id="bash-lc-flag-cluster"),
     pytest.param("gh api graphql --input request.json", id="graphql-input-file"),
     pytest.param("gh api graphql -F query=@mutation.graphql", id="graphql-query-file"),
+    pytest.param("gh api https://api.github.com/graphql --input request.json",
+                 id="graphql-full-url"),
+    pytest.param("curl https://api.github.com/graphql -d@request.json",
+                 id="graphql-curl-glued-file"),
     pytest.param('eval "gh pr create --fill"', id="eval"),
     pytest.param("gh api graphql -f query='mutation{createPullRequest(input:{})}'",
                  id="graphql"),
@@ -127,6 +131,8 @@ NOT_CREATES = [
     pytest.param("gh api -X GET search/code -f q=createPullRequest", id="search-for-mutation"),
     pytest.param("gh pr create --help", id="gh-pr-create-help"),
     pytest.param("gh help pr create", id="gh-help-pr-create"),
+    pytest.param("gh api graphql --input request.json --help", id="gh-api-graphql-help"),
+    pytest.param("gh api repos/o/r/pulls -f title=t --help", id="gh-api-rest-help"),
     pytest.param('echo "gh pr create"', id="echo-argument"),
     pytest.param('grep -n "gh pr create" SKILL.md', id="grep-argument"),
     pytest.param("cat <<'EOF'\ngh pr create\nEOF", id="heredoc-body"),
@@ -240,12 +246,20 @@ def test_unresolvable_head_flag_blocks(repo):
     pytest.param("git switch main && " + CREATE, id="switch-first"),
     pytest.param("cd sub && " + CREATE, id="cd-first"),
     pytest.param("git update-ref HEAD HEAD~1 && " + CREATE, id="update-ref-first"),
+    pytest.param("git symbolic-ref HEAD refs/heads/main && " + CREATE,
+                 id="symbolic-ref-write-first"),
 ])
 def test_command_that_moves_head_blocks_despite_review(cmd, repo):
     _verdict(repo, _head(repo))
     rc, err = _run(cmd, repo)
     assert rc == 2
     assert "changes directory or HEAD" in err
+
+
+def test_reading_the_branch_name_is_not_a_head_move(repo):
+    _verdict(repo, _head(repo))
+    rc, err = _run("git symbolic-ref --short HEAD && " + CREATE, repo)
+    assert rc == 0, err
 
 
 API_CREATE = "gh api repos/o/r/pulls -f title=t -f head=other -f base=main"
