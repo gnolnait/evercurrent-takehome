@@ -92,6 +92,9 @@ CREATES = [
     pytest.param("git push -u origin feat && gh pr create", id="after-push"),
     pytest.param("echo $(gh pr create)", id="command-substitution"),
     pytest.param('bash -c "gh pr create --fill"', id="bash-c"),
+    pytest.param('bash -lc "gh pr create --fill"', id="bash-lc-flag-cluster"),
+    pytest.param("gh api graphql --input request.json", id="graphql-input-file"),
+    pytest.param("gh api graphql -F query=@mutation.graphql", id="graphql-query-file"),
     pytest.param('eval "gh pr create --fill"', id="eval"),
     pytest.param("gh api graphql -f query='mutation{createPullRequest(input:{})}'",
                  id="graphql"),
@@ -117,6 +120,13 @@ NOT_CREATES = [
     pytest.param("gh pr edit 5 --body-file .pr-body.md", id="gh-pr-edit"),
     pytest.param("gh api repos/o/r/pulls", id="rest-list"),
     pytest.param("gh api -X GET repos/o/r/pulls -f state=open", id="rest-explicit-get"),
+    pytest.param("gh api --method=GET repos/o/r/pulls -f state=open", id="rest-method-eq-get"),
+    pytest.param("gh api -XGET repos/o/r/pulls -f state=open", id="rest-glued-get"),
+    pytest.param("curl -G https://api.github.com/repos/o/r/pulls -d state=open",
+                 id="rest-curl-get"),
+    pytest.param("gh api -X GET search/code -f q=createPullRequest", id="search-for-mutation"),
+    pytest.param("gh pr create --help", id="gh-pr-create-help"),
+    pytest.param("gh help pr create", id="gh-help-pr-create"),
     pytest.param('echo "gh pr create"', id="echo-argument"),
     pytest.param('grep -n "gh pr create" SKILL.md', id="grep-argument"),
     pytest.param("cat <<'EOF'\ngh pr create\nEOF", id="heredoc-body"),
@@ -229,12 +239,37 @@ def test_unresolvable_head_flag_blocks(repo):
     pytest.param("git commit --allow-empty -m x && " + CREATE, id="commit-first"),
     pytest.param("git switch main && " + CREATE, id="switch-first"),
     pytest.param("cd sub && " + CREATE, id="cd-first"),
+    pytest.param("git update-ref HEAD HEAD~1 && " + CREATE, id="update-ref-first"),
 ])
 def test_command_that_moves_head_blocks_despite_review(cmd, repo):
     _verdict(repo, _head(repo))
     rc, err = _run(cmd, repo)
     assert rc == 2
     assert "changes directory or HEAD" in err
+
+
+API_CREATE = "gh api repos/o/r/pulls -f title=t -f head=other -f base=main"
+
+
+def test_api_creation_ignores_the_review_of_head(repo):
+    """An API call names a remote branch, not this checkout's HEAD."""
+    _verdict(repo, _head(repo))
+    rc, err = _run(API_CREATE, repo)
+    assert rc == 2
+    assert "use gh pr create" in err
+    assert _log(repo) == []
+
+
+def test_api_creation_with_override_allows_and_logs(repo):
+    rc, err = _run('PR_REVIEW_OVERRIDE="bot PR" ' + API_CREATE, repo)
+    assert rc == 0, err
+    assert [e["route"] for e in _log(repo)] == ["override"]
+
+
+def test_nul_in_head_flag_blocks_without_crash(repo):
+    rc, err = _run('gh pr create --head "\x00"', repo)
+    assert rc == 2
+    assert "cannot resolve" in err
 
 
 # --- Override -------------------------------------------------------------------
