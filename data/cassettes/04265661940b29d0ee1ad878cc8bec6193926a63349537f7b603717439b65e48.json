@@ -1,0 +1,46 @@
+{
+  "key": "04265661940b29d0ee1ad878cc8bec6193926a63349537f7b603717439b65e48",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program status, schedule, gate reviews and decisions\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791996300.010036] author U0FW01: Anyone know if the 3D printer queue is real-time? I’m seeing my small bracket behind three jobs that all say “almost done.”\n[ts 1791996420.010037] author U0ME01: It’s real-time-ish. One of those jobs needs support cleanup before the next one starts, so add a little slack.\n[ts 1791996540.010038] author U0EE01: If nobody objects, I’m bumping my enclosure spacer to tonight. Not blocking anything.\n[ts 1791996720.010039] author U0PM01: Also lunch run in 15. Drop orders here or walk with us."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages are a new thread about 3D printer queue timing, a team member's bump of an enclosure spacer print that is explicitly non-blocking, and a lunch-run logistics note. The printer queue exchange is a minor shop-scheduling detail, and the spacer bump is a small personal schedule adjustment with no blocker, risk, or spec or BOM change. The lunch message is social. Nothing here is a program decision, gate item, or material schedule change, though the spacer reschedule is a faint fyi a lead might want to know.\", \"probability\": 0.2}",
+    "data": {
+      "rationale": "The changed messages are a new thread about 3D printer queue timing, a team member's bump of an enclosure spacer print that is explicitly non-blocking, and a lunch-run logistics note. The printer queue exchange is a minor shop-scheduling detail, and the spacer bump is a small personal schedule adjustment with no blocker, risk, or spec or BOM change. The lunch message is social. Nothing here is a program decision, gate item, or material schedule change, though the spacer reschedule is a faint fyi a lead might want to know.",
+      "probability": 0.2
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 743,
+    "output_tokens": 193
+  },
+  "recorded_at": "2026-10-12T19:53:12.148610+00:00"
+}

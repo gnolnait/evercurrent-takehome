@@ -1,0 +1,46 @@
+{
+  "key": "445d436b1ebe806bace55afe0d635a2f6dbc3b98cc7b8a8c77a95626f998b79e",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: RFQs, POs, shipments, allocation and clear-to-build\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792082700.010050] author U0SC01: DHL just updated the PN-43010 safety scanner shipment; it’s in transit now.\n[ts 1792082880.010051] author U0EM01: Good, thanks <@U0SC01>. Please keep an eye on the next scan before we plan around it.\n[ts 1792083060.010052] author U0EE01: Nice. Once they land, EE can do receiving inspection on the nanoScan units."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread root reports a shipment status update for PN-43010 safety scanners now in transit, which relates to the channel's shipments purpose and is a delivery-timing fact program members plan around. The follow-up asks someone to watch the next scan and says EE will do receiving inspection once units land, which is operational coordination on that shipment. This is project information about a shipment and its planning, though minor, so probability is fairly high but not certain.\", \"probability\": 0.8}",
+    "data": {
+      "rationale": "The thread root reports a shipment status update for PN-43010 safety scanners now in transit, which relates to the channel's shipments purpose and is a delivery-timing fact program members plan around. The follow-up asks someone to watch the next scan and says EE will do receiving inspection once units land, which is operational coordination on that shipment. This is project information about a shipment and its planning, though minor, so probability is fairly high but not certain.",
+      "probability": 0.8
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 682,
+    "output_tokens": 155
+  },
+  "recorded_at": "2026-10-12T19:54:09.241842+00:00"
+}

@@ -1,0 +1,46 @@
+{
+  "key": "b0d88eca7b1215c6f13655160ebee7a6f55fa0b208e0c6ce9a7a29e12457e458",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: CAD, drawings, tolerances, tooling and mechanical FA\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792511700.010098] author U0ME01: Holding G-TR1 for PN-51010. Texture release is on hold until the top-cover vent layout is confirmed.\n[ts 1792511880.010099] author U0EM01: Good call. Please keep the DFM review open so we do not release against a moving cover layout.\n[ts 1792512120.010100] author U0EE01: EE still needs to bless the vent layout after the rerun data. I will post back once the motor driver temps look acceptable.\n[ts 1792512360.010101] author U0ME01: Thanks <@U0EE01>. I will leave the PN-51010 texture notes unissued for now and just keep the package staged."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages discuss a hold on texture release for PN-51010 pending confirmation of the top-cover vent layout, keeping DFM review open, and EE needing to sign off on the vent layout after rerun data. This is a release hold and a blocker tied to a specific part number in a CAD/drawings channel, so it carries program information a member needs to know.\", \"probability\": 0.93}",
+    "data": {
+      "rationale": "The changed messages discuss a hold on texture release for PN-51010 pending confirmation of the top-cover vent layout, keeping DFM review open, and EE needing to sign off on the vent layout after rerun data. This is a release hold and a blocker tied to a specific part number in a CAD/drawings channel, so it carries program information a member needs to know.",
+      "probability": 0.93
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 759,
+    "output_tokens": 132
+  },
+  "recorded_at": "2026-10-12T19:56:02.005865+00:00"
+}

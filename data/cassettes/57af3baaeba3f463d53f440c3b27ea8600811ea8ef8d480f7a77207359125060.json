@@ -1,0 +1,46 @@
+{
+  "key": "57af3baaeba3f463d53f440c3b27ea8600811ea8ef8d480f7a77207359125060",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: CAD, drawings, tolerances, tooling and mechanical FA\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791911662.000400] author U0ME01: <@U0EE01> went through the OS0 point clouds from SN004 and SN007. the bumper fascia clips the bottom ~4 deg of the lidar FOV at the front corners. raising the mount would clear it\n[ts 1791912669.000500] author U0EE01: yeah saw the same thing in the dock-approach logs, floor returns drop out right at the corners. how much do you need? the lidar cable has maybe 10mm of service loop before I'd want a new length\n[ts 1791913127.000600] author U0ME01: +8 clears it with some margin. ok going w/ +8, I'll update the drawing\n[ts 1791913290.000700] author U0EE01: works for me, 8 is fine on the harness side. no new cable length needed"
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages are a new thread in a CAD/mechanical FA channel. They identify a real mechanical issue: the bumper fascia clips the lidar field of view at the front corners on SN004 and SN007. They record a decision to raise the lidar mount by 8 mm, a drawing update, and confirmation from the harness side that no new cable length is needed. This is a design change and a resolved risk that program members need to know, so it carries project information.\", \"probability\": 0.92}",
+    "data": {
+      "rationale": "The changed messages are a new thread in a CAD/mechanical FA channel. They identify a real mechanical issue: the bumper fascia clips the lidar field of view at the front corners on SN004 and SN007. They record a decision to raise the lidar mount by 8 mm, a drawing update, and confirmation from the harness side that no new cable length is needed. This is a design change and a resolved risk that program members need to know, so it carries project information.",
+      "probability": 0.92
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 797,
+    "output_tokens": 160
+  },
+  "recorded_at": "2026-10-12T19:52:08.301769+00:00"
+}

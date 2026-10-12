@@ -1,0 +1,46 @@
+{
+  "key": "6145bb05180f93f46b6102185b72163efe25174a352148a6b36d99e27bc0b47c",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Shared channel with Sunrise Precision Mfg\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791898872.000100] author U0CM01: Morning from Sunrise. Quick one on the drive module sub-assy: what torque for the M5 SHCS into the 6061 bracket? Drawing just says \"per spec\" and our spec sheet has two values (5.2 and 6.0)\n[ts 1791899730.000200] author U0ME01: <@U0CM01> 6.0 N-m with blue threadlocker. 5.2 is the old dry value, ignore it. It's note 7 on the assy drawing, sorry that's buried\n[ts 1791900125.000300] author U0CM01: perfect, thanks Nadia. updating our traveler"
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread is a supplier asking for a torque spec on an M5 fastener into the drive module bracket. The program engineer gives a definitive answer, 6.0 N-m with blue threadlocker, and says the 5.2 N-m value is obsolete. That settles an ambiguity that affects assembly, so it is project information: a spec clarification the supplier needs to act on. The final message only acknowledges the answer and updates a traveler, which is a minor follow-on but does not change the substance. Overall this is a clear spec fact, not small talk.\", \"probability\": 0.9}",
+    "data": {
+      "rationale": "The thread is a supplier asking for a torque spec on an M5 fastener into the drive module bracket. The program engineer gives a definitive answer, 6.0 N-m with blue threadlocker, and says the 5.2 N-m value is obsolete. That settles an ambiguity that affects assembly, so it is project information: a spec clarification the supplier needs to act on. The final message only acknowledges the answer and updates a traveler, which is a minor follow-on but does not change the substance. Overall this is a clear spec fact, not small talk.",
+      "probability": 0.9
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 746,
+    "output_tokens": 194
+  },
+  "recorded_at": "2026-10-12T19:52:17.287831+00:00"
+}

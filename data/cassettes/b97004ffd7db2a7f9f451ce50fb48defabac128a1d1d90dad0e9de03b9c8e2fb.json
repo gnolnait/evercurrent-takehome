@@ -1,0 +1,46 @@
+{
+  "key": "b97004ffd7db2a7f9f451ce50fb48defabac128a1d1d90dad0e9de03b9c8e2fb",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: DVT-1 build log, test results, FA tickets and yield\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792428300.010092] author U0CM01: Found the 8 PN-31020 in incoming QC. DVT-1 kit count is 40, false alarm on the short."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message is a status update in a DVT-1 build channel. It reports that 8 PN-31020 parts were located in incoming QC, confirms the DVT-1 kit count at 40, and says a suspected short was a false alarm. A suspected short could have been a blocker, and the kit count matters for build planning, so program members plausibly need this. It is brief and resolves the concern, so the information value is moderate rather than high.\", \"probability\": 0.65}",
+    "data": {
+      "rationale": "The changed message is a status update in a DVT-1 build channel. It reports that 8 PN-31020 parts were located in incoming QC, confirms the DVT-1 kit count at 40, and says a suspected short was a false alarm. A suspected short could have been a blocker, and the kit count matters for build planning, so program members plausibly need this. It is brief and resolves the concern, so the information value is moderate rather than high.",
+      "probability": 0.65
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 588,
+    "output_tokens": 299
+  },
+  "recorded_at": "2026-10-12T19:55:08.588326+00:00"
+}
