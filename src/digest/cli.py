@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import tempfile
 from collections import Counter
+from collections.abc import Set
 from datetime import UTC, date, datetime, time
+from itertools import combinations
 from pathlib import Path
 from statistics import median
 from typing import NoReturn
@@ -19,7 +22,7 @@ from digest import __version__
 from digest.absence import detect_absences
 from digest.corpus.avoid import load_avoid_names
 from digest.corpus.render import render_world
-from digest.daily.render import build_digest
+from digest.daily.render import build_digest, render_digest, select_digest
 from digest.eval.extraction import run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
@@ -36,7 +39,8 @@ from digest.world.manifest import load_manifest
 from digest.world.schema import World
 
 _DEMO_WORLD = "kestrel"
-_DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")  # ME, supply chain, EM
+_DEMO_READERS = ("U0ME01", "U0SC01", "U0EM01")
+_DEMO_ROLES = ("ME", "supply_chain", "EM")  # the roles of _DEMO_READERS, in the same order
 _RULE = "-" * 40
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
@@ -58,8 +62,11 @@ def demo(
     """Produce digests for three roles from the bundled synthetic corpus (offline).
 
     The command replays the bundled world into a temporary store one day at a time and runs
-    the extract stage at the end of each day from the recorded cassettes. It reads no API
-    key and no `.env` file, and it writes nothing outside the temporary directory.
+    the extract stage at the end of each day from the recorded cassettes. It prints the three
+    digests, then the pairwise item overlap of the three. A failed thread in any extract run
+    stops the command before it builds a digest. The command never constructs the settings
+    object, so it reads no API key and no `.env` file. It writes nothing outside the
+    temporary directory.
     """
     world_dir = Path("data") / "world" / _DEMO_WORLD
     source = world_dir / "world.yaml"
@@ -77,24 +84,39 @@ def demo(
         _refuse(f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}")
     except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
         _refuse(f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}")
-    # No `.env`: a key or a mode in a local file must not reach the demo. The mode is
-    # replay, so the client has no backend and reads no key.
-    llm = LLM(None, Cassettes(Settings(_env_file=None).cassettes), "replay")
+    # Settings would load API keys from the environment and `.env`. The demo reads only
+    # DIGEST_CASSETTES, and the client has no backend, so the mode is always replay.
+    cassettes = os.environ.get("DIGEST_CASSETTES") or Settings.model_fields["cassettes"].default
+    llm = LLM(None, Cassettes(Path(cassettes)), "replay")
     today = loaded.date_of(day)
     zone = ZoneInfo(loaded.timezone)
     digests: list[str] = []
+    shown: list[set[str]] = []
+    # Windows can hold a handle on the store file after it closes. A cleanup error must not
+    # replace the output or the exit code.
     with (
-        tempfile.TemporaryDirectory(prefix="digest-demo-") as tmp,
+        tempfile.TemporaryDirectory(prefix="digest-demo-", ignore_cleanup_errors=True) as tmp,
         Store.open(Path(tmp) / f"{_DEMO_WORLD}.sqlite") as store,
     ):
         try:
-            _extract_days(store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir)
+            total = _extract_days(
+                store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir
+            )
+            if total.failed:
+                noun = "thread" if total.failed == 1 else "threads"
+                _refuse(
+                    f"extract reported {total.failed} failed {noun} up to day {day}; "
+                    "the demo builds no digest from a partial extraction"
+                )
             for user_id in _DEMO_READERS:
-                digests.append(build_digest(store, loaded, priors, user_id, today))
+                selection = select_digest(store, loaded, priors, user_id, today)
+                digests.append(render_digest(loaded, selection))
+                shown.append({line.item.item_id for line in selection.lines})
         # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
         except (CassetteMiss, ValueError, OSError) as error:
             _refuse(str(error))
     typer.echo(f"\n\n{_RULE}\n\n".join(digests))
+    typer.echo(f"\n{_overlap_line(*shown)}")
 
 
 @app.command()
@@ -110,7 +132,7 @@ def run(
 ) -> None:
     """Produce one user's digest for a date.
 
-    The store must be replayed and extracted to exactly the end of that day.
+    The store must hold the world and be replayed and extracted to exactly the end of that day.
     """
     settings = Settings()
     name = world or settings.world
@@ -127,6 +149,10 @@ def run(
     except (OSError, ValueError, yaml.YAMLError) as error:  # ValueError: ValidationError too
         _refuse(str(error))
     with _open_store(path) as store:
+        # Replay stores the world directory name, so compare it with `name`, not `world.name`.
+        stored_world = store.get_meta("world")
+        if stored_world != name:
+            _refuse(f"the store holds world {stored_world!r}, not {name!r}")
         try:
             digest = build_digest(store, loaded, priors, user, day)
         except KeyError:
@@ -449,6 +475,20 @@ def _extract_days(
         if report.failed == 0:
             store.set_meta("extract_until", today.isoformat())
     return total
+
+
+def _overlap_line(*shown: Set[str]) -> str:
+    """The Jaccard index of the item ids of each pair of demo digests, to two decimals.
+
+    `shown` holds one set for each reader of `_DEMO_READERS`, in the same order. Two empty
+    sets have the index 0.00: two readers who see no item share no item.
+    """
+    pairs = []
+    for (role_a, a), (role_b, b) in combinations(zip(_DEMO_ROLES, shown, strict=True), 2):
+        union = a | b
+        index = len(a & b) / len(union) if union else 0.0
+        pairs.append(f"{role_a}/{role_b} {index:.2f}")
+    return f"Item overlap: {', '.join(pairs)}"
 
 
 def _end_of(day: date, zone: ZoneInfo) -> datetime:

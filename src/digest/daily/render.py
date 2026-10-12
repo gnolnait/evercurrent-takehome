@@ -1,4 +1,7 @@
-"""Render a reader's selection as plain text, and build a digest from a store (plan B6.1, B6.2)."""
+"""Render a reader's selection as plain text, and select and build a digest from a store.
+
+See plan B6.1 and B6.2.
+"""
 
 from __future__ import annotations
 
@@ -41,19 +44,22 @@ def render_digest(world: World, selection: Selection) -> str:
 
 
 def build_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> str:
-    """Select and render the reader's digest for `day` from a replayed and extracted store.
+    """Select and render the reader's digest for `day`; see `select_digest` for the refusals."""
+    return render_digest(world, select_digest(store, world, priors, user_id, day))
 
-    Raise ValueError for a store of another world, a store without `meta.until`, a store
-    whose `meta.until` is not exactly the end of `day` in the world's zone, or a store with
-    extract deltas pending. The store keeps only the latest version of each item, so a store
-    replayed past `day` cannot show `day`. Raise KeyError for an unknown user and ValueError
-    for a bot.
+
+def select_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> Selection:
+    """Select the reader's lines for `day` from a replayed and extracted store.
+
+    Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not
+    exactly the end of `day` in the world's zone, or a store with extract deltas pending.
+    The store keeps only the latest version of each item, so a store replayed past `day`
+    cannot show `day`. Raise KeyError for an unknown user and ValueError for a bot. The
+    caller checks that the store holds the world: replay stores the world directory name,
+    and `world` does not carry it.
     """
     zone = ZoneInfo(world.timezone)
     as_of = datetime.combine(day, time.max, zone).astimezone(UTC)
-    stored_world = store.get_meta("world")
-    if stored_world != world.name:
-        raise ValueError(f"store {store.path} holds world {stored_world!r}, not {world.name!r}")
     until = store.get_meta("until")
     if until is None:
         raise ValueError(f"store {store.path} has no meta key 'until'; run digest replay first")
@@ -83,7 +89,7 @@ def build_digest(store: Store, world: World, priors: Priors, user_id: str, day: 
         raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
     items = store.items(as_of)
     absences = detect_absences(store, world.project, priors, as_of, zone)
-    return render_digest(world, select(world, profile, items, absences, priors, day))
+    return select(world, profile, items, absences, priors, day)
 
 
 def _line(line: Line, names: Mapping[str, str]) -> str:
