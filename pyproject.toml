@@ -66,6 +66,10 @@ src = ["src", "tests"]
 # Ported agent tooling keeps its own style and test suite (`just test-hooks`).
 extend-exclude = [".claude", "dev-kit", "notes", "data"]
 
+[tool.ruff.format]
+# Code blocks in the plans are illustrative interfaces, not source; ruff 0.16 formats them otherwise.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 # ANN restores the "every def is annotated" check that mypy --strict provided and ty
 # does not (ty checks types it can see; it has no rule for a missing annotation).

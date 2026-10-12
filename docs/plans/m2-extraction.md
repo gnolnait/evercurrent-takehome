@@ -1,6 +1,6 @@
 # Plan: M2 triage, extraction, absences, golden labels and the corpus
 
-Status: v1.7, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
+Status: v1.8, 2026-10-11. Process stage 1 (`docs/process.md`) for M2. Amended as the
 units are built; stages 2 to 4 run in the unit pull requests.
 
 M2 from `SPEC.md` section 9: a triage classifier, the extraction prompt and schema with
@@ -26,11 +26,18 @@ is reviewed, and is merged by the user.
 
 Units 1, 2 and 3 share only the stubs and `digest/cli.py` (each fills its own command
 bodies), so their tests and code run in parallel and the three pull requests merge in
-any order; a unit branch rebases on `main` if `digest/cli.py` conflicts. The stubs commit
-implements, not stubs, the small shared pieces more than one unit reads (the store's item
-and triage methods, the priors loader, the manifest reader and writer, `World.glossary()`),
-as M1's stubs commit implemented `load_world_header`; the unit that consumes each one
-tests it. Unit 4 runs the
+any order; a unit branch rebases on `main` if `digest/cli.py` conflicts. The stubs pull request
+implements, not stubs, the shared pieces more than one unit reads (the store's item and
+triage methods, the priors loader, the manifest reader and writer, `World.glossary()`).
+They are about a hundred lines of real code, so they go through the wall inside that
+pull request: a Codex test author appends their tests to `tests/test_store.py`,
+`tests/test_project.py` and `tests/test_world.py`, and an Opus implementer makes them
+pass; the orchestrator writes only the interfaces, the fixture content and the
+configuration. The stubs branch forks from `m2-plan` (it needs the plan and the SPEC
+edit) and rebases onto `main` after the plan pull request merges; its pull request opens
+as a draft until then. Commit order: interfaces, fixture and configuration first; then
+the shared-piece tests (proofs recorded against the implementation, as M1 did); then the
+implementation; the `tests/test_world.py` count edit rides with the shared-piece tests. Unit 4 runs the
 other three, so its tests are written in parallel against the stubs and its code lands
 after units 1 to 3 have merged. The data pull request comes last and holds no code.
 
@@ -40,7 +47,7 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 | 2 Absences and golden labels | `m2-absence-golden` | `digest/absence.py`, `digest/world/golden.py`, the ask validation rules in `digest/world/schema.py`, the working-day helpers in `digest/project.py`, `digest absences`, `digest world golden` | `tests/test_absence.py`, `tests/test_golden.py`, `tests/test_world.py` (new tests appended) |
 | 3 Corpus renderer | `m2-corpus` | `digest/corpus/__init__.py`, `digest/corpus/render.py`, `digest/corpus/prompts.py`, `digest/corpus/avoid.py`, `data/world/kestrel/anchor.jsonl`, `data/world/kestrel/manifest.json` (anchor entries), `digest world render` | `tests/test_corpus.py` |
 | 4 Extraction eval | `m2-eval` | `digest/eval/__init__.py`, `digest/eval/extraction.py`, `Cassettes.recorded_models` in `digest/llm/cassette.py`, `digest eval` | `tests/test_eval.py`, `tests/test_llm.py` (one test appended) |
-| Data | `m2-corpus-data` | `data/cassettes/*.json`, `data/world/kestrel/events.jsonl`, `data/world/kestrel/manifest.json` (rendered entries added), `data/world/kestrel/golden.jsonl`, `reports/eval-<date>.md`, README | none (the eval is the check) |
+| Data | `m2-corpus-data` | `data/cassettes/*.json`, `data/world/kestrel/events.jsonl`, `data/world/kestrel/manifest.json` (rendered entries added), `data/world/kestrel/golden.jsonl`, `reports/eval-<date>.md`, README | `tests/test_corpus_data.py` (B5.1) |
 
 ## Shared conventions
 
@@ -121,46 +128,60 @@ after units 1 to 3 have merged. The data pull request comes last and holds no co
 - `tests/test_world.py`: the bundled-world test that pins seven channels and their
   names gains the eighth, and the corpus test's `8 <= len(events) <= 14` becomes a lower
   bound of 8 (the data pull request regenerates `events.jsonl` with every scripted
-  thread). This is the one test edit in the stubs pull request; it gets its own
+  thread, and B5.1 then asserts the manifest covers every event). This is the one test edit in the stubs pull request; it gets its own
   RED-GREEN proof like any other.
-- `SPEC.md`: the two section 9 lines that listed the cost-derived triage threshold as
-  stretch (this plan's pull request; see "Decisions").
 
 ## Shared types (`digest/models.py`, stubs commit)
 
 ```python
-ItemType = Literal["decision", "blocker", "risk", "schedule_change", "spec_change",
-                   "bom_change", "ask", "fyi", "absence"]
+ItemType = Literal[
+    "decision",
+    "blocker",
+    "risk",
+    "schedule_change",
+    "spec_change",
+    "bom_change",
+    "ask",
+    "fyi",
+    "absence",
+]
 ItemStatus = Literal["open", "resolved", "superseded"]
 Severity = Literal["low", "medium", "high"]
 Confidence = Literal["low", "medium", "high"]
 TaskEffect = Literal["evidence", "done"]
 
+
 class Evidence(Frozen):
-    message_ts: str          # TS_PATTERN
-    quote: str               # verbatim span of the cited message
-    permalink: str           # the stored event's permalink (constructed, never model-written)
+    message_ts: str  # TS_PATTERN
+    quote: str  # verbatim span of the cited message
+    permalink: str  # the stored event's permalink (constructed, never model-written)
+
 
 class Claim(Frozen):
-    entity: str              # entity id after normalization
+    entity: str  # entity id after normalization
     attribute: Attribute
     value: str
-    message_ts: str          # the evidence message that states the value; its ts is the claim's asserted time
-    authority: Authority     # that message's author, from the glossary; "hearsay" when unknown
+    message_ts: (
+        str  # the evidence message that states the value; its ts is the claim's asserted time
+    )
+    authority: Authority  # that message's author, from the glossary; "hearsay" when unknown
+
 
 class TaskLink(Frozen):
-    task: str                # ChecklistTask.id
+    task: str  # ChecklistTask.id
     effect: TaskEffect
-    message_ts: str          # the evidence message that shows the progress; its ts is the evidence time
+    message_ts: str  # the evidence message that shows the progress; its ts is the evidence time
+
 
 class AbsenceDetail(Frozen):
     source: Literal["checklist", "ask"]
-    gate: str | None         # checklist source
-    task: str | None         # checklist source
-    asker: str | None        # ask source: user id of the person who asked
-    days_silent: int         # working days since the cited evidence
-    buffer_consumed: int | None   # checklist source: working days since the buffer opened
+    gate: str | None  # checklist source
+    task: str | None  # checklist source
+    asker: str | None  # ask source: user id of the person who asked
+    days_silent: int  # working days since the cited evidence
+    buffer_consumed: int | None  # checklist source: working days since the buffer opened
     buffer_days: int | None
+
 
 class Item(Frozen):
     item_id: str
@@ -169,30 +190,32 @@ class Item(Frozen):
     title: str
     summary: str
     entities: tuple[str, ...]
-    owner: str | None        # user id; for an ask, the person asked
+    owner: str | None  # user id; for an ask, the person asked
     due: date | None
     affected_roles: tuple[Role, ...]
     severity: Severity
     confidence: Confidence
-    evidence: tuple[Evidence, ...]      # at least one (min_length=1)
-    first_seen: str                     # ts of the earliest evidence
-    last_updated: str                   # ts of the latest evidence
+    evidence: tuple[Evidence, ...]  # at least one (min_length=1)
+    first_seen: str  # ts of the earliest evidence
+    last_updated: str  # ts of the latest evidence
     claims: tuple[Claim, ...] = ()
     tasks: tuple[TaskLink, ...] = ()
     status: ItemStatus = "open"
-    resolved_by: str | None = None      # message ts or item id that closed it
-    absence: AbsenceDetail | None = None   # set only when type == "absence"
+    resolved_by: str | None = None  # message ts or item id that closed it
+    absence: AbsenceDetail | None = None  # set only when type == "absence"
+
 
 class TriageDecision(Frozen):
     thread_id: str
     last_ts: str
     prompt_version: str
-    model: str                  # "classify"
+    model: str  # "classify"
     probability: float
     threshold: float
     kept: bool
     rationale: str
     decided_at: datetime
+
 
 class GlossaryEntity(Frozen):
     id: str
@@ -200,12 +223,14 @@ class GlossaryEntity(Frozen):
     description: str
     aliases: tuple[str, ...]
 
+
 class GlossaryPerson(Frozen):
     user_id: str
     name: str
     role: Role | None
     aliases: tuple[str, ...]
     authority: Authority
+
 
 class Glossary(Frozen):
     entities: tuple[GlossaryEntity, ...]
@@ -246,41 +271,48 @@ class ExtractedEvidence(Frozen):
     message_ts: str
     quote: str
 
+
 class ExtractedClaim(Frozen):
-    entity: str                # id or alias
+    entity: str  # id or alias
     attribute: Attribute
     value: str
-    message_ts: str            # one of the item's evidence message_ts
+    message_ts: str  # one of the item's evidence message_ts
+
 
 class ExtractedTask(Frozen):
-    task: str                  # ChecklistTask.id from the prompt
+    task: str  # ChecklistTask.id from the prompt
     effect: TaskEffect
-    message_ts: str            # one of the item's evidence message_ts
+    message_ts: str  # one of the item's evidence message_ts
+
 
 class ExtractedItem(Frozen):
-    rationale: str             # first, before every other field
-    item_id: str | None        # an existing item of this thread to update, else null
-    type: Literal["decision", "blocker", "risk", "schedule_change", "spec_change", "bom_change", "ask", "fyi"]
+    rationale: str  # first, before every other field
+    item_id: str | None  # an existing item of this thread to update, else null
+    type: Literal[
+        "decision", "blocker", "risk", "schedule_change", "spec_change", "bom_change", "ask", "fyi"
+    ]
     title: str
     summary: str
-    entities: list[str]        # ids or aliases
-    owner: str | None          # user id, mention or alias; for an ask, the person asked
-    due: str | None            # YYYY-MM-DD
+    entities: list[str]  # ids or aliases
+    owner: str | None  # user id, mention or alias; for an ask, the person asked
+    due: str | None  # YYYY-MM-DD
     affected_roles: list[Role]
     severity: Severity
     confidence: Confidence
     status: Literal["open", "resolved"]
-    evidence: list[ExtractedEvidence] = Field(min_length=1)   # minItems 1 in the schema
+    evidence: list[ExtractedEvidence] = Field(min_length=1)  # minItems 1 in the schema
     claims: list[ExtractedClaim]
     tasks: list[ExtractedTask]
+
 
 class Extraction(Frozen):
     rationale: str
     items: list[ExtractedItem]
 
+
 class TriageOutput(Frozen):
     rationale: str
-    probability: float         # field_validator: 0 <= p <= 1, else ValidationError
+    probability: float  # field_validator: 0 <= p <= 1, else ValidationError
 ```
 
 `digest/extract/prompts.py`
@@ -587,13 +619,15 @@ class Channel(Frozen):
     purpose: str
     private: bool = False
 
+
 class Ask(Frozen):
-    of: str                    # persona user_id the question is addressed to
-    answered_day: int | None   # working day of the reply, None when never answered
+    of: str  # persona user_id the question is addressed to
+    answered_day: int | None  # working day of the reply, None when never answered
+
 
 class WorldEvent(Frozen):
     ...
-    ask: Ask | None = None     # present exactly when kind == "ask"
+    ask: Ask | None = None  # present exactly when kind == "ask"
 ```
 
 `digest/world/manifest.py`
@@ -916,8 +950,10 @@ mandates them.
 B3.6 `data/world/avoid-names.yaml` holds every name, identifier and phrase listed under
 "Names and terms we must NOT reuse" and "Names to add" in
 `notes/research/competing-submissions.md` (the private note; the file is the tracked
-copy). A test runs `find_avoided` over `world.yaml`, `anchor.jsonl` and, when they
-exist, `events.jsonl` and `golden.jsonl`, and asserts nothing is found.
+copy). A test asserts the three sections of the list are non-empty, runs `find_avoided` over
+`world.yaml`, `anchor.jsonl` and, when they exist, `events.jsonl` and `golden.jsonl`,
+and asserts nothing is found; B5.1 asserts the two generated files exist once the data
+pull request lands.
 
 B3.7 `anchor.jsonl` holds the human-authored anchor slice: the nine lines M1 shipped in
 `events.jsonl` (N1-TORQUE, S1-AGREE and S1-CUT) plus the lines that complete the
@@ -1028,7 +1064,9 @@ extracted item pairs with at most one golden item. `by_type` groups golden items
 golden type for recall and extracted items by extracted type for precision;
 `type_agreement` is the share of pairs whose types agree (advisory, SPEC section 7). A golden item whose thread's triage decisions
 (`store.triage_for_thread`) were `kept=False` at every revision counts in
-`triage_dropped_golden` and in `missed`. Items in a distractor thread, and items in a
+`triage_dropped_golden` and in `missed`; a golden thread with no triage row at all is a
+data error and the eval raises `ValueError` naming it (every thread in the store was
+extracted). Items in a distractor thread, and items in a
 golden thread matched to no golden item, are `unmatched`.
 
 B4.3 Claims: a golden claim is found when an item in its thread carries a claim with
@@ -1065,7 +1103,9 @@ claims, triage, absences, drops, realism, models, not run) and `n` beside every 
 read from the report's own counts (`golden`, `extracted`, `claims_golden`,
 `claims_extracted`, `evidence_entries`, `entity_jaccard_n`, `entities_golden`, the
 absence counts).
-The report is deterministic for a given store and cassettes.
+The report is deterministic for a given store and cassettes: it carries no wall-clock
+time, its only dates are world dates, and the date in the default file name comes from
+`--out` or the world's last day, never from today.
 
 B4.8 `digest eval` in replay mode with complete cassettes exits 0 and writes the file;
 with a missing cassette it exits 1 with the `CassetteMiss` message.
@@ -1109,7 +1149,8 @@ Runs after units 1 to 4 have merged and the user has put `OPENROUTER_API_KEY` in
 3. `uv run digest world golden` writes `golden.jsonl`.
 4. `DIGEST_MODE=record uv run digest eval` records the triage and extraction cassettes
    and writes `reports/eval-<date>.md`.
-5. `DIGEST_MODE=replay uv run digest eval` reproduces the report byte for byte. The
+5. `DIGEST_MODE=replay uv run digest eval` reproduces the report byte for byte, and
+   the data pull request's test (B5.1) keeps that check in CI. The
    report's `triage_by_event` table is the input SPEC section 5 step 2 names for
    revisiting `miss_cost_ratio` after the first twenty golden threads; a change to the
    ratio is its own commit with the before and after in the report.
@@ -1118,7 +1159,17 @@ Runs after units 1 to 4 have merged and the user has put `OPENROUTER_API_KEY` in
    open-source hardware issue threads, paraphrased, never copied; HERB's artifact shape
    as a schema reference only, no content, CC BY-NC).
 
-The pull request holds data and the README change only. Both reviewers see it.
+The pull request holds the data, the README change and one test, written by the Codex
+test author with its own proof (B5.1). Both reviewers see it.
+
+B5.1 `tests/test_corpus_data.py`, written by the Codex test author after the recording
+and proven with `--break blank:<one cassette file>:1-3` (replay then misses and the test
+fails), runs `run_extraction_eval` on the bundled world in replay mode against the
+committed cassettes and asserts: the written report equals
+`reports/eval-<date>.md` byte for byte; `citation_validity == 1.0`; every event of the
+world has a manifest entry and every manifest thread has at least one line in
+`events.jsonl`; `models` names two model families (D12). This is the check CI runs on
+the recordings; without it a missing cassette or an empty render would pass green.
 
 ## Decisions recorded in this plan
 
@@ -1203,6 +1254,7 @@ U4. Confirm the two ask events and the private channel event (B2.9) as world con
 | P11 | The nine anchor lines fall on world days 2 and 4 with fractional ts `000100` to `000900` | timestamp conversion in `America/Los_Angeles` | verified |
 | P12 | The import contract rejects `digest.world` importing `digest.llm` | `pyproject.toml` layers: siblings in one layer | verified by reading the contract |
 | P13 | anthropic 1.11.0, pydantic 2.13.5, hypothesis 6.168.5 installed | `uv run python -c` | verified |
+| P14 | ruff 0.16.10 (the resolved `ruff>=0.8`) formats Python code fences inside Markdown, so this plan failed `ruff format --check` in CI while the pre-commit ruff hook (0.14.0, Python files only) passed it | CI run 38188665234 on f275dbe; local `uv run ruff format --check .` | verified; `*.md` is excluded from `ruff format` in `pyproject.toml` so the code blocks stay illustrative and the hook and CI agree |
 
 ## Mechanics for this milestone
 
