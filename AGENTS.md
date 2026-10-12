@@ -81,11 +81,29 @@ the case for it. This applies to chat as well as to the repo.
 - Keep the issue number out of the PR title; link it from the body with `Closes #NNNN`.
 - No GitHub posts (comments, reviews, PR bodies) without per-message approval from the
   user. Prior approval does not extend to follow-ups.
+- PR bodies follow `.github/PULL_REQUEST_TEMPLATE.md`: the `yaml release` header
+  (category, risk, rollback, issue), then Summary, Test Plan and an optional Appendix.
 - PR descriptions are user-facing: the destination, not the journey. No internal tooling
   names, no reviewer-round breadcrumbs. Anchor claims to numbers.
 - Reviewer fixes ship as new commits, never amendments.
 - Default to draft unless end-to-end validation is done, tests are green and the body
   has no TODO.
+
+## Skills per stage
+
+At each stage of `docs/process.md`, invoke the skill with the Skill tool; do not run its
+procedure from memory. The user-level routing table covers the other moments.
+
+- Plan: `grill-me` on a load-bearing unit; `prototype` for one uncertain premise.
+- Tests: `testing` (`property-testing` for invariants); `prove-test` for every new or
+  modified test.
+- Code: `minimal-diff-ladder` before new structure; `bug-fix` for a reported bug.
+- Review: `/review-local --base main` plus `codex exec -p review`; `ship-review` sets
+  the intensity.
+- Adversarial: `ship-adversarial-validate`, then `pass-loop` on correctness-critical units.
+- A change a reader sees (Slack, the web preview): `browser-verify`, which reads
+  `.claude/browser-verify.md`.
+- PR, checks, review threads: `github`. Session end: `handoff`. Unit done: `retrospective`.
 
 ## Reviews
 
