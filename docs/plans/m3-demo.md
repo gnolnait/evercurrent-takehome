@@ -186,9 +186,14 @@ digest for an earlier day needs a store replayed exactly to that day.
 
 B6.3 `digest run` prints `build_digest` and exits 0; it exits 1 with the reason on a
 refused store, an unknown user or a bot. `digest demo` exits 0, prints three digests,
-reads no API key, never writes outside a temporary directory, and finishes in under 60
-seconds on the bundled data; a missing cassette exits 1 with the `CassetteMiss`
-message.
+then one line with the realized pairwise item overlap of the three (SPEC A1): for each
+reader pair, the Jaccard index of the item ids their digests show, to two decimals. It
+reads no API key: it never constructs the settings object that loads keys from the
+environment, and it builds the model client in replay mode only. It never writes outside
+a temporary directory and finishes in under 60 seconds on the bundled data. A missing
+cassette exits 1 with the `CassetteMiss` message; an extract run with a failed thread
+exits 1 naming the failed-thread count, before any digest is built. The golden-implied
+overlap target of SPEC A1 is M3 proper.
 
 ## Tests
 
