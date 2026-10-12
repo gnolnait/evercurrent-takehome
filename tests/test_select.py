@@ -343,8 +343,12 @@ def test_visibility_uses_evidence_channel_id_instead_of_permalink() -> None:
 
 
 def test_visibility_applies_thread_channel_to_absences() -> None:
-    hidden = absence("absence-hidden", channel_ids=("CHIDDEN",))
-    visible = absence("absence-visible", channel_ids=("CPUBLIC", "CPRIVATE"))
+    hidden = absence("absence-hidden", channel_ids=("CHIDDEN",), affected_roles=("ME",))
+    visible = absence(
+        "absence-visible",
+        channel_ids=("CPUBLIC", "CPRIVATE"),
+        affected_roles=("ME",),
+    )
 
     selection = choose(absences=[hidden, visible])
 
@@ -387,6 +391,27 @@ def test_each_must_see_rule_is_kept(row: Item, reason_terms: tuple[str, ...]) ->
     assert line.must_see is True
     assert line.score == 0
     assert all(term in line.reason.lower() for term in reason_terms)
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        ("EE", (("ee-checklist", True),)),
+        ("EM", (("ee-checklist", True),)),
+        ("ME", ()),
+    ],
+    ids=["task-owner-role", "engineering-manager", "other-role"],
+)
+def test_checklist_absence_reaches_only_task_role_and_em(
+    role: Role, expected: tuple[tuple[str, bool], ...]
+) -> None:
+    missing = absence("ee-checklist", affected_roles=("EE",))
+    profile = reader().model_copy(update={"role": role})
+    table = priors(role_priors={role: {"absence": 1.0}}, min_score=0.01)
+
+    selection = choose(absences=[missing], profile=profile, table=table)
+
+    assert tuple((line.item.item_id, line.must_see) for line in selection.lines) == expected
 
 
 def test_role_owned_entity_makes_blocker_must_see_when_persona_omits_it() -> None:
@@ -509,7 +534,13 @@ def test_ranked_score_uses_type_and_severity_weights(
     severity_weight: float,
 ) -> None:
     row = (
-        absence("weighted", affected_roles=()).model_copy(update={"severity": severity})
+        absence(
+            "weighted",
+            source="ask",
+            asker="UASKER",
+            owner="UEMPTY",
+            affected_roles=(),
+        ).model_copy(update={"severity": severity})
         if item_type == "absence"
         else item("weighted", type=item_type, severity=severity)
     )
@@ -564,7 +595,11 @@ def test_bundled_daily_priors_are_used_for_ranking() -> None:
     ],
 )
 def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section: str) -> None:
-    row = absence("row") if item_type == "absence" else item("row", type=item_type)
+    row = (
+        absence("row", affected_roles=("ME",))
+        if item_type == "absence"
+        else item("row", type=item_type)
+    )
 
     selection = choose(
         absences=[row] if item_type == "absence" else [],
@@ -771,7 +806,16 @@ def test_each_section_caps_only_ranked_lines() -> None:
         item("risk-low-a", type="risk", severity="low"),
     ]
     rows += [item(f"fyi-{index}", type="fyi") for index in range(7)]
-    missing = [absence(f"absence-{index}") for index in range(5)]
+    missing = [
+        absence(
+            f"absence-{index}",
+            source="ask",
+            asker="UASKER",
+            owner="UEMPTY",
+            affected_roles=(),
+        )
+        for index in range(5)
+    ]
     rows.append(item("risk-must", type="blocker", entities=("PN-OWNED",)))
 
     selection = choose(rows, missing)
