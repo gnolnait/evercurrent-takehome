@@ -179,6 +179,17 @@ def test_blocks_windows_shell_wrapped_bypass():
 def test_blocks_windows_shell_wrapped_bypass_by_backslash_path():
     """A backslash in the inner command is a path separator, not an escape."""
     assert _verdict('cmd /c "C:\\Git\\cmd\\git.exe commit --no-verify -m x"') == "BLOCK"
+    assert _verdict('cmd //c "C:\\Program Files\\Git\\cmd\\git.exe" commit --no-verify -m x') == "BLOCK"
+
+
+def test_blocks_windows_shell_syntax_forms():
+    """cmd reads a command glued to /c; PowerShell joins a backtick line end."""
+    assert _verdict("cmd //cgit commit --no-verify -m x") == "BLOCK"
+    assert _verdict("powershell -Command 'git `\n  commit --no-verify -m x'") == "BLOCK"
+
+
+def test_allows_bypass_words_as_powershell_arguments():
+    assert _verdict("powershell Write-Output git commit --no-verify") == "ALLOW"
 
 
 def test_blocks_encoded_powershell_command():

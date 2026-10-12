@@ -203,6 +203,14 @@ BLOCK = [
     # A backslash in the inner command is a path separator, not an escape.
     pytest.param('powershell -Command "C:\\x\\gh.exe pr merge 1"', id="powershell-backslash-path"),
     pytest.param('cmd /c "C:\\Git\\gh.exe pr merge 1"', id="cmd-backslash-path"),
+    pytest.param(
+        'cmd //c "C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 5', id="cmd-quoted-spaced-path"
+    ),
+    # cmd reads the command glued to /c, and `#` is plain text there.
+    pytest.param("cmd //cgh pr merge 5", id="cmd-attached-command"),
+    pytest.param('cmd //c "echo # header & gh pr merge 5"', id="cmd-hash-is-not-a-comment"),
+    # PowerShell joins a line that ends in a backtick to the next line.
+    pytest.param("powershell -Command 'gh `\n  pr merge 5'", id="powershell-backtick-continuation"),
     # An encoded command cannot be read, so it is refused.
     pytest.param("powershell -EncodedCommand ZwBoAA==", id="powershell-encoded"),
     pytest.param("pwsh -enc ZwBoAA==", id="pwsh-encoded-short"),
@@ -265,6 +273,7 @@ ALLOW = [
     ),
     pytest.param("powershell -ExecutionPolicy Bypass -File build.ps1", id="powershell-file"),
     pytest.param("powershell -ep Bypass -File build.ps1", id="powershell-ep-is-execution-policy"),
+    pytest.param("powershell Write-Output gh pr merge 5", id="powershell-merge-words-as-arguments"),
     pytest.param('cmd //c "dir"', id="cmd-unrelated"),
 ]
 
@@ -275,6 +284,7 @@ POWERSHELL_BLOCK = [
     pytest.param("gh pr merge 5", id="ps-gh-pr-merge"),
     pytest.param('& "C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 5', id="ps-call-full-path"),
     pytest.param("gh pr list; gh pr merge 5", id="ps-second-statement"),
+    pytest.param("gh `\n  pr merge 5", id="ps-backtick-continuation"),
 ]
 
 POWERSHELL_ALLOW = [
