@@ -35,6 +35,8 @@ Move as fast as possible. Run the minimum checks that prevent bugs. The rules in
 - Imports at top level. An inline import needs a comment saying why.
 - Path-specific guidance goes in `.claude/rules/` (auto-loaded by `paths:` glob), not in
   this always-loaded file.
+- The files listed in `.claude/dev-kit.json` are copies from `~/Documents/dev-kit/project/`.
+  Edit them in dev-kit, then run `just sync-kit`. `just sync-kit --check` reports drift.
 - Private working notes (recon, research briefs, handoffs) live in `notes/`, which is
   gitignored. Nothing load-bearing may live only there.
 - Log calls are an event token plus structured fields, never an f-string message
