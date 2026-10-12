@@ -1,6 +1,6 @@
 # Plan: M3 demo slice, a daily digest per reader
 
-Status: v0.3, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
+Status: v0.4, 2026-10-12. Process stage 1 (`docs/process.md`), lighter variant decided
 with the user for the 2026-10-14 deadline: Codex writes the tests, an Opus subagent
 writes the code, every test is RED-GREEN proven, one review lane per commit
 (alternating Codex and the Claude lenses), at most one fix round per commit; findings
@@ -51,7 +51,7 @@ class Profile(Frozen):
     name: str
     role: Role
     team: str | None
-    owned_entities: tuple[str, ...]
+    owned_entities: tuple[str, ...]  # the owned set of B5.1, sorted
     channels: tuple[str, ...]          # channels the reader is a member of
 
 def profile_for(world: World, user_id: str) -> Profile   # KeyError for an unknown id, ValueError for a bot
@@ -97,7 +97,10 @@ EM (`U0EM01`) readers, separated by a rule line.
 
 ## Behaviours
 
-B5.1 `profile_for` builds the profile from the persona; `can_see` is true for a public
+B5.1 `profile_for` builds the profile from the persona. Its owned set follows SPEC
+v0.4.3 section 3: the persona's `owned_entities`, every world entity whose `owner` is the
+reader's role, and every entity whose `subsystem` or `parent` is in the set, repeated
+until the set stops growing. Every rule below that says "owned" reads this set; `can_see` is true for a public
 channel and for a private channel the reader belongs to, false otherwise (fail closed:
 an unknown channel id is not visible).
 
@@ -121,8 +124,8 @@ B5.4 Ranked lane: every other visible open item gets
 - `importance`: by type (blocker 1.0, decision 0.9, schedule_change 0.9, spec_change 0.8,
   bom_change 0.8, risk 0.7, ask 0.6, absence 0.9, fyi 0.3), times severity (high 1.0, medium 0.7,
   low 0.4).
-- `role_prior`: `priors.daily.role_priors[role][type]` (each value between 0 and 1, checked
-  when the priors load), default 0.5 when the table has no entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
+- `role_prior`: `priors.daily.role_priors[role][type]` (each value above 0 and at most 1,
+  checked when the priors load; SPEC 5.6 keeps every score term above zero), default 0.5 when the table has no entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
   phase re-weighting is M3 proper).
 - `personal_relevance`: 1.0 when an item entity is owned by the reader, 0.8 when the
   item's `affected_roles` include the reader's role, else 0.4.
@@ -136,6 +139,16 @@ person asked also goes to `needs_you` and replaces the line of the ask item it c
 section holds its must-see lines plus up to its cap of ranked lines. Resolved items are
 left out. Items are those with `last_updated` at or before the end of `day` in the
 world's zone; absences are `detect_absences` as of that day.
+
+B5.6 Gaps to SPEC v0.4.3 that the slice keeps, each with no effect on the bundled demo:
+- No digest window. Every demo digest is a first digest. SPEC's first window is five
+  working days, and the corpus starts on Monday 2026-10-12, so the window holds every
+  item up to day 6. The window is M3 proper.
+- M2 evidence entries carry no `channel_id`. M2 does not merge items, so every evidence
+  entry comes from the item's thread, and the thread's channel stands in for it (B5.2).
+  When the model carries `channel_id`, B5.2 reads it.
+- The 0.5 default role prior is not the neutral 1 of SPEC 5.6. The bundled table has a
+  value for every role and type, so the default does not apply to it.
 
 B6.1 `render_digest` writes, in order: a header line with the reader's name, role and
 the date; then each non-empty section with a title ("Needs you", "Not happened",
