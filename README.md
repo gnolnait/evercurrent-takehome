@@ -27,10 +27,11 @@ Measured on the recorded corpus (`reports/eval-2026-10-23.md`):
 | Triage recall | 1.0 | 30 | |
 | Claim precision | 0.537 | 41 | 0.8 to keep the ledger |
 | Claim recall | 0.629 | 35 | |
-| Absence lines that are false | 0.304 | 23 | |
+| Detected absences that are false | 0.304 | 23 | |
 | Absence recall | 0.516 | 31 | |
 
-About 30% of the absence lines are false. The report labels this share the false-alarm
+About 30% of the detected absences are false, counted once per day, source and task
+before the per-reader filter. The report labels this share the false-alarm
 rate, but SPEC A6 defines that rate over simulated silences that were not stalls, and the
 eval does not compute it yet. Silence is counted from task links that the extractor
 writes, so a missed link makes an active task look silent.

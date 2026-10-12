@@ -246,7 +246,8 @@ one config value:
   Anthropic key.
 - `openrouter`: one OpenAI-compatible chat-completions adapter with `response_format`
   of type `json_schema`, used for every development call: Claude for extraction and
-  adjudication, GPT-class for the corpus renderer and the different-family judge, and
+  adjudication, GPT-class for the corpus renderer, a third family for the judge (D12
+  amendment of 2026-10-12), and
   the Haiku-class triage classifier. OpenRouter's public catalogue lists the Claude
   and GPT models with `structured_outputs` support (checked 2026-10-08); the first
   call is a five-line spike at the start of M2.

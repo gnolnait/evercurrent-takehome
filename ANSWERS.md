@@ -99,8 +99,8 @@ In this repo (built): `digest eval` writes `reports/eval-<date>.md` with precisi
 recall per item type, claim precision and recall, citation validity, triage recall and
 the absence false-alarm rate, each with its n, and a list of metrics not run. Citation
 validity is a release gate at 100%. The current report gives citation validity 1.0
-(n = 73), claim precision 0.537 (n = 41), and 7 false lines among 23 absence lines
-(0.304). That last number is the share of absence lines that are false, not yet the
+(n = 73), claim precision 0.537 (n = 41), and 7 false among 23 detected absences
+(0.304). That last number is the share of detected absences that are false, not yet the
 SPEC A6 rate over silences that were not stalls. Designed, not run: the faithfulness judge,
 must-see recall and nDCG, the baselines and the online signals.
 
