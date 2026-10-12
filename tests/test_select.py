@@ -332,12 +332,13 @@ def test_visibility_drops_item_with_no_evidence_from_thread_channel(permalink: s
 
 def test_visibility_applies_thread_channel_to_absences() -> None:
     hidden = absence("absence-hidden", channel_ids=("CHIDDEN",))
-    visible = absence("absence-visible", channel_ids=("CPUBLIC", "CHIDDEN"))
+    visible = absence("absence-visible", channel_ids=("CPUBLIC", "CPRIVATE"))
 
     selection = choose(absences=[hidden, visible])
 
     assert [line.item.item_id for line in selection.lines] == ["absence-visible"]
     assert selection.lines[0].item.evidence == (visible.evidence[0],)
+    assert visible.evidence[1] not in selection.lines[0].item.evidence
     assert selection.hidden == 1
 
 
@@ -563,6 +564,12 @@ def test_each_item_type_is_assigned_to_its_section(item_type: ItemType, section:
 
 def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
     ask = item("ask", type="ask", owner="UREADER")
+    other_ask = item(
+        "ask-other-thread",
+        type="ask",
+        owner="UREADER",
+        thread_id="CPUBLIC:1791993601.000001",
+    )
     missing = absence(
         "ask-absence",
         source="ask",
@@ -571,10 +578,11 @@ def test_ask_absence_for_person_asked_replaces_ask_in_needs_you() -> None:
         affected_roles=(),
     ).model_copy(update={"thread_id": ask.thread_id})
 
-    selection = choose([ask], [missing])
+    selection = choose([ask, other_ask], [missing])
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("ask-absence", "needs_you")
+        ("ask-absence", "needs_you"),
+        ("ask-other-thread", "needs_you"),
     ]
 
 
@@ -593,6 +601,80 @@ def test_ask_absence_for_asker_goes_to_not_happened() -> None:
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
         ("ask-absence", "not_happened")
     ]
+
+
+def test_ranked_ask_absence_replaces_ask_for_third_party_reader() -> None:
+    ask = item("ask", type="ask", owner="UREADER")
+    missing = absence(
+        "ask-absence",
+        source="ask",
+        asker="UASKER",
+        owner="UREADER",
+        affected_roles=(),
+    ).model_copy(update={"thread_id": ask.thread_id})
+
+    selection = choose([ask], [missing], profile=profile_for(world(), "UEMPTY"))
+
+    assert [(line.item.item_id, line.section) for line in selection.lines] == [
+        ("ask-absence", "not_happened")
+    ]
+    assert selection.lines[0].must_see is False
+
+
+def test_ranked_ties_use_newest_evidence_then_item_id() -> None:
+    table = priors(
+        role_priors={
+            "ME": {
+                "decision": 1.0,
+                "schedule_change": 0.9999995,
+            }
+        }
+    )
+    rows = [
+        item("ranked-a-old", evidence=(evidence("CPUBLIC", 1),)),
+        item(
+            "ranked-z-new",
+            type="schedule_change",
+            evidence=(evidence("CPUBLIC", 4),),
+        ),
+        item("ranked-c-equal", evidence=(evidence("CPUBLIC", 3),)),
+        item(
+            "ranked-b-equal",
+            type="schedule_change",
+            evidence=(evidence("CPUBLIC", 3),),
+        ),
+    ]
+
+    selection = choose(rows, table=table)
+
+    assert len({format(line.score, ".6g") for line in selection.lines}) == 1
+    assert [line.item.item_id for line in selection.lines] == [
+        "ranked-z-new",
+        "ranked-b-equal",
+        "ranked-c-equal",
+        "ranked-a-old",
+    ]
+
+
+def test_must_see_ties_stay_in_item_id_order() -> None:
+    rows = [
+        item(
+            "must-z-new",
+            type="ask",
+            owner="UREADER",
+            evidence=(evidence("CPUBLIC", 4),),
+        ),
+        item(
+            "must-a-old",
+            type="ask",
+            owner="UREADER",
+            evidence=(evidence("CPUBLIC", 1),),
+        ),
+    ]
+
+    selection = choose(rows)
+
+    assert [line.item.item_id for line in selection.lines] == ["must-a-old", "must-z-new"]
 
 
 def test_each_section_caps_only_ranked_lines() -> None:
