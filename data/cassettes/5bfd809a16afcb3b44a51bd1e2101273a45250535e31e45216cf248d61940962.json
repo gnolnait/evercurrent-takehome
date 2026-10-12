@@ -1,0 +1,46 @@
+{
+  "key": "5bfd809a16afcb3b44a51bd1e2101273a45250535e31e45216cf248d61940962",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Shared channel with Sunrise Precision Mfg\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791994800.010031] author U0CM01: Cross-posting the schedule sync note from Monday: PN-51010 T1 was showing 2026-10-14, with G-DVT1 on 2026-10-22. The molder has now moved top cover PN-51010 T1 to 2026-10-21 for slider rework.\n[ts 1791995040.010032] author U0PM01: Thanks <@U0CM01>. So PN-51010 gate date is now 2026-10-21, correct?\n[ts 1791995160.010033] author U0CM01: Correct. 2026-10-21 is the date we have from the molder.\n[ts 1791995460.010034] author U0ME01: Got it. Please keep the slider rework notes with the top cover record so we can check what changed when samples land.\n[ts 1791995640.010035] author U0SC01: I’ll update the open schedule line for PN-51010 T1 and flag the slip in the next sync."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages carry a schedule change: the molder moved the PN-51010 T1 top cover date from 2026-10-14 to 2026-10-21 for slider rework, with G-DVT1 on 2026-10-22. The gate date change is confirmed and a schedule line update is planned. This is clear program schedule information, and the thread is new in this delta.\", \"probability\": 0.96}",
+    "data": {
+      "rationale": "The changed messages carry a schedule change: the molder moved the PN-51010 T1 top cover date from 2026-10-14 to 2026-10-21 for slider rework, with G-DVT1 on 2026-10-22. The gate date change is confirmed and a schedule line update is planned. This is clear program schedule information, and the thread is new in this delta.",
+      "probability": 0.96
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 839,
+    "output_tokens": 134
+  },
+  "recorded_at": "2026-10-12T19:53:02.351826+00:00"
+}

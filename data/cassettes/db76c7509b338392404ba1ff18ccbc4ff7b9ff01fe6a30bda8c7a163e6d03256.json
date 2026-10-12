@@ -1,0 +1,46 @@
+{
+  "key": "db76c7509b338392404ba1ff18ccbc4ff7b9ff01fe6a30bda8c7a163e6d03256",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: RFQs, POs, shipments, allocation and clear-to-build\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792425300.010082] author U0SC01: Blocker from the battery vendor: they cannot air-ship 40x PN-61001 Rev B. Their TST-UN383 summary only covers Rev A.\n[ts 1792425540.010083] author U0EE01: That matches what I have. PN-61001 Rev B is the current pack, but the UN 38.3 paperwork never got updated past Rev A.\n[ts 1792425720.010084] author U0PM01: Thanks <@U0SC01>. Are they offering ground freight as a fallback, or is everything held until the updated summary exists?\n[ts 1792426020.010085] author U0SC01: Ground is allowed, air shipment is blocked. I’m asking for their fastest ground option plus timing for a Rev B TST-UN383 summary.\n[ts 1792426200.010086] author U0EM01: Please post the ETA when they answer. If PN-61001 Rev B can’t fly this week, we’ll need to adjust the clear-to-build plan."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages describe a shipment blocker: the battery vendor cannot air-ship 40x PN-61001 Rev B because the UN 38.3 test summary covers only Rev A. Engineering confirms the paperwork gap, a ground-freight fallback is being pursued, and management asks for an ETA and warns the clear-to-build plan may need adjustment. This is clearly program-relevant project information in a channel about shipments and clear-to-build, so the probability is high.\", \"probability\": 0.96}",
+    "data": {
+      "rationale": "The changed messages describe a shipment blocker: the battery vendor cannot air-ship 40x PN-61001 Rev B because the UN 38.3 test summary covers only Rev A. Engineering confirms the paperwork gap, a ground-freight fallback is being pursued, and management asks for an ETA and warns the clear-to-build plan may need adjustment. This is clearly program-relevant project information in a channel about shipments and clear-to-build, so the probability is high.",
+      "probability": 0.96
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 871,
+    "output_tokens": 173
+  },
+  "recorded_at": "2026-10-12T19:55:34.424670+00:00"
+}

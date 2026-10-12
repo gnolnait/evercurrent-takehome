@@ -1,0 +1,46 @@
+{
+  "key": "ea509a54c57220f7e8e6a99781e978ea314d205157c4c583e9730c259b19e0eb",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: RFQs, POs, shipments, allocation and clear-to-build\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791991800.010021] author U0SC01: Heads up: I placed PO-45002211 for 50x PN-31010 Rev B. Reposting the Monday PLM note here too: ECO-0142 moved PN-31010 from Rev B to Rev C.\n[ts 1791991980.010022] author U0EE01: Yep, PN-31010 should now be Rev C after ECO-0142. Rev B on the harness PO is the mismatch.\n[ts 1791992100.010023] author U0EM01: Thanks for catching it, <@U0SC01>. Can we pause release against PO-45002211 until the rev is corrected?\n[ts 1791992280.010024] author U0SC01: I’ll contact the supplier and ask to update PO-45002211 from Rev B to Rev C. Not treating it as clear-to-build until they confirm.\n[ts 1791992460.010025] author U0PM01: Please keep the qty at 50 when you revise it. I’ll note the risk on the build tracker."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages carry clear project information: a PO for PN-31010 specifies Rev B while ECO-0142 moved the part to Rev C, a revision mismatch that blocks clear-to-build. They also include a request to pause release against PO-45002211, an action to contact the supplier to revise the PO, and a PM note to track the risk and keep qty at 50. This is a decision, blocker, risk, and BOM/spec change all at once.\", \"probability\": 0.97}",
+    "data": {
+      "rationale": "The changed messages carry clear project information: a PO for PN-31010 specifies Rev B while ECO-0142 moved the part to Rev C, a revision mismatch that blocks clear-to-build. They also include a request to pause release against PO-45002211, an action to contact the supplier to revise the PO, and a PM note to track the risk and keep qty at 50. This is a decision, blocker, risk, and BOM/spec change all at once.",
+      "probability": 0.97
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 867,
+    "output_tokens": 161
+  },
+  "recorded_at": "2026-10-12T19:53:16.534335+00:00"
+}

@@ -1,0 +1,46 @@
+{
+  "key": "bae86d170df6e926634e904a37531137e038b4b64899bdb5fac0c01285c2cef2",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Posts from PLM, the program schedule and document control\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791908400.010010] author B0PLM01: PLM release: PN-11020 Rev C is now active. Change moves the Orin carrier standoff hole pattern.\n[ts 1791908580.010011] author U0ME01: Got it. <@U0SC01> the CM drawing pack that went out yesterday was PN-11020 Rev B, so Sunrise needs the Rev C packet before cutting anything.\n[ts 1791908700.010012] author U0EE01: Thanks. I'll check the Orin carrier clearance against PN-11020 Rev C and flag if the moved standoffs hit anything.\n[ts 1791908880.010013] author U0SC01: Copy. I'll ask Sunrise to pause on PN-11020 Rev B and confirm receipt of PN-11020 Rev C."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread announces a PLM release of PN-11020 Rev C that moves the Orin carrier standoff hole pattern, a spec/drawing change. Follow-up messages confirm the CM drawing pack was Rev B, that Sunrise must hold cutting and receive Rev C, and that an engineer will check clearance impact. This is clearly project information: a spec change, a risk to in-flight fabrication, and an action item.\", \"probability\": 0.97}",
+    "data": {
+      "rationale": "The thread announces a PLM release of PN-11020 Rev C that moves the Orin carrier standoff hole pattern, a spec/drawing change. Follow-up messages confirm the CM drawing pack was Rev B, that Sunrise must hold cutting and receive Rev C, and that an engineer will check clearance impact. This is clearly project information: a spec change, a risk to in-flight fabrication, and an action item.",
+      "probability": 0.97
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 798,
+    "output_tokens": 157
+  },
+  "recorded_at": "2026-10-12T19:52:25.775308+00:00"
+}

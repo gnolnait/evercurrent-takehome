@@ -1,0 +1,46 @@
+{
+  "key": "06c53f4a45a1c35d67e4578e9f8ee18c7ebf709dfa6c550cbf48c1f1d22bcc38",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: DVT-1 build log, test results, FA tickets and yield\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792769400.010121] author U0CM01: Kicked off BLD-DVT1 this morning. First build log is up for the DVT-1 units.\n[ts 1792769580.010122] author U0EM01: Thanks <@U0CM01>. We'll use that as the build source of truth for DVT-1."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread root reports that the DVT-1 build (BLD-DVT1) has started and that the first build log is posted, which is a program status update. The reply designates that build log as the source of truth for DVT-1, a decision that engineers working on DVT-1 need to know. The thanks is social, but the substantive content is an fyi and a decision, so the thread carries project information.\", \"probability\": 0.8}",
+    "data": {
+      "rationale": "The thread root reports that the DVT-1 build (BLD-DVT1) has started and that the first build log is posted, which is a program status update. The reply designates that build log as the source of truth for DVT-1, a decision that engineers working on DVT-1 need to know. The thanks is social, but the substantive content is an fyi and a decision, so the thread carries project information.",
+      "probability": 0.8
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 633,
+    "output_tokens": 238
+  },
+  "recorded_at": "2026-10-12T19:56:46.208524+00:00"
+}

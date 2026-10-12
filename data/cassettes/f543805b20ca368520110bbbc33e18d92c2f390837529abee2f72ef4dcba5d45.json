@@ -1,0 +1,46 @@
+{
+  "key": "f543805b20ca368520110bbbc33e18d92c2f390837529abee2f72ef4dcba5d45",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Shared channel with Sunrise Precision Mfg\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792164600.010061] author U0CM01: FAI photos + CMM for PN-11020 came back with the Rev B hole pattern. Looks like Sunrise is building chassis base from a stale drawing pack. <@U0ME01> can you sanity check the standoff locations?\n[ts 1792164720.010062] author U0PM01: That's not what we want after the PLM update earlier this week. <@U0CM01> can you hold FAI signoff until the pack is checked?\n[ts 1792164840.010063] author U0CM01: Yes, holding signoff and pausing any more chassis base runs until document control confirms what Sunrise has.\n[ts 1792165020.010064] author U0ME01: Confirmed from the photos: the Orin carrier standoff holes match PN-11020 Rev B. Please send Sunrise the PN-11020 Rev C print and have them re-program before cutting more.\n[ts 1792165200.010065] author U0SC01: I'll log the supply risk and ask for the corrected first-article ETA once the current pack is in their hands."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed messages carry clear project information: FAI for PN-11020 found a hole pattern mismatch because the supplier built from a stale drawing pack, signoff is being held, chassis base runs are paused, a Rev C print must be sent for reprogramming, and a supply risk and corrected ETA are being logged. These are a blocker, a spec/drawing change, and a schedule risk.\", \"probability\": 0.97}",
+    "data": {
+      "rationale": "The changed messages carry clear project information: FAI for PN-11020 found a hole pattern mismatch because the supplier built from a stale drawing pack, signoff is being held, chassis base runs are paused, a Rev C print must be sent for reprogramming, and a supply risk and corrected ETA are being logged. These are a blocker, a spec/drawing change, and a schedule risk.",
+      "probability": 0.97
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 881,
+    "output_tokens": 144
+  },
+  "recorded_at": "2026-10-12T19:54:32.721703+00:00"
+}

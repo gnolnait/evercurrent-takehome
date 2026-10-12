@@ -1,0 +1,46 @@
+{
+  "key": "0f21487d6f93af828cc0e40eb5d9ce8dd227daa9be1d90c2947bde27cec4f26c",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Posts from PLM, the program schedule and document control\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1791819000.010000] author B0PLM01: ECO-0142 is released. PN-31010 moved from Rev B to Rev C.\n[ts 1791819180.010001] author U0EE01: Thanks, checking the harness notes against the motor bay routing."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The thread root is a new PLM post that ECO-0142 is released and PN-31010 moved from Rev B to Rev C, which is a spec/BOM revision change a program member needs to know. The follow-up from U0EE01 says they are checking harness notes against motor bay routing, which signals engineering acting on the change. This is project information, not small talk.\", \"probability\": 0.93}",
+    "data": {
+      "rationale": "The thread root is a new PLM post that ECO-0142 is released and PN-31010 moved from Rev B to Rev C, which is a spec/BOM revision change a program member needs to know. The follow-up from U0EE01 says they are checking harness notes against motor bay routing, which signals engineering acting on the change. This is project information, not small talk.",
+      "probability": 0.93
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 615,
+    "output_tokens": 131
+  },
+  "recorded_at": "2026-10-12T19:51:34.483665+00:00"
+}
