@@ -30,9 +30,9 @@ records, and every model call is stateless and purpose-built.
   recollection is never trusted on its own.
 
 In this repo (built): `src/digest/extract/stage.py` runs extraction per thread delta and
-passes the thread's existing items, the glossary and the open checklist tasks; the
-`stage_runs` table in `src/digest/schema.sql` is the checkpoint; there is no long-lived
-conversation anywhere. Designed, not built: the current ledger values in the extraction
+passes the thread's existing items, the glossary and the checklist tasks of gates on or
+after the day; the `stage_runs` table in `src/digest/schema.sql` is the checkpoint; there
+is no long-lived conversation anywhere. Designed, not built: the current ledger values in the extraction
 prompt (D5).
 
 ## Retrieval: how do you address cases where vector similarity returns many nearly identical results with small but critical differences?
