@@ -300,23 +300,27 @@ def test_build_digest_refuses_store_replayed_before_day(
             build_digest(store, world, load_priors(), "U0ME01", DAY)
 
 
-def test_build_digest_omits_items_updated_after_day(tmp_path: Path, world: World) -> None:
+def test_build_digest_refuses_store_replayed_after_day(tmp_path: Path, world: World) -> None:
     after_day = f"{int(datetime(2026, 10, 15, 7, tzinfo=UTC).timestamp())}.000000"
     future = item(item_id="FUTURE", title="Tomorrow's decision", last_updated=after_day)
     with Store.open(tmp_path / "future.sqlite") as store:
         set_replay_meta(store, until="2026-10-16T06:59:59.999999+00:00")
         store.upsert_items([future], prompt_version="m2.1", model="extract")
 
-        rendered = build_digest(store, world, load_priors(), "U0ME01", DAY)
-
-    assert "Tomorrow's decision" not in rendered
-    assert "Nothing new for Nadia Brenner." in rendered
+        with pytest.raises(ValueError, match=r"(?i)(until|replay|cutoff).*2026-10-14"):
+            build_digest(store, world, load_priors(), "U0ME01", DAY)
 
 
-def make_cli_store(path: Path, *, include_until: bool = True, include_item: bool = False) -> None:
+def make_cli_store(
+    path: Path,
+    *,
+    include_until: bool = True,
+    include_item: bool = False,
+    until: str = "2026-10-15T06:59:59.999999+00:00",
+) -> None:
     with Store.open(path) as store:
         if include_until:
-            set_replay_meta(store)
+            set_replay_meta(store, until=until)
         else:
             for key, value in {
                 "world": "kestrel",
@@ -379,8 +383,13 @@ def test_cli_run_prints_digest_and_exits_zero(tmp_path: Path) -> None:
             r"(?i)(bot|human).*B0PLM01|B0PLM01.*(?i:bot|human)",
         ),
         ("U0ME01", lambda path: make_cli_store(path, include_until=False), r"(?i)until"),
+        (
+            "U0ME01",
+            lambda path: make_cli_store(path, until="2026-10-16T06:59:59.999999+00:00"),
+            r"(?i)(until|replay|cutoff).*2026-10-14",
+        ),
     ],
-    ids=["unknown-user", "bot", "refused-store"],
+    ids=["unknown-user", "bot", "missing-until", "after-day"],
 )
 def test_cli_run_exits_one_with_reason(
     tmp_path: Path,
