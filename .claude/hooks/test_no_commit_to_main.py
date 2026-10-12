@@ -73,10 +73,10 @@ def worktree(repos):
     return path
 
 
-def _verdict(cmd, project, cwd=None, payload_cwd=None):
+def _verdict(cmd, project, cwd=None, payload_cwd=None, tool="Bash"):
     env = os.environ.copy()
     env["CLAUDE_PROJECT_DIR"] = str(project)
-    payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+    payload = {"tool_name": tool, "tool_input": {"command": cmd}}
     if payload_cwd is not None:
         payload["cwd"] = str(payload_cwd)
     p = subprocess.run(
@@ -103,6 +103,46 @@ def test_allows_foreign_git_c_commit_while_project_on_main(repos):
 
 def test_blocks_plain_project_commit_on_main(repos):
     assert _verdict("git commit -m update", repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param("git.exe commit -m update", id="git-exe"),
+        pytest.param("GIT.EXE commit -m update", id="git-exe-upper-case"),
+        pytest.param("/usr/bin/git commit -m update", id="full-path"),
+        pytest.param('"/c/Program Files/Git/cmd/git.exe" commit -m update', id="windows-full-path"),
+    ],
+)
+def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_allows_foreign_commit_by_full_git_path(repos):
+    cmd = f'"/c/Program Files/Git/cmd/git.exe" -C {repos["sibling"]} commit -m update'
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param('powershell -Command "git commit -m update"', id="powershell"),
+        pytest.param("pwsh -c 'git commit -m update'", id="pwsh"),
+        pytest.param('cmd //c "git commit -m update"', id="cmd"),
+    ],
+)
+def test_blocks_windows_shell_wrapped_commit_on_main(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_blocks_commit_on_main_from_powershell_tool(repos):
+    assert _verdict("git commit -m update", repos["project"], tool="PowerShell") == "BLOCK"
+
+
+def test_allows_foreign_commit_with_backslash_path_from_powershell_tool(repos):
+    sibling = str(repos["sibling"]).replace("/", "\\")
+    cmd = f"git -C {sibling} commit -m update"
+    assert _verdict(cmd, repos["project"], tool="PowerShell") == "ALLOW"
 
 
 def test_allows_plain_project_commit_on_feature_branch(repos):

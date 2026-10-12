@@ -179,6 +179,23 @@ BLOCK = [
     # ignores the rest of the line) — the `<<EOF` there opens no heredoc.
     pytest.param("(true)# <<EOF\ngh pr merge 1\nEOF", id="comment-after-close-paren"),
     pytest.param("'>/gh' api -X PUT repos/o/r/pulls/9/merge", id="quoted-lookalike-rest"),
+    # Windows names: Git Bash runs `gh.exe` and a full path to it as `gh`.
+    pytest.param("gh.exe pr merge 5", id="gh-exe-suffix"),
+    pytest.param("GH.EXE pr merge 5", id="gh-exe-upper-case"),
+    pytest.param('"/c/Program Files/GitHub CLI/gh.exe" pr merge 5', id="gh-exe-full-path"),
+    # Windows shells nested in Bash run their argument text as a command.
+    pytest.param('powershell.exe -NoProfile -Command "gh pr merge 5"', id="powershell-command"),
+    pytest.param(
+        'powershell -ExecutionPolicy Bypass -Command "gh pr merge 5"',
+        id="powershell-option-value-before-command",
+    ),
+    pytest.param('pwsh -c "gh pr merge 5"', id="pwsh-c"),
+    pytest.param('powershell "gh pr merge 5"', id="powershell-positional"),
+    pytest.param('cmd //c "gh pr merge 5"', id="cmd-double-slash-c"),
+    pytest.param("cmd.exe /c gh pr merge 5", id="cmd-c-unquoted"),
+    # An encoded command cannot be read, so it is refused.
+    pytest.param("powershell -EncodedCommand ZwBoAA==", id="powershell-encoded"),
+    pytest.param("pwsh -enc ZwBoAA==", id="pwsh-encoded-short"),
 ]
 
 # --- Bash commands that MUST be allowed (no false positive) -------------------
@@ -228,11 +245,34 @@ ALLOW = [
     pytest.param("echo gh\\ pr\\ merge", id="escaped-spaces-under-echo"),
     pytest.param("\\gh\\ pr\\ merge", id="escaped-spaces-one-token"),
     pytest.param("gh pr merge\\;", id="escaped-semicolon-makes-merge-token"),
+    # Windows names and shells that do not merge
+    pytest.param("gh.exe pr view 5", id="gh-exe-view"),
+    pytest.param(
+        'powershell -NoProfile -Command "Get-WinEvent -LogName Application -MaxEvents 1"',
+        id="powershell-unrelated-command",
+    ),
+    pytest.param("powershell -ExecutionPolicy Bypass -File build.ps1", id="powershell-file"),
+    pytest.param('cmd //c "dir"', id="cmd-unrelated"),
+]
+
+# --- PowerShell tool payloads --------------------------------------------------
+# The PowerShell tool reaches the same guards. A backslash is not an escape there,
+# so a Windows path must still resolve to its program name.
+POWERSHELL_BLOCK = [
+    pytest.param("gh pr merge 5", id="ps-gh-pr-merge"),
+    pytest.param('& "C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 5', id="ps-call-full-path"),
+    pytest.param("gh pr list; gh pr merge 5", id="ps-second-statement"),
+]
+
+POWERSHELL_ALLOW = [
+    pytest.param("gh pr view 5", id="ps-gh-pr-view"),
+    pytest.param("Get-ChildItem C:\\Users\\x", id="ps-unrelated"),
 ]
 
 MCP_BLOCK = [
     pytest.param("mcp__github__merge_pull_request", id="mcp-official"),
     pytest.param("mcp__my-gh-server__merge_pull_request", id="mcp-custom-server"),
+    pytest.param("mcp__ccd_pr__set_auto_merge", id="mcp-desktop-auto-merge"),
 ]
 
 MCP_ALLOW = [
@@ -272,6 +312,20 @@ def test_allows_non_merge(cmd):
     assert run_bash(cmd) == "ALLOW"
 
 
+
+
+def run_powershell(cmd):
+    return _verdict({"tool_name": "PowerShell", "tool_input": {"command": cmd}})
+
+
+@pytest.mark.parametrize("cmd", POWERSHELL_BLOCK)
+def test_blocks_merge_from_powershell_tool(cmd):
+    assert run_powershell(cmd) == "BLOCK"
+
+
+@pytest.mark.parametrize("cmd", POWERSHELL_ALLOW)
+def test_allows_non_merge_from_powershell_tool(cmd):
+    assert run_powershell(cmd) == "ALLOW"
 
 
 @pytest.mark.parametrize("name", MCP_BLOCK)

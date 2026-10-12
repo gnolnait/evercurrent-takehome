@@ -155,6 +155,35 @@ def test_blocks_eval_wrapped_bypass():
     assert _verdict("eval 'git commit --no-verify -m x'") == "BLOCK"
 
 
+def test_blocks_git_exe_name():
+    """Git Bash runs `git.exe`, any case, and a full path to it as `git`."""
+    assert _verdict("git.exe commit --no-verify -m x") == "BLOCK"
+    assert _verdict("GIT.EXE commit --no-verify -m x") == "BLOCK"
+    assert _verdict('"/c/Program Files/Git/cmd/git.exe" commit -n -m x') == "BLOCK"
+
+
+def test_allows_git_exe_clean_commit():
+    assert _verdict("git.exe commit -m x") == "ALLOW"
+
+
+def test_blocks_windows_shell_wrapped_bypass():
+    """powershell, pwsh and cmd run their argument text as a command."""
+    assert _verdict('powershell -NoProfile -Command "git commit --no-verify -m x"') == "BLOCK"
+    assert _verdict("pwsh -c 'git commit --no-verify -m x'") == "BLOCK"
+    assert _verdict('cmd //c "git commit -n -m x"') == "BLOCK"
+    assert _verdict("cmd.exe /c git commit --no-verify -m x") == "BLOCK"
+
+
+def test_blocks_encoded_powershell_command():
+    """An encoded command cannot be read, so it fails closed."""
+    assert _verdict("powershell -EncodedCommand ZwBpAHQA") == "BLOCK"
+
+
+def test_allows_windows_shell_wrapped_clean_commit():
+    assert _verdict('powershell -Command "git commit -m x"') == "ALLOW"
+    assert _verdict('cmd //c "git status"') == "ALLOW"
+
+
 def test_blocks_no_gpg_sign_abbreviation():
     """git accepts unambiguous long-option prefixes: --no-gpg-sig, --no-verif."""
     assert _verdict("git commit --no-gpg-sig -m x") == "BLOCK"
