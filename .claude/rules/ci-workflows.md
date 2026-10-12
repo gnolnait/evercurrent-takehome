@@ -60,7 +60,7 @@ that history.
   allowlist entry scoped by rule and field. Then put a real match in a file next to the
   allowed field, and scan it with `gitleaks dir` (`gitleaks git` reads only commits).
   The scan must find the match.
-- **Anchor:** the gitleaks job passed on the 4 commits of PR #39. All branches held 104
+- **Anchor:** the gitleaks job passed on the 6 commits of PR #39. All branches held 104
   `generic-api-key` hits on the cassette `key` hash, in one m3-data commit. Without
   `.gitleaks.toml`, the merge of m3-data (PR #41) fails on main.
 
