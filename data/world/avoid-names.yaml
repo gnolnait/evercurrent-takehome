@@ -17,10 +17,6 @@ names:
   - Alice
   - Bob
   - Carol
-  - Daily Digester
-  - Communicator
-  - Knowledge Cards
-  - Engineering Intelligence Hub
 identifiers:
   - MM-2100
   - MD-4820-X
@@ -34,6 +30,10 @@ identifiers:
   - GATE2
   - M005
 phrases:
+  - Daily Digester
+  - Communicator
+  - Knowledge Cards
+  - Engineering Intelligence Hub
   - warehouse docking robot
   - docking robot
   - autonomous trailer loading
