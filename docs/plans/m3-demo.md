@@ -137,9 +137,11 @@ entries, newest first, then on `item_id` ascending (SPEC 5.6). Must-see lines ar
 names the three terms with their values.
 
 B5.5 Sections: `ask` items go to `needs_you`. When a reader's digest shows an ask absence
-line, after the caps and the threshold, the line of the ask item it cites (same thread)
-is left out, so one ask never shows twice; an ask in another thread keeps its line, and
-an ask whose absence line is not shown keeps its line. The ask absence goes to
+line, after the caps and the threshold, the line of the ask item it cites is left out, so
+one ask never shows twice. The absence names that item in its id
+(`absence:ask:<ask item_id>`, as `digest.absence` builds it). Every other ask keeps its
+line, in the same thread or another, and an ask whose absence line is not shown keeps
+its line. The ask absence goes to
 `needs_you` when the reader is the person asked, else to `not_happened`, as every other
 absence does; `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
