@@ -104,7 +104,7 @@ def _evidence(
         if event is None:
             drops["evidence.unknown_message"] += 1
             return None
-        if not _quotes(entry.quote, event):
+        if not quotes(entry.quote, event):
             drops["evidence.quote"] += 1
             return None
         verified[entry.message_ts] = Evidence(
@@ -136,7 +136,8 @@ def _cited_event(
     return event
 
 
-def _quotes(quote: str, event: Event) -> bool:
+def quotes(quote: str, event: Event) -> bool:
+    """True when the quote, spaces normalized, is in the text of the message."""
     # An empty quote is a substring of every text, so it proves nothing.
     span = normalize_space(quote)
     return bool(span) and span in normalize_space(event.text)
@@ -230,7 +231,7 @@ def _merge(
     for entry in old.evidence:
         if _key(entry) in incoming:
             merged.append(incoming.pop(_key(entry)))
-        elif _in_delta(entry, citable) and not _quotes(entry.quote, citable[entry.message_ts]):
+        elif _in_delta(entry, citable) and not quotes(entry.quote, citable[entry.message_ts]):
             drops["evidence.stale"] += 1
         else:
             merged.append(entry)

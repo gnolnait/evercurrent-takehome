@@ -1006,3 +1006,23 @@ def test_complete_logs_metadata_without_prompt(
         for record in caplog.records:
             assert secret not in record.getMessage()
             assert all(secret not in str(value) for value in vars(record).values())
+
+
+@pytest.mark.parametrize("case", ["missing", "empty", "two-model-ids"])
+def test_recorded_models_groups_concrete_ids_by_logical_model(
+    tmp_path: Path, llm_request: LLMRequest, response: LLMResponse, case: str
+) -> None:
+    root = tmp_path / "cassettes"
+    if case == "empty":
+        root.mkdir()
+    elif case == "two-model-ids":
+        cassettes = Cassettes(root)
+        for suffix, model_id in [("one", "extract-v1"), ("two", "extract-v2")]:
+            request = llm_request.model_copy(
+                update={"messages": (Message(role="user", content=suffix),)}
+            )
+            concrete = response.model_copy(update={"model": model_id})
+            cassettes.put(request_key(request), request, concrete)
+
+    expected = {"extract": {"extract-v1", "extract-v2"}} if case == "two-model-ids" else {}
+    assert Cassettes(root).recorded_models() == expected
