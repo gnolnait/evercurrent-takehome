@@ -1,26 +1,28 @@
 # Plan: M5 slice, the corpus seeder (`digest seed`)
 
-Status: v0.2, 2026-10-13 (no channel creation; next units split). Process stage 1 (`docs/process.md`). Depends on PR #52
-(`digest post`): the seeder reuses its Slack token loading, its error text rules and its
-`slack_sdk` client. The code branch starts from `main` after #52 merges. The link change
-in `digest/daily/slack.py` that reads the seed map is a separate unit (see Out of scope).
+Status: v0.3, 2026-10-13. Process stage 1 (`docs/process.md`). v0.3 applies the first
+plan review (Codex, `-p review`) and the advisor review. PR #52 (`digest post`) is
+merged; the seeder reuses its token loading and its error text rules, not its client
+retry setup (see B11).
 
 ## Goal
 
-Put the Kestrel K2 corpus into a real Slack workspace, so that a digest can link to real
-messages, channels and files that open in the Slack client.
+Put the Kestrel K2 corpus into a real Slack workspace, so that a later unit can link a
+digest to real messages, channels and files that open in the Slack client.
 
 SPEC section 9 (`digest seed --world <name>`) asks for persona display names, threads,
 edits and deletes, a pace, and the world timestamp in each message's metadata, which
-live ingest reads back as `ts`. Live ingest is not built. This slice writes a local
-**seed map** from each world message to its Slack message instead. The renderer reads
-the map to build links. Live ingest can replace the map later; the metadata is written
-now, so that path stays open.
+live ingest reads back as `ts`. This slice is a **partial** implementation of that line:
 
-A spike on 2026-10-13 in the Scratch workspace proved the parts this plan relies on:
-`chat:write.customize` posts under a persona name, `chat.getPermalink` returns a link
-with `thread_ts` and `cid` for a thread root, and a link to a seeded message gets a
-message preview (`is_msg_unfurl`) in a bot DM.
+- It writes the metadata, so live ingest can use it later.
+- Live ingest is not built. The slice writes a local **seed map** from each world message
+  to its Slack message instead. A later renderer unit reads the map (see Next units).
+- Edits and deletes are deferred (B7). Per-day pacing is SPEC M5 stretch and is deferred.
+
+A spike on 2026-10-13 in the Scratch workspace showed: `chat:write.customize` posts
+under a persona name; `chat.getPermalink` returns a link with `thread_ts` and `cid` for a
+thread root; a link to a seeded message gets a message preview (`is_msg_unfurl`) in a
+bot DM.
 
 ## Command
 
@@ -28,69 +30,89 @@ message preview (`is_msg_unfurl`) in a bot DM.
 digest seed --world kestrel [--map PATH] [--until-day N] [--pace SECONDS] [--dry-run]
 ```
 
-- Reads `SLACK_BOT_TOKEN` as `digest post` does (environment, then `.env`).
+- Reads `SLACK_BOT_TOKEN` as `digest post` does (environment, then `.env`), with the
+  same refusals for an unset or malformed token.
 - `--map`: the seed map file. Default `.slack-seed/<team_id>-<world>.json`. The folder
-  is gitignored, because the map is specific to one workspace.
-- `--until-day N`: seed only the events up to the end of world day N (default: all).
-- `--pace SECONDS`: the wait between two posts (default 1.2). A rate-limited call waits
-  for Slack's `Retry-After`, then tries again, as `digest post` does on its DM path.
-- A missing channel stops the command before any post, and the message lists the
-  missing names. The user creates the channels; the seeder never creates one.
-- `--dry-run`: no write to Slack. Print the counts the run would post, by channel, and
-  the missing channels and scopes.
+  is added to `.gitignore`: the map is specific to one workspace.
+- `--until-day N`: seed only events whose world `ts` falls on or before world day N in
+  the world's time zone (`World.date_of(N)`, end of day inclusive). N must be 1 to
+  `world.days`, else the command refuses. A later run with a larger N extends the map.
+- `--pace SECONDS`: the wait between two posts (default 1.2, at least 0).
+- `--dry-run`: makes no call that writes. It prints the number of posts and uploads the
+  run would make, by world channel, the missing or mismatched channels, and the missing
+  scopes (from the `x-oauth-scopes` header of `auth.test`). Exit 0 when nothing blocks a
+  real run, else 1.
 
-Exit 0 when every selected event is in the map; exit 1 with the reason otherwise.
+A real run exits 0 when every selected event and every one of its files is complete in
+the map, else 1 with the reason. The last line is a summary (see B12).
 
 ## Behaviours
 
-B1. **Channels.** A world channel maps to the Slack channel with the same name. Public
-channels are found with `conversations.list`; private ones need `groups:read`. The bot
-joins a public channel it is not in (`conversations.join`). It cannot join a private
-channel: the user creates it and invites the bot. The map records
-`world_channel -> slack_id`.
+B1. **Channels.** `conversations.list` with `types=public_channel,private_channel`,
+paginated until `next_cursor` is empty. A world channel maps to the Slack channel with
+the same name **and** the same visibility (`private` in `world.yaml`). A name with the
+other visibility stops the run before any post ("visibility mismatch"). A private world
+channel the bot cannot see stops the run as "missing or not shared with the bot". The
+bot joins a public channel it is not in (`conversations.join`) before its first post
+there. The seeder never creates a channel. The map records `world_channel -> slack_id`.
 
 B2. **Order.** Events post in world order: by `ts`, then by input order. A reply posts
-after its thread root, into the root's Slack thread (`thread_ts` from the map). A reply
-whose root is not in the map stops the run with the event's world id; the input data is
-broken, not Slack.
+into its root's Slack thread (`thread_ts` = the root's Slack `ts` from the map). A reply
+whose root is not in the map and not earlier in this run stops the run with the event's
+world id.
 
-B3. **Persona.** Each post sets `username` to the persona's name and an `icon_emoji` per
-role (one fixed table). A bot persona (`B0PLM01`, ...) posts under its persona name too.
+B3. **Persona.** Each post sets `username` to the persona's name and `icon_emoji` from a
+fixed table: one emoji per role, and `:robot_face:` for a bot persona (no role).
 
-B4. **Text.** The text is the event text with each `<@U...>` mention replaced by
-`@<persona name>`: personas have no Slack accounts, so a real mention would point at
-nobody. No other change: the extractor reads the same text from Slack as from the file.
+B4. **Text.** The event text, with each `<@U...>` mention of a persona replaced by
+`@<persona name>` (personas have no Slack accounts). An unknown user id becomes
+`@unknown`. No other change.
 
 B5. **Metadata.** Each post carries
 `metadata = {event_type: "downstream_world_event", event_payload: {world: <name>,
 channel: <world channel>, ts: <world ts>, thread_ts: <world thread_ts>}}`.
 
 B6. **Files.** An event with `files` posts its text first (B2 to B5). Then each file is
-uploaded into that message's thread with `files_upload_v2`, as a small placeholder PDF
-whose page shows the file name and the line "Kestrel K2 test data". The map records each
-file's Slack `permalink` by world file name. Open: the response shape of
-`files_upload_v2` into a thread, and where the permalink sits in it, is not yet seen. A
-live spike in Scratch (after `files:write` is added) records the shape here before the
-test author starts. Without `files:write` the command posts the
-text with one line per file (":paperclip: <name>"), records no file, and says so once.
+uploaded, one at a time, with `files_upload_v2(channel=<slack channel>,
+thread_ts=<the event's Slack thread root ts>, filename=<world name>, content=<bytes>)`.
+The bytes are a placeholder: a one-page PDF that shows the file name and the line
+"Kestrel K2 test data" for a `.pdf` name, and a UTF-8 text file with the same line for any
+other name (the name is kept, for example `BLD-DVT1_build_log_2026-10-23.xlsx`). The map
+records the file's `permalink` from the response's `file` object. The live spike in
+"Before tests" confirms where the permalink sits; the adapter returns only that value.
 
-B7. **Edits and deletes.** An event with `edited: true` updates its earlier post with
-`chat.update` (the new text). `deleted: true` removes it with `chat.delete` and records
-the delete in the map. The Kestrel corpus has none today; the behaviour is for other
-worlds, and tests cover it with fake events.
+B7. **Edits and deletes: deferred.** The Kestrel corpus has none. An event with
+`edited: true` or `deleted: true` in the selection stops the run before any write and
+names the event. Reason: Slack documents that `chat.delete` cannot delete a message
+posted under a custom name, which needs its own spike.
 
-B8. **Reactions.** Not seeded. Only the bot can react, once per emoji per message, so a
-seeded reaction would not show the persona who reacted. The map records the count of
-skipped reactions, and the summary line names it.
+B8. **Reactions: not seeded.** Only the bot can react, once per emoji per message. The
+summary states the number of reactions in the selected events that were not seeded; the
+number comes from the selection, so a resumed run reports the same number.
 
-B9. **Resume.** The map is written after each successful post, atomically (write a
-temporary file, then replace). A second run skips every event already in the map, so a
-stopped run continues where it stopped and posts nothing twice. A map from another
-workspace (`team_id`) or another world stops the run.
+B9. **Resume (checkpoint, not exactly once).** The map is saved after each acknowledged
+post and after each acknowledged upload, atomically (write a temporary file in the same
+folder, then replace). A message entry and each file entry have their own `done` state.
+A second run skips every done operation and does the rest, so a missing upload is tried
+again even when its message is done. **Limit:** when Slack accepts a call and the process
+stops before the map is saved, the next run repeats that one operation. A run prints this
+limit when it finds a map that a previous run did not finish (`complete: false`).
+Read-back by metadata to close the gap is deferred.
 
-B10. **Secrets.** No output, log record or exception text holds the token, as in
-`digest post` (its `_slack_failure` rules). The map holds ids, timestamps and
-permalinks only.
+B10. **Map identity.** A map whose `team_id` or `world` differs from the run stops the
+run before any write.
+
+B11. **Rate limits.** The adapter builds a `slack_sdk.WebClient` with **no** retry
+handler. On a rate-limited response (HTTP 429), it raises `RateLimited(retry_after)` with
+the `Retry-After` seconds. The seeder catches it, calls the injected `sleep(retry_after)`
+and tries the same operation again, up to 5 times per operation, for every call
+(discovery, join, post, upload). After 5, the run stops, the map keeps what is done, and
+the message says to run again.
+
+B12. **Output and secrets.** Progress lines name world events and counts only. The
+summary line: "seeded P posts and F files in C channels; R reactions not seeded; map
+<path>". No output, log record or exception text holds the token (the `digest post`
+rules: a Slack error shows its error code only, any other error its type only).
 
 ## Seed map (JSON)
 
@@ -100,82 +122,148 @@ permalinks only.
   "team_id": "T...",
   "workspace_url": "https://<name>.slack.com",
   "world": "kestrel",
+  "complete": false,
   "channels": {"C0ENGEF": "C0123ABCD"},
-  "messages": {"C0ENGEF:1791993300.010026": {"channel": "C0123ABCD", "ts": "1791919171.279789",
-               "thread_ts": "1791919171.279789", "deleted": false}},
-  "files": {"PN-11020_FAI_photos.pdf": "https://<name>.slack.com/files/U.../F..."},
-  "skipped_reactions": 72
+  "messages": {
+    "C0ENGEF:1791993300.010026": {"channel": "C0123ABCD", "ts": "1791919171.279789",
+                                   "thread_ts": "1791919171.279789"}
+  },
+  "files": {
+    "C0EXTCM:1792164600.010061/PN-11020_FAI_photos.pdf": {"permalink": "https://..."}
+  }
 }
 ```
 
-`digest/seed.py` owns the schema (a pydantic model) and the only reader and writer of
-the file.
+A message key is `<world channel>:<world ts>`; a file key adds `/<file name>`. An entry
+exists only when its operation is done. `complete` is true after a run finishes every
+selected operation.
 
-## Code layout
+## Interface (stubs land before tests)
 
-- `digest/seed.py`: `SeedMap` (model, `load`, `save`), `plan_seed(world, events, map) ->
-  list[Post]` (pure: order, text, metadata, skips), `seed(world, events, client, map,
-  *, pace, sleep) -> SeedReport` (drives the client), `placeholder_pdf(name) -> bytes`.
-- `client` is a small protocol with the seven calls the seeder uses (`auth_test`,
-  `list_channels`, `join`, `post`, `update`, `delete`, `upload_file`).
-  The CLI passes an adapter over `slack_sdk.WebClient`; tests pass a fake. `sleep` is
-  injected, so tests do not wait.
-- `cli.py`: a `seed` command in its own block (the driver unit also edits `cli.py`).
-  It reuses #52's token and error helpers.
-- The import-linter layers contract gains `digest.seed` beside `digest.replay`.
+```python
+# digest/seed.py
+class RateLimited(Exception):
+    retry_after: float
+
+class SlackSeedClient(Protocol):
+    def auth_test(self) -> AuthInfo: ...                  # team_id, url, scopes
+    def list_channels(self) -> list[SlackChannel]: ...    # all pages; id, name, is_private, is_member
+    def join(self, channel_id: str) -> None: ...
+    def post(self, channel_id: str, text: str, *, thread_ts: str | None, username: str,
+             icon_emoji: str, metadata: dict[str, object]) -> str: ...   # returns Slack ts
+    def upload(self, channel_id: str, thread_ts: str, filename: str, content: bytes) -> str: ...
+                                                          # returns the file permalink
+
+class SeedMap(BaseModel):  # the JSON above
+    @classmethod
+    def load(cls, path: Path) -> SeedMap | None: ...
+    def save(self, path: Path) -> None: ...                # atomic
+
+@dataclass(frozen=True)
+class Post:            # one planned message
+    key: str           # "<world channel>:<world ts>"
+    world_channel: str
+    root_key: str      # the key of its thread root (itself for a root)
+    text: str          # after B4
+    username: str
+    icon_emoji: str
+    metadata: dict[str, object]
+    files: tuple[str, ...]
+    reactions: int
+
+@dataclass(frozen=True)
+class SeedReport:
+    posts: int
+    files: int
+    channels: int
+    reactions_not_seeded: int
+    complete: bool
+
+def plan_seed(world: World, events: Sequence[Event], until_day: int | None) -> list[Post]: ...
+    # pure: selection, order, text, metadata; raises ValueError for B2 and B7 input errors
+def seed(world: World, posts: Sequence[Post], client: SlackSeedClient, map_path: Path,
+         *, pace: float, sleep: Callable[[float], None], dry_run: bool) -> SeedReport: ...
+    # owns all map reads and writes
+def placeholder_file(name: str) -> bytes: ...
+```
+
+`cli.py` gets a `seed` command in its own block (the driver unit also edits `cli.py`).
+It builds the adapter (`SlackWebSeedClient` in `digest/seed.py`, over `WebClient`),
+calls `plan_seed`, then `seed` with `time.sleep`. The import-linter layers contract gains
+`digest.seed` beside `digest.replay`.
 
 ## Slack app scopes
 
 Present: `chat:write`, `chat:write.customize`, `chat:write.public`, `channels:read`,
-`channels:join`. To add for this slice, both marked "seeding only" in the manifest:
-`groups:read` (find private channels) and `files:write` (B6). The user edits the
-manifest and reinstalls the app; the seeder never changes app settings. SPEC already
-says to remove the seeding scopes before a deployment outside the test workspace.
+`channels:join`, `channels:history`. To add for this slice, marked "seeding only" in the
+manifest: `groups:read` (list private channels), `files:write` (B6), `groups:history`
+(the live check reads metadata back from the private channel). The seeder never changes
+app settings. Creating the eight channels needs `channels:manage` and `groups:write` for
+a one-off setup script, or the user creates them by hand; the seeder itself needs neither.
+
+## Before tests
+
+1. Scopes added and the app reinstalled; the eight channels exist (B1).
+2. Live spike: upload one placeholder PDF into a thread with `files_upload_v2`; record
+   the response keys and where the permalink sits, under B6.
+3. A second review of this plan (Codex `-p review`, fresh thread) and the advisor.
 
 ## Acceptance
 
-A1. On a fake client, the Kestrel corpus seeds with 132 posts in world order; each
-reply's `thread_ts` is its root's Slack ts; each post's metadata names its world ts.
-A2. A second run on the same map makes no call that writes. A run stopped after post k
-and run again posts the rest exactly once.
-A3. A missing channel stops before any post and names it. A private channel the bot
-cannot see stops the run with the same message. A public channel the bot is not in is
-joined before the first post into it.
-A4. A rate-limited post waits for `Retry-After` (through the injected `sleep`) and
-succeeds; no event posts twice.
-A5. Mentions become `@<name>`; no `<@` remains in posted text.
-A6. A file event posts its text, then uploads each file into its thread, and the map
-holds each file's permalink; without `files:write` the fallback line is posted and the
-summary says so.
-A7. An edit event calls `chat.update` on the mapped message; a delete calls
-`chat.delete` and marks the map entry.
-A8. A map for another `team_id` or world stops the run before any call that writes.
-A9. No output or exception text holds the token (the `digest post` test pattern).
-A10. Live check (manual, recorded in the PR): seed day 1 into Scratch with `--pace 1.2`,
-open one thread and one file link in Slack, and read one message's metadata back with
-`conversations.history`.
+A1 (B2, B3, B5). On a fake client, the Kestrel corpus seeds 132 posts in world order;
+each reply's `thread_ts` is its root's Slack ts; each post has the persona name, the
+emoji from the table (`:robot_face:` for a bot persona) and metadata with its world ts.
+A2 (B9). A second run on a complete map makes no write call. A run stopped after post k
+posts the rest once; a run stopped between the two uploads of the FAI event uploads only
+the missing file. A map with `complete: false` prints the resume limit line.
+A3 (B1). A missing channel, an inaccessible private channel and a visibility mismatch
+each stop the run before any write and name the channel. A public channel the bot is not
+in is joined before its first post. Listing follows `next_cursor`.
+A4 (B11). A `RateLimited(3)` on a post, an upload and the channel list each lead to
+`sleep(3)` and one more try; the operation is done once. Six in a row stop the run with
+the map saved.
+A5 (B4). No posted text holds `<@`; a known persona id becomes `@<name>`.
+A6 (B6). A file event posts its text, then uploads each file into the thread root with
+the world file name; the map holds each permalink; the `.xlsx` name is kept.
+A7 (B7). An edit or delete event in the selection stops `plan_seed` with the event's
+world id, and no write happens.
+A8 (B10). A map for another `team_id` or world stops the run before any write.
+A9 (B12). No output or exception text holds the token.
+A10 (Command). `--until-day 1` selects exactly the day-1 events in the world's time
+zone; 0 and `days + 1` are refused; a later run with `--until-day 2` adds only day 2.
+A11 (Command). `--dry-run` makes no write call, prints counts by channel and the missing
+scopes, and exits 1 when a channel is missing.
+A12 (B8). The summary states the reactions in the selection that were not seeded, and a
+resumed run states the same number.
+A13 (B11, adapter). `SlackWebSeedClient` over a fake `WebClient`: a 429 response
+becomes `RateLimited` with its `Retry-After`; a post sends `username`, `icon_emoji`,
+`metadata` and `thread_ts`; an upload returns the file permalink.
+A14 (live, manual, recorded in the PR). Seed day 1 into Scratch with `--pace 1.2`, open
+one thread and one file link in Slack, and read one message's metadata back with
+`conversations.history` (`include_all_metadata=true`).
 
 ## Test seams (for the test author)
 
-- Tests call `plan_seed` and `seed` with a fake client that records calls and returns
-  Slack-shaped responses, a tmp map path and a no-op `sleep`. Events come from small
-  hand-made lists, plus one test over the real `data/world/kestrel/events.jsonl` for A1.
-- The CLI tests use `CliRunner` with the fake client patched in, as
-  `tests/test_slack_post.py` does for `digest post`. No test touches the network.
+- `plan_seed` and `seed` with a fake `SlackSeedClient` that records calls, returns
+  Slack-shaped values, and can raise `RateLimited` or stop the run at call k; a tmp map
+  path; a recording `sleep`.
+- Events from small hand-made lists, plus one test over `data/world/kestrel/events.jsonl`
+  for A1.
+- The adapter with a fake `WebClient` for A13. The CLI with `CliRunner` and the client
+  factory patched, as `tests/test_slack_post.py` does. No test touches the network.
 
 ## Next units
 
-1. **Links from the map** (small, next): in `digest/daily/slack.py` as #52 left it,
-   `digest post --seed-map PATH` swaps each evidence permalink for the mapped Slack
-   permalink, writes a channel as `<#C...>`, and links a file name to its mapped
-   permalink. With no map, the output stays as it is today. This unit gives the native
-   links.
-2. **Layout rework** (larger, after): the v5 layout in
-   `notes/research/slack-layout/` (top message, one thread reply per section), with the
-   digest-window line. It reads the same map.
+1. **Links from the map** (small, next): `digest post --seed-map PATH` swaps each
+   evidence permalink for the mapped Slack message, writes a channel as `<#C...>`, and
+   links a file name to its mapped permalink. The visibility filter still decides what
+   a reader sees; the map only changes where a shown link points. With no map, the output
+   stays as it is. This unit gives the native links.
+2. **Layout rework** (larger, after): the v5 layout in `notes/research/slack-layout/`
+   (top message, one thread reply per section), with the digest-window line.
 
 ## Out of scope
+
 - Live ingest reading the seeded messages back (M5).
-- Pacing by world day (`one world day per N minutes`): `--pace` is per post; per-day
-  pacing is SPEC M5 stretch.
-- Real user accounts for personas, and reactions by persona.
+- Edits, deletes, reactions by persona, real user accounts for personas.
+- Per-day pacing (SPEC M5 stretch); read-back recovery of the resume gap (B9).
