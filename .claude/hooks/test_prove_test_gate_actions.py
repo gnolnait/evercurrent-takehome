@@ -147,9 +147,15 @@ def test_other_repo_markers_do_not_gate(repo, state, tmp_path):
     assert not _denied(_gate("git push", repo))
 
 
-def test_non_bash_tool_is_not_gated(repo, state):
+def test_non_shell_tool_is_not_gated(repo, state):
     _pending_test(repo, state)
     assert not _denied(_gate("git push", repo, tool="Edit"))
+
+
+def test_powershell_tool_is_gated(repo, state):
+    """The PowerShell tool can commit and push too."""
+    _pending_test(repo, state)
+    assert _denied(_gate("git push", repo, tool="PowerShell"))
 
 
 def test_bypass_allows_and_logs(repo, state, monkeypatch, tmp_path):

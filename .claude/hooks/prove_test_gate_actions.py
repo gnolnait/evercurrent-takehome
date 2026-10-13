@@ -9,8 +9,8 @@ running unrelated code) until the agent runs prove-test (or records a
 structured skip).
 
 Two-stage by design: edits are iterative, so blocking each Edit is wrong.
-Blocking at the next non-trivial action is right. Registered on Bash only;
-edits and reads are never gated.
+Blocking at the next non-trivial action is right. Registered on the Bash and
+PowerShell tools only; edits and reads are never gated.
 
 A marker resolves (and is deleted) when the test file's CURRENT sha256 has a
 `.test-proof/<sha>.json` or `.test-proof/<sha>.skip.json` at the marker's repo
@@ -54,6 +54,7 @@ from prove_test_track_edit import (  # noqa: E402
     sha256_file,
     state_dir,
 )
+from shell_segments import SHELL_TOOLS  # noqa: E402
 
 _SUBJECT = "the prove-test gate"
 
@@ -247,7 +248,7 @@ hooks.""".format(n=len(paths), listing=listing, sha=first_sha)
 
 def evaluate(data, tool, tool_input):
     """Return None to allow, or the deny reason string."""
-    if tool != "Bash":
+    if tool not in SHELL_TOOLS:
         return None
     session_id = data.get("session_id")
     if not isinstance(session_id, str) or not session_id:

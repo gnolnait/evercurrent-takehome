@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hook_payload as payload  # noqa: E402  (post-path-insert)
 from no_merge_pr_impl import evaluate  # noqa: E402
+from shell_segments import SHELL_TOOLS  # noqa: E402
 
 
 def main():
@@ -21,10 +22,10 @@ def main():
     # reason the shim exists is for the suite to drive the shipped behavior.
     _data, tool, tool_input = payload.read_payload("the no-merge-pr guard")
 
-    # `command` only matters on the Bash path — evaluate() returns before
+    # `command` only matters on the shell-tool path — evaluate() returns before
     # reading it for an mcp tool. Check it under the same condition, or a weird
     # `command` on an mcp payload would block here while the runner allows it.
-    if tool == "Bash":
+    if tool in SHELL_TOOLS:
         payload.read_command("the no-merge-pr guard", tool_input)
 
     blocked, message = evaluate(tool, tool_input)
