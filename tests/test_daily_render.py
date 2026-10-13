@@ -31,7 +31,8 @@ ROOT = Path(__file__).parents[1]
 WORLD_PATH = ROOT / "data" / "world" / "kestrel" / "world.yaml"
 CASSETTES = ROOT / "data" / "cassettes"
 DAY = date(2026, 10, 14)
-TS = "1760000000.000001"
+# Keep the gate evidence inside the first window and older than its update cadence.
+TS = f"{int(datetime(2026, 10, 8, 12, tzinfo=ZoneInfo('America/Los_Angeles')).timestamp())}.000001"
 WORKSPACE = "https://kestrel-k2.slack.com"
 runner = CliRunner()
 
@@ -53,12 +54,19 @@ def profile() -> Profile:
     )
 
 
-def evidence(number: int = 1, quote: str = "source text", channel_id: str = "C0ENGME") -> Evidence:
+def evidence(
+    number: int = 1,
+    quote: str = "source text",
+    channel_id: str = "C0ENGME",
+    *,
+    ts: str = TS,
+) -> Evidence:
+    message_ts = f"{ts.split('.')[0]}.{number:06d}"
     return Evidence(
         channel_id=channel_id,
-        message_ts=f"1760000000.{number:06d}",
+        message_ts=message_ts,
         quote=quote,
-        permalink=f"{WORKSPACE}/archives/{channel_id}/p1760000000{number:06d}",
+        permalink=f"{WORKSPACE}/archives/{channel_id}/p{message_ts.replace('.', '')}",
     )
 
 
@@ -480,6 +488,7 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    demo_ts = f"{int(datetime(2026, 10, 19, 12, tzinfo=ZoneInfo('America/Los_Angeles')).timestamp())}.000001"
     item_inputs = (
         ("C0KPROG", ("ME", "supply_chain", "EM"), "high"),
         ("C0ENGME", ("ME",), "low"),
@@ -491,12 +500,14 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
         items.append(
             item(
                 item_id=f"ITEM-{number}",
-                thread_id=f"{channel}:{TS}",
+                thread_id=f"{channel}:{demo_ts}",
                 title=f"Decision {number}",
                 entities=(),
                 affected_roles=affected_roles,
                 severity=severity,
-                evidence=(evidence(number, channel_id=channel),),
+                first_seen=demo_ts,
+                last_updated=demo_ts,
+                evidence=(evidence(number, channel_id=channel, ts=demo_ts),),
             )
         )
 
