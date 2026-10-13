@@ -127,7 +127,7 @@ def test_diff_selections_reports_added_and_removed_full_views() -> None:
         (
             "rank",
             (_line("target"),),
-            (_line("ahead"), _line("target")),
+            (_line("zz-ahead"), _line("target")),
             _view("target"),
             _view("target", rank=2),
         ),
@@ -215,7 +215,7 @@ def test_diff_selections_rank_uses_ranked_lines_in_same_section_only() -> None:
     after = _selection(
         _line("must-see", section="risks", must_see=True),
         _line("other-section", section="decisions"),
-        _line("new-ahead", section="risks"),
+        _line("zz-ahead", section="risks"),
         _line("target", section="risks"),
     )
 
@@ -247,13 +247,19 @@ def test_diff_selections_orders_all_result_tuples_by_line_view() -> None:
         _line("removed-risk-ranked", section="risks"),
         _line("removed-risk-must-z", section="risks", must_see=True),
         _line("removed-risk-must-a", section="risks", must_see=True),
-        _line("change-a", section="risks", reason="old"),
+        _line("change-ranked-z", section="decisions", reason="old"),
+        _line("change-ranked-a", section="decisions", reason="old"),
     )
     after = _selection(
         _line("added-fyi", section="fyi"),
         _line("change-z", section="needs_you", must_see=True, reason="new"),
-        _line("added-risk-ranked", section="risks"),
-        _line("change-a", section="decisions", reason="new"),
+        _line("added-needs-you", section="needs_you"),
+        _line("added-not-happened", section="not_happened"),
+        _line("added-decision", section="decisions"),
+        _line("change-ranked-z", section="decisions", reason="new"),
+        _line("change-ranked-a", section="decisions", reason="new"),
+        _line("added-risk-ranked-z", section="risks"),
+        _line("added-risk-ranked-a", section="risks"),
         _line("added-risk-must-z", section="risks", must_see=True),
         _line("added-risk-must-a", section="risks", must_see=True),
     )
@@ -261,9 +267,13 @@ def test_diff_selections_orders_all_result_tuples_by_line_view() -> None:
     result = diff_selections(before, after)
 
     assert tuple(view.item_id for view in result.added) == (
+        "added-needs-you",
+        "added-not-happened",
+        "added-decision",
         "added-risk-must-a",
         "added-risk-must-z",
-        "added-risk-ranked",
+        "added-risk-ranked-z",
+        "added-risk-ranked-a",
         "added-fyi",
     )
     assert tuple(view.item_id for view in result.removed) == (
@@ -272,12 +282,19 @@ def test_diff_selections_orders_all_result_tuples_by_line_view() -> None:
         "removed-risk-ranked",
         "removed-fyi",
     )
-    assert tuple(change.item_id for change in result.changed) == ("change-z", "change-a")
+    assert tuple(change.item_id for change in result.changed) == (
+        "change-z",
+        "change-ranked-z",
+        "change-ranked-a",
+    )
 
 
 def test_diff_selections_refuses_different_readers() -> None:
-    with pytest.raises(ValueError):
-        diff_selections(_selection(user_id="U0ME01"), _selection(user_id="U0EE01"))
+    with pytest.raises(ValueError, match=r"U0ME01.*U0EE01"):
+        diff_selections(
+            _selection(_line("before"), user_id="U0ME01"),
+            _selection(_line("after"), user_id="U0EE01"),
+        )
 
 
 @pytest.mark.parametrize("duplicate_side", ["before", "after"])
@@ -286,7 +303,7 @@ def test_diff_selections_refuses_duplicate_item_id(duplicate_side: str) -> None:
     unique = _selection(_line("other"))
     before, after = (duplicate, unique) if duplicate_side == "before" else (unique, duplicate)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"item_id same"):
         diff_selections(before, after)
 
 
