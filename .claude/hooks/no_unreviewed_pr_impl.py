@@ -12,7 +12,8 @@ exists under the main checkout:
 
 <root> is the first worktree that `git worktree list --porcelain` prints, the
 same root /review-local writes to. <sha> is HEAD of the directory the creation
-runs in, or the `--head` branch of `gh pr create`. That directory is the hook
+runs in, or the `--head` branch of `gh pr create` (an `owner:branch` head
+blocks: it names a remote branch, not a local commit). That directory is the hook
 cwd, or <path> when the command starts with `cd <path> &&` and <path> is
 absolute, ".", "..", or starts with "./" or "../". A later commit changes <sha>, so a review
 goes stale by construction.
@@ -316,8 +317,11 @@ def _target_sha(cwd, cmdword, rest):
     if head is None:
         ref = "HEAD"
     else:
-        # A fork head is "owner:branch"; the local branch is the part after it.
-        ref = "refs/heads/" + head.split(":", 1)[-1]
+        if ":" in head:
+            # gh does not push an owner:branch head, so the PR carries that
+            # remote branch, not a local commit.
+            raise _Ambiguous("--head %s names another owner's branch" % head)
+        ref = "refs/heads/" + head
     sha = _git(cwd, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
     if not FULL_SHA.match(sha):
         raise _Ambiguous("cannot resolve %s to a commit" % ref)
