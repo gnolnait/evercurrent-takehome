@@ -5,7 +5,9 @@ the M3 demo plan: Codex writes the tests, an Opus subagent writes the code, ever
 RED-GREEN proven, one review lane per commit, at most one fix round per commit. Written
 with Codex (`gpt-6-astra`). Core needs nothing from M3 unit 7 except `diff_selections`,
 which unit 8 builds at its unit 7 home (`digest/driver.py`); the recorded scenarios and
-free-text messages need the rest of unit 7 and are stretch.
+free-text messages need the rest of unit 7 and are stretch. Unit 7, without
+`diff_selections`, is built in parallel by the session that owns the driver plan,
+with the two pinned scenarios recorded and committed; it does not block core.
 
 ## Goal
 
