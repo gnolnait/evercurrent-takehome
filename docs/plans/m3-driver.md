@@ -65,7 +65,8 @@ cassettes; a miss exits 1 with the cassette key. `DIGEST_MODE=record` with the g
 key records them once.
 
 `digest say --script <file> --db <scratch> [--base-db <store>]` runs every line of a
-script file in order (each line as its own `say`, same rules) into a fresh scratch copy,
+script file in order (each line as its own `say`, same rules) into a fresh scratch copy
+(a `--db` that already exists is refused, so a script never overwrites a session),
 and does not append to any script file. A script reproduces a session only when the
 session ran one `digest extract` after its last `say`: extracting between lines changes
 the extraction requests, so such a session is not reproducible from its script.

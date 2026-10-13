@@ -495,7 +495,9 @@ def say(
     ),
     text: str | None = typer.Option(None, "--text", help="Message text. Not with --script."),
     thread: str | None = typer.Option(
-        None, "--thread", help="Ts of a top-level message in the channel to reply to."
+        None,
+        "--thread",
+        help="Ts of a top-level message in the channel to reply to. Not with --script.",
     ),
     script: Path | None = typer.Option(
         None,
@@ -503,7 +505,10 @@ def say(
         help="Script file: run each JSON line as its own say into a fresh scratch copy.",
     ),
     db: Path = typer.Option(
-        ..., "--db", help="Scratch store path; made as a copy of the base store on first use."
+        ...,
+        "--db",
+        help="Scratch store path; made as a copy of the base store on first use. "
+        "With --script, it must not exist yet.",
     ),
     base_db: Path | None = typer.Option(
         None,
@@ -519,8 +524,12 @@ def say(
     already earlier, appends the arguments as one JSON line to `<db>.script.jsonl` and
     prints the event's ts. Run `digest extract --db <scratch>` next.
 
-    With `--script`, the command runs every line of the file in order, each as its own
-    say with the same rules, into a fresh scratch copy. It appends to no script file.
+    The command refuses a `--db` equal to the base store path, or one that resolves to the
+    same file. Without `--script`, the command uses an existing `--db` as it is.
+
+    With `--script`, the command refuses a `--db` that already exists, makes it as a fresh
+    copy of the base store, then runs every line of the file in order, each as its own say with the same rules. It
+    appends to no script file.
     """
     raise NotImplementedError
 
@@ -543,7 +552,9 @@ def diff(
 
     For each reader with a change, the command lists the added, removed and changed lines,
     each with its title and reason. Then it names the readers with no change. With no change
-    for any reader, it prints "no change" and exits 0.
+    for any reader, it prints "no change" and exits 0. The readers are sorted by user_id, in
+    the text output and in `--json`. A refused store or an unknown user exits 1 with the
+    reason, as `digest run` does.
     """
     raise NotImplementedError
 
