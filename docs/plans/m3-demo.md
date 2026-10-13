@@ -257,7 +257,14 @@ with the reader and Slack's error code only (for example `missing_scope`,
 `channel_not_found`); any other exception exits 1 with the reader and its type only. No
 output, log line or exception text holds the token. Every refusal, in B6.4 and here, is raised after the
 handler that caught the error, so no exception chained to it (`__context__` or
-`__cause__`) holds the token or the webhook URL. Without `--dm`, `post` uses the
+`__cause__`) holds the token or the webhook URL. Live-run rules (envelope review): the code
+that turns a Slack error into text never raises, whatever the response holds; the DM
+client retries a rate-limited call after Slack's `Retry-After`; `post` prints one line
+before the first send naming how many digests it will send and where; a refusal after a
+partial post says how many digests were already sent and that a rerun sends all of them
+again; a missing token or URL names the directory whose `.env` was read; an
+`invalid_auth` or `not_authed` refusal says whether the token came from the environment
+or from `.env`. Without `--dm`, `post` uses the
 webhook of B6.4.
 
 ## Tests
