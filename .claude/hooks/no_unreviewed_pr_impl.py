@@ -75,7 +75,7 @@ import shlex
 import subprocess
 
 from no_merge_pr_impl import HTTP_TOOLS, SHELLS, command_word_and_tokens
-from shell_segments import split_segments
+from shell_segments import WINDOWS_SHELLS, split_segments, windows_shell_text
 
 OVERRIDE_VAR = "PR_REVIEW_OVERRIDE"
 LOG_NAME = "pr-create.jsonl"
@@ -87,7 +87,12 @@ GQL_ENDPOINT = re.compile(r"^(/?graphql|(https?://)?[^/\s=]+(/api)?/graphql)/?(\
 PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
 MAY_CREATE = ("gh", "pulls", "PullRequest", "graphql")
-DIR_CHANGERS = {"cd", "pushd", "popd"}
+DIR_CHANGERS = {"cd", "pushd", "popd",
+                # PowerShell names for the same moves.
+                "set-location", "sl", "chdir", "push-location", "pop-location"}
+# Text in a Windows shell command (powershell, pwsh, cmd) that may create a PR.
+# The guard cannot read where such a command runs, so a match blocks.
+WINDOWS_CREATE = re.compile(r"\bpr\b[\s\S]*\b(create|new)\b|createpullrequest|/pulls\b")
 # The one cd the guard follows: the command starts with `cd <path> &&`. Bash
 # then runs the rest in <path>, or not at all. The path is one quoted or bare
 # word with no expansion.
@@ -271,6 +276,11 @@ def _scan(cmd, found, movers, depth=0):
         if cmdword in SHELLS:
             for string in _shell_strings(rest):
                 _scan(string, found, movers, depth + 1)
+            continue
+        if cmdword in WINDOWS_SHELLS:
+            text = windows_shell_text(cmdword, rest)
+            if text is None or WINDOWS_CREATE.search(text.lower()):
+                raise _Ambiguous("a Windows shell command that may create a PR")
             continue
         if cmdword in DIR_CHANGERS:
             movers.append(seg)
