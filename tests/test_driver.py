@@ -874,6 +874,30 @@ def test_say_refuses_existing_script_log_before_creating_scratch(
     assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
 
 
+def test_say_refused_copy_keeps_target_that_appeared_after_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    other_store = b"another process's store"
+    _seed_store(base, events=(_event(),))
+    original_copy_to = Store.copy_to
+
+    def refuse_copy(store: Store, target: Path) -> Store:
+        target.write_bytes(other_store)
+        return original_copy_to(store, target)
+
+    monkeypatch.setattr(Store, "copy_to", refuse_copy)
+    result = runner.invoke(app, _say_args(scratch, base))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
+    assert len(result.output.splitlines()) == 1
+    assert "exists" in result.output
+    assert scratch.read_bytes() == other_store
+
+
 def test_say_script_refuses_existing_session_log_before_creating_scratch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1182,8 +1206,11 @@ def test_say_removes_fresh_scratch_when_event_write_fails(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert result.output.splitlines() == ["forced event write failure"]
     assert not any(path.exists() for path in (*_store_files(scratch), _script_log(scratch)))
+    lines = result.output.splitlines()
+    assert len(lines) == 1
+    assert str(scratch) in lines[0]
+    assert "forced event write failure" in lines[0]
 
 
 def test_say_keeps_existing_scratch_when_event_write_fails(
@@ -1191,8 +1218,9 @@ def test_say_keeps_existing_scratch_when_event_write_fails(
 ) -> None:
     base = tmp_path / "base.sqlite"
     scratch = tmp_path / "scratch.sqlite"
+    scratch_only = _event("1792454401.000000").model_copy(update={"text": "Scratch-only message"})
     _seed_store(base, events=(_event(),))
-    _seed_store(scratch, events=(_event(),))
+    _seed_store(scratch, events=(_event(), scratch_only))
 
     def fail_upsert(store: Store, *args: Any, **kwargs: Any) -> int:
         raise sqlite3.OperationalError("forced event write failure")
@@ -1203,11 +1231,14 @@ def test_say_keeps_existing_scratch_when_event_write_fails(
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert result.exception.code == 1
-    assert result.output.splitlines() == ["forced event write failure"]
     assert scratch.exists()
     with sqlite3.connect(scratch) as connection:
         stored = connection.execute("SELECT text FROM events ORDER BY event_ts_us").fetchall()
-    assert stored == [("Existing message",)]
+    assert stored == [("Existing message",), ("Scratch-only message",)]
+    lines = result.output.splitlines()
+    assert len(lines) == 1
+    assert str(scratch) in lines[0]
+    assert "forced event write failure" in lines[0]
 
 
 def test_say_script_refuses_existing_db_without_write(tmp_path: Path) -> None:

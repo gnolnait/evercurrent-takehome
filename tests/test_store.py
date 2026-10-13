@@ -395,6 +395,68 @@ def test_file_store_refuses_unrelated_database_without_modifying_it(tmp_path: Pa
     assert journal_mode == ("delete",)
 
 
+@pytest.mark.parametrize(
+    ("method", "sql_fragment"),
+    [
+        ("execute", "PRAGMA journal_mode=WAL"),
+        ("executescript", "CREATE TABLE IF NOT EXISTS meta"),
+        ("execute", "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"),
+    ],
+    ids=("journal-mode", "schema", "schema-version"),
+)
+def test_open_closes_connection_when_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    sql_fragment: str,
+) -> None:
+    path = tmp_path / "store.sqlite"
+    real_connect = sqlite3.connect
+    closed = False
+
+    class FailingConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            object.__setattr__(self, "connection", connection)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.connection, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self.connection, name, value)
+
+        def __enter__(self) -> "FailingConnection":
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return self.connection.__exit__(*exc)
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            if method == "execute" and sql_fragment in sql:
+                raise sqlite3.OperationalError("forced store setup failure")
+            return self.connection.execute(sql, *args, **kwargs)
+
+        def executescript(self, sql: str) -> sqlite3.Cursor:
+            if method == "executescript" and sql_fragment in sql:
+                raise sqlite3.OperationalError("forced store setup failure")
+            return self.connection.executescript(sql)
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+            self.connection.close()
+
+    def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, FailingConnection(real_connect(*args, **kwargs)))
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+
+    with pytest.raises(sqlite3.OperationalError, match="forced store setup failure"):
+        Store.open(path)
+
+    assert closed
+
+
 @settings(max_examples=30, derandomize=True)
 @given(
     st.lists(
