@@ -62,8 +62,9 @@ digest.
   branch) keep working.
 - `render_digest` adds one line under the header: "Since your digest of <date>" or
   "First digest: the last <n> working days".
-- `digest demo` passes the previous working day as `previous_digest`, except on world
-  day 1.
+- `digest demo` and `digest post` share `_demo_selections`, which passes the previous
+  working day as `previous_digest`, except on world day 1. `slack_message` prints the
+  same window line as `render_digest` (W9).
 
 ## Behaviours
 
@@ -84,6 +85,10 @@ digest.
   message's `event_ts`.
 - W7. The header line names the previous digest's date, or says "First digest".
 - W8. `WindowPriors` defaults and validation.
+- W9. `slack_message` (`digest post`) holds the same window line as the terminal digest,
+  word for word, as the first block after the header: a `section` block with the line
+  as mrkdwn (escaped, `verbatim`), for both a previous digest and a first digest. It
+  counts toward the 50-block limit, so the limit keeps one block fewer for lines.
 
 ## Acceptance
 
