@@ -122,8 +122,9 @@ B15. **Refusals.** Every check before the first write (B1, B2, B10, B14) raises
 prints that message as it is. Any other error from `seed` (a client error, a `ValueError`
 from a library, retries used up) is printed only as the `digest post` failure text (a
 Slack error code, else the error type) plus "the map keeps what is done; run the command
-again". A refused run (a `SeedBlocked`) writes no map file: a new map is saved only after
-every check passes, just before the first write.
+again". A run that stops before its first write, refused (a `SeedBlocked`) or stopped by
+a client error, writes no new map file: a new map is saved only after every check passes,
+just before the first write. A run that stops after a write keeps the map (B9).
 
 B11. **Rate limits and transfer errors.** The adapter builds a `slack_sdk.WebClient`
 with **no** retry handler. A Web API error with HTTP status 429 (a `SlackApiError`
