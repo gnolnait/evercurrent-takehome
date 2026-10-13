@@ -46,17 +46,34 @@ def _canon_git_common_dir(directory: str) -> str:
     return os.path.realpath(os.path.join(directory, common))
 
 
-def _checkout_of(target: str, project_top: str) -> str:
+def _repo_above(path: str) -> str:
+    """Toplevel of the repo holding the nearest existing ancestor of path, or ""."""
+    parent = os.path.dirname(path)
+    while parent != path and not os.path.isdir(parent):
+        path, parent = parent, os.path.dirname(parent)
+    return _canon_git_toplevel(parent) if parent != path else ""
+
+
+def _checkout_of(target: str, project_top: str, new_checkouts: bool = False) -> str:
     """Toplevel of the checkout an event runs in, or "" for a foreign repo.
 
     A linked worktree of the project repo shares its git dir but has its own
-    HEAD, so each checkout is keyed by its own toplevel. An empty or
-    unresolvable target counts as the project checkout (fail closed: better to
-    block than to let a mis-attributed commit through).
+    HEAD, so each checkout is keyed by its own toplevel. An empty target (a path
+    the parser could not resolve) counts as the project checkout (fail closed:
+    better to block than to let a mis-attributed commit through). A target that
+    is not in a repo yet is the project checkout when the command runs `git
+    worktree add`, makes a link or moves a directory (new_checkouts), because
+    each can put a project checkout there. Otherwise it is judged by the repo
+    around it; with none, it is foreign, such as a scratch repo the command makes
+    with `git init`.
     """
     if not target:
         return project_top
     target_top = _canon_git_toplevel(target)
+    if not target_top and not new_checkouts:
+        target_top = _repo_above(target)
+        if not target_top:
+            return ""
     if not target_top:
         return project_top
     if target_top == project_top:
@@ -76,6 +93,8 @@ def _checkout_of_strict(target: str, project_top: str) -> str:
 
 
 def _is_protected(branch: str) -> bool:
+    if "$" in branch or "`" in branch:
+        return True  # `git switch "$B"`: a branch only bash knows may be main
     return branch == "main"
 
 
@@ -91,25 +110,39 @@ def _block_message(branch: str) -> str:
 
 
 def _ambiguous_message(branch: str) -> str:
-    # A command whose git surface could not be safely parsed (an unresolvable
-    # heredoc, or unbalanced quoting around a git+commit) while on a protected
-    # branch. Don't claim the user ran `git commit` — say what actually
-    # happened, so a benign-but-unparseable command isn't mislabeled.
+    # A git write verb in text the parser cannot read as commands (code fed to an
+    # interpreter or a shell, a verb in a variable, quoting shlex rejects, a GIT_DIR
+    # redirect) while on a protected branch. Don't claim the user ran `git commit` —
+    # say what actually happened, so a benign-but-unparseable command isn't mislabeled.
+    return (
+        "BLOCKED: this command may run a git write (commit, push, merge, ...) in a\n"
+        "form the guard cannot attribute to a repo (code fed to an interpreter or a\n"
+        "shell, a git verb in a variable, unusual quoting, a GIT_DIR redirect), while\n"
+        "on protected base branch '{0}', so it is refused (fail-safe). Run the git\n"
+        "write as its own plain command (git -C <repo> ...), or switch to a feature\n"
+        "branch first: git switch -c <short-description>.\n"
+    ).format(branch)
+
+
+def _parse_failed_message(branch: str) -> str:
+    # The parser raised, so nothing is known about the command: do not claim it
+    # names a git write.
     return (
         "BLOCKED: could not safely parse this command's git operations while on\n"
         "protected base branch '{0}', so it is refused (fail-safe). If it does not\n"
-        "commit, simplify the quoting/heredoc; if it does, switch to a feature\n"
-        "branch first: git switch -c <short-description>.\n"
+        "write with git, simplify the quoting/heredoc; if it does, switch to a\n"
+        "feature branch first: git switch -c <short-description>.\n"
     ).format(branch)
 
 
 def evaluate_commit(
     cmd: str, hook_cwd: str, project_dir: str
 ) -> tuple[bool, str]:
+    parse_failed = False
     try:
         events = emit_events(cmd, hook_cwd)
     except Exception:
-        events = "__AMBIGUOUS__"
+        events, parse_failed = "__AMBIGUOUS__", True
     # No commit/switch events (e.g. "commit" only inside a non-git command) -> allow.
     # This is the hot-path exit: project-dir resolution and every git subprocess
     # below run only for commands that produced events.
@@ -133,6 +166,7 @@ def evaluate_commit(
     # the same quote-aware parse, so a shell operator inside a quoted message
     # or branch name can't desynchronize the walk.
     heads = {project_top: branch}
+    new_checkouts = "new-checkout" in events.splitlines()
 
     def _head(checkout: str) -> str:
         if checkout not in heads:
@@ -146,6 +180,8 @@ def evaluate_commit(
         if kind == "__AMBIGUOUS__":
             # unattributable commit-shape while on a protected branch -> fail closed
             if _is_protected(branch):
+                if parse_failed:
+                    return True, _parse_failed_message(branch)
                 return True, _ambiguous_message(branch)
             continue
         if kind == "switch":
@@ -157,7 +193,7 @@ def evaluate_commit(
                 heads[checkout] = arg
             continue
         if kind == "commit":
-            checkout = _checkout_of(directory, project_top)
+            checkout = _checkout_of(directory, project_top, new_checkouts)
             if checkout and _is_protected(_head(checkout)):
                 return True, _block_message(_head(checkout))
     return False, ""
