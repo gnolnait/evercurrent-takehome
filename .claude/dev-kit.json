@@ -1,5 +1,5 @@
 {
-  "kit_commit": "4b95103d37b4c00733b04ab4e6a8353fd3224b21",
+  "kit_commit": "74ee17b46fbea4370c82f208158dd5a9114960b0",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
@@ -27,14 +27,14 @@
     ".claude/hooks/shell_segments.py": "5a737d3ad10e301f6e767d701dc85c2f75f64f3b2e898ac326036999217a2560",
     ".claude/hooks/test_context_snapshot.py": "d809a17b6b097fb827f21be0158eb88fe1830c09bec0586f4a3036bbddba66ac",
     ".claude/hooks/test_git_env_scrub.py": "bd5b5bcfde55cbe8b5c81b9abe871395b7e423a753740d445f80785fadb28d81",
-    ".claude/hooks/test_guard_launch_fence.py": "f7a49030c5f8df1aa28508b0b30e1856144467dac3deba54800b341bc61b8e9a",
+    ".claude/hooks/test_guard_launch_fence.py": "7b6ffdafe4d242601e2147b9fe33b110fe2ff38d0ee44d23febdc740c4f0cbd8",
     ".claude/hooks/test_guard_runner.py": "9de6e688c24531cf3c455244754bae918b443dee42b07741140fe462bc296274",
     ".claude/hooks/test_no_bypass_signing.py": "b03726d601a667f56ea9531c95cc2db7f35dfb7607492cbcbd32e2150d72d641",
     ".claude/hooks/test_no_commit_to_main.py": "7120461d7a65720b140a23bcb8e3f73dd5eda63a23d3c8ef523928cb219fda63",
     ".claude/hooks/test_no_merge_pr.py": "f8272290f5efd79dee0bb90526c17e2c673a4bbf092ee8d3bf795812b38675f9",
     ".claude/hooks/test_prove_test_gate_actions.py": "a485b245e3a4615902f159d4192d8eb333bfdecb18578b927215290f0f250a65",
     ".claude/hooks/test_prove_test_track_edit.py": "279904c737a54477edb2ca5796dcd807a4c27ce931efff11707526cff9bb24d2",
-    ".claude/hooks/test_settings_guards.py": "fbf42a89666f56b04356d74e7bfd6f71fd944d3449396033dad28fbb2ccfca24",
+    ".claude/hooks/test_settings_guards.py": "7fd34e3fdb138cf47213874d807d303889b651f4246d0b3a4ec37dd39eca9c62",
     ".claude/hooks/test_shell_segments.py": "22e75a608087ad207c4951df27c56893a83cc47f545446b0a6ab80ec8f77aa43",
     ".claude/review-lenses/ORCHESTRATOR.md": "ca946dcadc043ae2b2c02fb0953767cffbf4d284fb3f3df8655a9c647acf2ab6",
     ".claude/review-lenses/SELECTION.md": "0f80d2fefbbfd7969fd7e6a720d54952fa7a1916fedc4ae0e93be6cea1efd778",
