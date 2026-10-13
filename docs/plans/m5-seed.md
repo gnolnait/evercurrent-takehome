@@ -1,6 +1,6 @@
 # Plan: M5 slice, the corpus seeder (`digest seed`)
 
-Status: v0.4, 2026-10-13. Process stage 1 (`docs/process.md`). v0.3 applied the first
+Status: v0.5, 2026-10-13 (B15 and A19 to A22 from the code reviews). Process stage 1 (`docs/process.md`). v0.3 applied the first
 plan review (Codex, `-p review`) and the advisor review; v0.4 applies the second Codex
 review (seven medium findings, none high). PR #52 (`digest post`) is
 merged; the seeder reuses its token loading and its error text rules, not its client
@@ -43,7 +43,11 @@ digest seed --world kestrel [--map PATH] [--until-day N] [--pace SECONDS] [--dry
   channel with posts or uploads to make, `<channel name>: <P> posts, <F> files`, using the
   world channel's name; then one line per blocker (`missing channel: <name>`,
   `visibility mismatch: <name>`, `missing scope: <scope>`). Scopes come from the
-  `x-oauth-scopes` header of `auth.test`. Exit 0 when nothing blocks a real run, else 1.
+  `x-oauth-scopes` header of `auth.test`. A private world channel the bot cannot see is
+  `missing channel: <name> (private: missing or not shared with the bot)`; a reply with
+  no root is `missing thread root <root key> for reply <key>`; a channel id that differs
+  from the map is `channel id changed: <name>`. Exit 0 when nothing blocks a real run,
+  else 1.
 
 A real run exits 0 when every selected event and every one of its files is complete in
 the map, else 1 with the reason. The last line is a summary (see B12).
@@ -108,7 +112,18 @@ limit when it finds a map that a previous run did not finish (`complete: false`)
 Read-back by metadata to close the gap is deferred.
 
 B10. **Map identity.** A map whose `team_id` or `world` differs from the run stops the
-run before any write.
+run before any write. So does a channel whose Slack id, found by name and visibility
+(B1), differs from the id the map holds for that world channel, in `channels` or in any
+saved message entry (for example, a channel renamed and a new one created with the old
+name): the run names the channel and stops before any write.
+
+B15. **Refusals.** Every check before the first write (B1, B2, B10, B14) raises
+`SeedBlocked`, a subclass of `ValueError`, whose message names the problem. The CLI
+prints that message as it is. Any other error from `seed` (a client error, a `ValueError`
+from a library, retries used up) is printed only as the `digest post` failure text (a
+Slack error code, else the error type) plus "the map keeps what is done; run the command
+again". A refused run (a `SeedBlocked`) writes no map file: a new map is saved only after
+every check passes, just before the first write.
 
 B11. **Rate limits and transfer errors.** The adapter builds a `slack_sdk.WebClient`
 with **no** retry handler. A Web API error with HTTP status 429 (a `SlackApiError`
@@ -195,6 +210,8 @@ class Post:            # one planned message
     files: tuple[str, ...]
     reactions: int
 
+class SeedBlocked(ValueError): ...   # a check before the first write failed (B15)
+
 @dataclass(frozen=True)
 class SeedReport:
     posts: int
@@ -202,12 +219,15 @@ class SeedReport:
     channels: int
     reactions_not_seeded: int
     complete: bool
+    map_path: Path       # the map file the run used
 
 def plan_seed(world: World, events: Sequence[Event], until_day: int | None) -> list[Post]: ...
     # pure: selection, order, text, metadata; raises ValueError for a B7 event or a bad day
-def seed(world: World, posts: Sequence[Post], client: SlackSeedClient, map_path: Path,
-         *, pace: float, sleep: Callable[[float], None], dry_run: bool) -> SeedReport: ...
-    # owns all map reads and writes
+def seed(world: World, posts: Sequence[Post], client: SlackSeedClient,
+         map_path: Path | None, *, pace: float, sleep: Callable[[float], None],
+         dry_run: bool) -> SeedReport: ...
+    # owns all map reads and writes; map_path None means the default path,
+    # .slack-seed/<team_id>-<world>.json, from the team_id of its own retried auth_test
 def placeholder_file(name: str) -> bytes: ...
 ```
 
@@ -274,6 +294,18 @@ own `sleep(retry_after)` call before the retried write.
 A17 (B14). A missing `files:write` with a file in the selection, or a missing
 `chat:write.customize`, stops a real run before any write and names the scope;
 `--dry-run` lists it and exits 1.
+A19 (B10). A saved map whose `channels` entry, or a message entry, holds another Slack
+id than the channel found by name now raises `SeedBlocked` naming the channel, and makes
+no write; `--dry-run` prints `channel id changed: <name>`.
+A20 (B15). A client that raises a `ValueError` whose text holds the token stops the CLI
+run with exit 1; the output holds the error type and the rerun line, not the token. A
+`SeedBlocked` prints its own message.
+A21 (B15, B9). A first real run refused for a missing scope or channel leaves no map
+file; the next run does not print the resume-limit line. A resumed run on a map with
+`complete: false` prints it; a rerun on a complete map does not.
+A22 (B11, default path). With no `--map`, an `auth_test` that is rate limited once is
+retried after `sleep(retry_after)`, and the map is written at
+`.slack-seed/<team_id>-kestrel.json` (relative to the working directory).
 A18 (live, manual, recorded in the PR). With the bot in every channel, seed through day
 4 into Scratch with `--pace 1.2`. Open one thread and one file link in Slack. Read back
 with `include_all_metadata=true` the metadata of one public root and of the first root in
