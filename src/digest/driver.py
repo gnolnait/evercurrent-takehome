@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Literal, get_args
+from zoneinfo import ZoneInfo
 
 from pydantic import ConfigDict, Field
 
 from digest.daily.select import SECTION_CAPS, Section, Selection
-from digest.models import TS_PATTERN, Event, Frozen
+from digest.models import TS_PATTERN, Event, Frozen, micros_since_epoch, permalink_for, ts_micros
 from digest.world.schema import World
 
 DiffField = Literal["section", "lane", "rank", "title", "reason"]
@@ -147,7 +148,48 @@ def make_event(
     not check that `thread` exists (rule S3); the command does.
     Raise ValueError with a one-line reason for a refused message.
     """
-    raise NotImplementedError
+    # S1: a human persona that is a member of a known channel.
+    persona = next((p for p in world.personas if p.user_id == persona_id), None)
+    if persona is None:
+        raise ValueError(f"unknown persona {persona_id}: no persona with that id in the world")
+    if persona.kind == "bot":
+        raise ValueError(f"persona {persona_id} is a bot; only a human persona can say a message")
+    channel = next((c for c in world.channels if c.name == channel_name), None)
+    if channel is None:
+        raise ValueError(f"unknown channel {channel_name}: no channel with that name in the world")
+    if channel.id not in persona.channels:
+        raise ValueError(
+            f"persona {persona_id} is not a member of channel {channel_name} "
+            "(not in the persona's channel list)"
+        )
+    # S2: the store's day is a working day, `at` falls on it and is after every event.
+    working_days = {world.date_of(day) for day in range(1, world.days + 1)}
+    if store_view.day not in working_days:
+        raise ValueError(f"the store's day {store_view.day} is not a working day of the world")
+    if at.tzinfo is not None:
+        raise ValueError(f"--at {at.isoformat()} has a UTC offset; give the world's local time")
+    if at.date() != store_view.day:
+        raise ValueError(f"--at {at.isoformat()} is not on the store's day {store_view.day}")
+    micros = micros_since_epoch(at.replace(tzinfo=ZoneInfo(world.timezone)))
+    ts = f"{micros // 1_000_000:010d}.{micros % 1_000_000:06d}"
+    latest = store_view.latest_event_ts
+    if latest is not None and ts_micros(ts) <= ts_micros(latest):
+        raise ValueError(
+            f"--at {at.isoformat()} (ts {ts}) must be strictly later than the latest event "
+            f"in the store (ts {latest})"
+        )
+    thread_ts = thread or ts
+    return Event(
+        source="replay",
+        channel_id=channel.id,
+        channel_name=channel.name,
+        thread_ts=thread_ts,
+        ts=ts,
+        event_ts=ts,
+        user_id=persona.user_id,
+        text=text,
+        permalink=permalink_for(world.workspace_url, channel.id, ts, thread_ts),
+    )
 
 
 class ScriptLine(Frozen):

@@ -120,9 +120,24 @@ class Store:
 
         The copy uses the SQLite online backup API from a read-only connection to this
         store, so rows still in the write-ahead log are copied too. This store is not
-        changed.
+        changed. Raise FileExistsError when `path` exists, and ValueError for an in-memory store.
         """
-        raise NotImplementedError
+        if self.path == ":memory:":
+            raise ValueError("cannot copy an in-memory store")
+        if path.exists():
+            raise FileExistsError(f"cannot copy store {self.path} to {path}: {path} exists")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            target = sqlite3.connect(path)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+        log.info("store_copied", extra={"source": str(self.path), "path": str(path)})
+        return type(self).open(path)
 
     def close(self) -> None:
         self._db.close()
@@ -150,6 +165,13 @@ class Store:
             self._db.executemany(_UPSERT, rows)
             self._db.executemany(_SET_META, (meta or {}).items())
         return len(rows)
+
+    def latest_event_ts(self) -> str | None:
+        """The `event_ts` of the latest event version in the store; None for no event."""
+        row = self._db.execute(
+            "SELECT event_ts FROM events ORDER BY event_ts_us DESC LIMIT 1"
+        ).fetchone()
+        return None if row is None else row["event_ts"]
 
     def events_in_thread(self, thread_id: str, as_of: datetime) -> list[Event]:
         channel_id, _, thread_ts = thread_id.rpartition(":")
