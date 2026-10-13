@@ -86,13 +86,14 @@ FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 GQL_ENDPOINT = re.compile(r"^(/?graphql|(https?://)?[^/\s=]+(/api)?/graphql)/?(\?.*)?$")
 PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
-MAY_CREATE = ("gh", "pulls", "PullRequest", "graphql")
+MAY_CREATE = ("gh", "pulls", "pullrequest", "graphql")  # matched in lower case
 DIR_CHANGERS = {"cd", "pushd", "popd",
                 # PowerShell names for the same moves.
                 "set-location", "sl", "chdir", "push-location", "pop-location"}
 # Text in a Windows shell command (powershell, pwsh, cmd) that may create a PR.
 # The guard cannot read where such a command runs, so a match blocks.
-WINDOWS_CREATE = re.compile(r"\bpr\b[\s\S]*\b(create|new)\b|createpullrequest|/pulls\b")
+WINDOWS_CREATE = re.compile(
+    r"\bpr\b[\s\S]*\b(create|new)\b|createpullrequest|/pulls\b|\bgraphql\b")
 # The one cd the guard follows: the command starts with `cd <path> &&`. Bash
 # then runs the rest in <path>, or not at all. The path is one quoted or bare
 # word with no expansion.
@@ -437,8 +438,10 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
     try:
         _scan(body, found, movers)
     except _Ambiguous as exc:
-        # Only a command that could create a PR may fail closed here.
-        if any(word in cmd for word in MAY_CREATE):
+        # Only a command that could create a PR may fail closed here. Every
+        # creation form holds one of these words; Windows names are
+        # case-insensitive, so match in lower case.
+        if any(word in cmd.lower() for word in MAY_CREATE):
             return True, _ambiguous_message(str(exc), cmd)
         return False, ""
     # Hot path: no PR creation, no git subprocess.
