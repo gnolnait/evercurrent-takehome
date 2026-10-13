@@ -112,6 +112,21 @@ class ReaderDiff(Frozen):
 - No change for any reader prints "no change" and exits 0. A refused store or an unknown
   user exits 1 with the reason, as `digest run` does.
 
+`diff_selections` rulings (2026-10-13, before the tests):
+- A `Line` maps to a `LineView` field by field: `item_id` is `line.item.item_id`, `title`
+  is `line.item.title`, `section` is `line.section`, `lane` is `"must_see"` when
+  `line.must_see` is true and `"ranked"` otherwise, and `reason` is `line.reason`.
+- `rank` is the 1-based position of a ranked line among the ranked lines of its section,
+  in the order of `Selection.lines`. A must-see line has `rank` None. `score` is not
+  compared: a score change shows only through `rank` or `reason`.
+- Section order is the order of `SECTION_CAPS` (`needs_you`, `not_happened`, `decisions`,
+  `risks`, `fyi`).
+- `user_id` is `after.profile.user_id`. Two selections of different readers raise
+  `ValueError`. An `item_id` that occurs twice in one selection raises `ValueError`.
+- Fields of `Selection` other than `profile` and `lines` (`day`, `hidden`, and any field
+  added later) are not compared.
+- The function is pure: same inputs, same output, no I/O.
+
 ## Code layout
 
 - `digest/driver.py`: `make_event`, `diff_selections`, the types above, and the script
