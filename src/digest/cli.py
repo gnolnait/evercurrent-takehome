@@ -529,8 +529,10 @@ def say(
 ) -> None:
     """Add a message as a persona at a world time, into a scratch copy of the store.
 
-    The command never writes the base store. It refuses a message that breaks a rule with
-    exit 1 and a one-line reason, and then writes nothing. It writes the event, sets the
+    The command opens the base store read-only and never writes it. It refuses a message
+    that breaks a rule with exit 1 and a one-line reason, and then writes nothing. It
+    refuses to make a new scratch store when `<db>.script.jsonl` already exists, so a log
+    never holds two sessions. It writes the event, sets the
     meta key `extract_until` to the day before the store's day when that key is not
     already earlier, appends the arguments as one JSON line to `<db>.script.jsonl` and
     prints the event's ts. Run `digest extract --db <scratch>` next.
@@ -540,7 +542,8 @@ def say(
 
     With `--script`, the command refuses a `--db` that already exists, makes it as a fresh
     copy of the base store, then runs every line of the file in order, each as its own say with the same rules. It
-    appends to no script file.
+    appends to no script file. On any failure after the copy, it removes the scratch store.
+    It prints the ts values only after it stores every line.
     """
     settings = Settings()
     base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
@@ -560,22 +563,25 @@ def say(
     try:
         line = ScriptLine(as_=as_, channel=channel, at=at, text=text, thread=thread)
     except ValidationError as error:
-        _refuse(str(error))
+        _refuse(_first_error(error))
     fresh = not db.exists()
-    if fresh and not base.is_file():  # Store.open would create an empty store file
+    log_path = Path(f"{db}.script.jsonl")
+    if fresh and not base.is_file():
         _refuse(f"no base store at {base}; run digest replay first")
-    with _open_store(base if fresh else db) as checked:
+    with _open_store_readonly(base) if fresh else _open_store(db) as checked:
         world = _store_world(checked)
         try:
             event, meta = _checked_say(checked, world, line)
         except ValueError as error:
             _refuse(str(error))
         if fresh:
+            if log_path.exists():  # after the rule checks, so a broken rule names its reason
+                _refuse(f"script log {log_path} already exists; remove it or give another --db")
             with _copy_store(checked, db) as scratch:
                 scratch.upsert_events([event], meta=meta)
         else:
             checked.upsert_events([event], meta=meta)
-    with Path(f"{db}.script.jsonl").open("a", encoding="utf-8", newline="\n") as log_file:
+    with log_path.open("a", encoding="utf-8", newline="\n") as log_file:
         log_file.write(line.model_dump_json() + "\n")
     typer.echo(event.ts)
 
@@ -611,7 +617,7 @@ def diff(
     for path in (base, db):
         if not path.is_file():  # Store.open would create an empty store file
             _refuse(f"no store at {path}; run digest replay first")
-    with _open_store(base) as before_store, _open_store(db) as after_store:
+    with _open_store_readonly(base) as before_store, _open_store(db) as after_store:
         name = _stored(after_store, "world")
         base_name = _stored(before_store, "world")
         if base_name != name:
@@ -619,8 +625,10 @@ def diff(
         world = _store_world(after_store)
         try:
             priors = load_priors()
-        except (OSError, ValueError, yaml.YAMLError) as error:  # ValueError: ValidationError too
-            _refuse(str(error))
+        except ValidationError as error:
+            _refuse(_first_error(error))
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            _refuse(" ".join(str(error).split()))
         if user is None:
             readers = sorted(p.user_id for p in world.personas if p.kind != "bot")
         else:
@@ -976,13 +984,14 @@ def _extract_days(
 def _say_script(script: Path, db: Path, base: Path) -> None:
     """Run every line of a script file as its own say into a new scratch store at `db`.
 
-    Refuse a `db` that exists. On a refused line, remove the new scratch store, so a
-    refusal writes nothing.
+    Refuse a `db` that exists. Split the file into lines on "\\n" only, so a text that holds
+    U+0085, U+2028 or U+2029 replays. On any failure after the copy, remove the new scratch
+    store, so a failure writes nothing. Print the ts values only after every line is stored.
     """
     if db.exists():
         _refuse(f"--db {db} already exists; --script runs into a new scratch store only")
     try:
-        raw_lines = script.read_text("utf-8").splitlines()
+        raw_lines = [raw.removesuffix("\r") for raw in script.read_bytes().decode().split("\n")]
     except (OSError, UnicodeDecodeError) as error:
         _refuse(f"{script}: {error}")
     lines: list[tuple[int, ScriptLine]] = []
@@ -992,26 +1001,29 @@ def _say_script(script: Path, db: Path, base: Path) -> None:
         try:
             lines.append((number, ScriptLine.model_validate_json(raw)))
         except ValidationError as error:
-            _refuse(f"{script}:{number}: {error}")
-    if not base.is_file():  # Store.open would create an empty store file
+            _refuse(f"{script}:{number}: {_first_error(error)}")
+    if not base.is_file():
         _refuse(f"no base store at {base}; run digest replay first")
-    with _open_store(base) as source:
+    with _open_store_readonly(base) as source:
         world = _store_world(source)
         scratch = _copy_store(source, db)
-    refusal = None
-    with scratch:
-        for number, line in lines:
-            try:
+    stored: list[str] = []
+    where = str(script)  # the script line that failed, for the refusal
+    try:
+        with scratch:
+            for number, line in lines:
+                where = f"{script}:{number}"
                 event, meta = _checked_say(scratch, world, line)
-            except ValueError as error:
-                refusal = f"{script}:{number}: {error}"
-                break
-            scratch.upsert_events([event], meta=meta)
-            typer.echo(event.ts)
-    if refusal is not None:
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{db}{suffix}").unlink(missing_ok=True)
-        _refuse(refusal)
+                scratch.upsert_events([event], meta=meta)
+                stored.append(event.ts)
+    except (ValueError, OSError, sqlite3.Error) as error:
+        _remove_store(db)
+        _refuse(f"{where}: {' '.join(str(error).split())}")
+    except BaseException:
+        _remove_store(db)
+        raise
+    for ts in stored:
+        typer.echo(ts)
 
 
 def _checked_say(store: Store, world: World, line: ScriptLine) -> tuple[Event, dict[str, str]]:
@@ -1059,8 +1071,10 @@ def _store_world(store: Store) -> World:
         return load_world(source)
     except OSError as error:
         _refuse(f"{source}: {error.strerror or error}")
-    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
-        _refuse(f"{source}: {error}")
+    except ValidationError as error:
+        _refuse(f"{source}: {_first_error(error)}")
+    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        _refuse(f"{source}: {' '.join(str(error).split())}")
 
 
 def _copy_store(store: Store, path: Path) -> Store:
@@ -1117,6 +1131,30 @@ def _open_store(path: Path) -> Store:
         _refuse(str(error))
     except (OSError, sqlite3.DatabaseError) as error:
         _refuse(f"cannot open store {path}: {error}")
+
+
+def _open_store_readonly(path: Path) -> Store:
+    """Open the store read-only, or refuse for a file that is not a store of this schema."""
+    try:
+        return Store.open_readonly(path)
+    except ValueError as error:  # empty, or another schema version; the message names the store
+        _refuse(str(error))
+    except (OSError, sqlite3.DatabaseError) as error:
+        _refuse(f"cannot open store {path}: {error}")
+
+
+def _remove_store(path: Path) -> None:
+    """Remove a store file with its `-wal` and `-shm` files."""
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
+def _first_error(error: ValidationError) -> str:
+    """The first message of a validation error, on one line, after its location."""
+    first = error.errors()[0]
+    message = " ".join(first["msg"].split())
+    location = ".".join(map(str, first["loc"]))
+    return f"{location}: {message}" if location else message
 
 
 def _instant(text: str) -> datetime | None:

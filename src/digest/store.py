@@ -115,27 +115,52 @@ class Store:
         log.debug("store_opened", extra={"path": str(path)})
         return cls(connection, path)
 
+    @classmethod
+    def open_readonly(cls, path: Path) -> Self:
+        """Open an existing store read-only. Never write the file or its write-ahead log.
+
+        The connection uses `mode=ro`. The function runs no schema script and no write.
+        Raise ValueError for a file that is not a store of this schema version, an empty
+        file included, and sqlite3.DatabaseError for a file that is not SQLite.
+        """
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            _check_version(connection, path, allow_empty=False)
+        except Exception:
+            connection.close()
+            raise
+        log.debug("store_opened_readonly", extra={"path": str(path)})
+        return cls(connection, path)
+
     def copy_to(self, path: Path) -> Store:
         """Copy this store to a new file at `path` and open the copy.
 
         The copy uses the SQLite online backup API from a read-only connection to this
         store, so rows still in the write-ahead log are copied too. This store is not
         changed. Raise FileExistsError when `path` exists, and ValueError for an in-memory store.
+        When the backup fails, remove the file at `path` (with its `-wal` and `-shm` files)
+        and raise the error.
         """
         if self.path == ":memory:":
             raise ValueError("cannot copy an in-memory store")
         if path.exists():
             raise FileExistsError(f"cannot copy store {self.path} to {path}: {path} exists")
         path.parent.mkdir(parents=True, exist_ok=True)
-        source = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
         try:
-            target = sqlite3.connect(path)
+            source = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
             try:
-                source.backup(target)
+                target = sqlite3.connect(path)
+                try:
+                    source.backup(target)
+                finally:
+                    target.close()
             finally:
-                target.close()
-        finally:
-            source.close()
+                source.close()
+        except BaseException:
+            for suffix in ("", "-wal", "-shm"):
+                Path(f"{path}{suffix}").unlink(missing_ok=True)
+            raise
         log.info("store_copied", extra={"source": str(self.path), "path": str(path)})
         return type(self).open(path)
 
@@ -298,11 +323,18 @@ class Store:
         return [TriageDecision.model_validate(dict(row)) for row in rows]
 
 
-def _check_version(connection: sqlite3.Connection, path: Path | str) -> None:
-    """Accept an empty database or a store of this schema version; raise for anything else."""
+def _check_version(
+    connection: sqlite3.Connection, path: Path | str, *, allow_empty: bool = True
+) -> None:
+    """Accept a store of this schema version, and an empty database when `allow_empty`.
+
+    Raise ValueError for anything else.
+    """
     tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master")}
     if not tables:
-        return
+        if allow_empty:
+            return
+        raise ValueError(f"store {path} is empty: it has no schema, so it is not a store")
     row = None
     if "meta" in tables:
         row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
