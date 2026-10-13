@@ -21,10 +21,10 @@ the driver is ours. Posting into a real workspace is out of scope (the seeder, M
 ## The scratch store
 
 `say` never writes to the base store. On first use it creates `--db` with
-`Store.copy_to(path)`, a new store method that uses SQLite's online backup API from a
-read-only connection (`sqlite3.Connection.backup`), so rows still in the base store's
-write-ahead log are copied too. `--db` equal to the
-base path, or resolving to the same file, is refused.
+`Store.copy_to(path)`, a new store method that uses SQLite's online backup API from the
+base store's own read-only connection (`sqlite3.Connection.backup`), so rows still in
+the base store's write-ahead log are copied too. `--db` equal to the base path, or
+resolving to the same file, is refused.
 
 Review rulings (unit 7 code review, 2026-10-12):
 - The base store is opened read-only (`Store.open_readonly`, a `mode=ro` connection with
@@ -56,6 +56,17 @@ Review rulings, round 2 (fix round review, 2026-10-12):
 - Recorded, not fixed: the script log is appended after the event commits, so a log
   write failure leaves an event with no log line; a cleanup that raises replaces the
   refusal with its own error.
+
+Review rulings, round 3 (2026-10-13):
+- A single `say` removes the scratch store only when it made it: the copy runs before
+  the cleanup block, and `copy_to` cleans up its own failures. A refused copy (a target
+  that appeared after the check) removes nothing.
+- `Store.open` closes its connection on any failure after the connect, not only a failed
+  version check, so a cleanup can delete the file on Windows.
+- The `say` docstring names the failures that remove the scratch store: the copy and the
+  event write, not the log append.
+- A failed event write in a single `say` names the scratch store path in its refusal, as
+  `--script` names its line.
 
 ## `digest say`
 
