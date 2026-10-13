@@ -38,7 +38,7 @@ Core, in build order:
 
 Core reads one base store, built once at start and never written. Building it uses only
 the replay client with no backend that `digest demo` uses, which cannot call a model
-(`src/digest/cli.py:95`, `src/digest/llm/client.py:37`).
+(`src/digest/cli.py:610-617`, `src/digest/llm/client.py:37`).
 
 Stretch, only after core is green and reviewed, in this order: the two recorded scenarios
 of unit 7 (the CM bracket blocker, the private leads message) as one-click buttons, after
@@ -163,8 +163,9 @@ merges after unit 7's `diff_selections`.
 A stubs commit on `m3-ui-stubs` follows: the types and signatures below raising
 `NotImplementedError`; `line_parts` in `digest/daily/render.py` (below), with `_line`
 rewritten to use it and no change to any rendered byte (unit 6's tests are the guard);
-the template file; and the layers contract with `digest.cli` above `digest.web` above
-`digest.room` above `digest.eval | digest.driver`. Unit 9 builds pages from hand-made
+the template file; the layers contract with `digest.cli` above `digest.web` above `digest.room` above
+`digest.eval | digest.driver`; and `python-multipart` in the `web` extra (FastAPI's form
+parser needs it; checked 2026-10-13, it is not installed). Unit 9 builds pages from hand-made
 `RoomState` values, so units 8 and 9 run in parallel.
 
 ## Interface
@@ -209,7 +210,9 @@ class RoomState(Frozen):
 
 def apply_world_edits(world: World, edits: Sequence[Edit]) -> World  # ValueError naming the edit on an R3 refusal
 def build_state(base: RoomBase, store: Store, edits: Sequence[Edit]) -> RoomState
+def build_base(store: Store, world: World, priors: Priors) -> RoomBase  # store already replayed and extracted through day 6
 class Room:                          # owns the base store connection and the current state
+    def __init__(self, base: RoomBase, store: Store) -> None   # state() is build_state(base, store, ())
     def apply(self, edit: Edit) -> RoomState   # validates, rebuilds; ValueError on a refusal, state unchanged
     def reset(self) -> RoomState
     def state(self) -> RoomState
@@ -223,13 +226,23 @@ parent's owner. `RoomState.owners` comes from `_owned_set` for every human perso
 the world panel shows it, so the page never claims a transfer the selection does not see.
 
 `digest/web/app.py`: `create_app(room: Room) -> FastAPI`. Routes: `GET /` (the page),
-`POST /edit` (one form per edit kind; redirects to `/`, or shows the page with the
-refusal), `POST /reset` (redirects to `/`).
+`POST /edit`, `POST /reset`. A valid edit and a reset answer 303 See Other to `/`; a
+refused edit answers 400 with the page and the refusal. `digest serve` opens the store,
+builds the base and the `Room`, and closes the store when the server stops.
+
+`POST /edit` form fields (url-encoded): `kind` (the `Edit` kind) and, by kind:
+`set_role`: `user_id`, `role`; `set_membership`: `user_id`, `channel_id`, `member`;
+`set_private`: `channel_id`, `private`; `set_owner`: `entity_id`, `role` (the empty
+string means `None`); `set_gate_date`: `gate_id`, `date` (YYYY-MM-DD); `set_task_owner`:
+`task_id`, `role`. A boolean field is a select with the values `true` and `false`, never
+a checkbox, so it is always sent; a missing or other value is refused. Form parsing
+needs `python-multipart`, which the stubs commit adds to the `web` extra.
 
 ## Behaviours
 
 B8.1 `apply_world_edits` on an empty list returns a world equal to the input. Each edit
-kind changes exactly its field; an edit that breaks an R3 check raises `ValueError` naming
+kind changes exactly its field, except that `SetOwner` also removes the entity from every
+`Persona.owned_entities`; an edit that breaks an R3 check raises `ValueError` naming
 the edit and the id. Removing a persona from a channel they posted in is accepted.
 
 B8.2 The recorded world and the base store are never changed: after any sequence of
@@ -296,7 +309,8 @@ B9.5 `digest serve` binds 127.0.0.1 and reads no key: it starts and serves with 
 
 ## Acceptance
 
-- U1. From a fresh clone with no key and no network: `digest serve`, open the page, set
+- U1. From a fresh clone with no key and no network, after `uv sync --all-extras
+  --dev`: `digest serve`, open the page, set
   `U0SC01` to EM, see the new digests and the diff; reset; the digests and diffs equal
   the first load.
 - U2. B8.2 holds after every edit kind.
