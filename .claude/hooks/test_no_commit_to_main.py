@@ -114,6 +114,8 @@ def test_blocks_plain_project_commit_on_main(repos):
         pytest.param('"/c/Program Files/Git/cmd/git.exe" commit -m update', id="windows-full-path"),
         pytest.param("if true; then git.exe commit -m update; fi", id="after-then-keyword"),
         pytest.param("2>&1 git.exe commit -m update", id="after-leading-redirection"),
+        pytest.param(">a >b git.exe commit -m update", id="after-chained-redirections"),
+        pytest.param("FOO=1 >out git.exe commit -m update", id="after-env-and-redirection"),
     ],
 )
 def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
