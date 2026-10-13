@@ -2,7 +2,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from hypothesis import given, settings
@@ -110,13 +110,10 @@ def test_copy_to_includes_uncheckpointed_wal_rows_and_keeps_base_unchanged(
             writer.close()
 
 
-def test_copy_to_removes_target_when_backup_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_copy_to_removes_target_when_backup_fails(tmp_path: Path) -> None:
     base = tmp_path / "base.sqlite"
     target = tmp_path / "copy.sqlite"
     with Store.open(base) as store:
-        real_connect = sqlite3.connect
 
         class FailingBackupConnection:
             def __init__(self, connection: sqlite3.Connection) -> None:
@@ -127,17 +124,10 @@ def test_copy_to_removes_target_when_backup_fails(
                 Path(f"{target}-shm").write_bytes(b"partial shm")
                 raise sqlite3.OperationalError("forced backup failure")
 
-            def close(self) -> None:
-                self.connection.close()
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self.connection, name)
 
-        def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection | FailingBackupConnection:
-            connection = real_connect(*args, **kwargs)
-            if kwargs.get("uri"):
-                return FailingBackupConnection(connection)
-            return connection
-
-        monkeypatch.setattr(sqlite3, "connect", connect)
-
+        store._db = cast(sqlite3.Connection, FailingBackupConnection(store._db))
         with pytest.raises(sqlite3.OperationalError, match="forced backup failure"):
             store.copy_to(target)
 
@@ -154,6 +144,8 @@ def test_copy_to_removes_target_when_opening_finished_copy_fails(
 
         def fail_target_open(path: Path | Literal[":memory:"]) -> Store:
             if path == target:
+                Path(f"{target}-wal").write_bytes(b"partial wal")
+                Path(f"{target}-shm").write_bytes(b"partial shm")
                 raise sqlite3.OperationalError("forced finished-copy open failure")
             return original_open(path)
 
@@ -163,6 +155,23 @@ def test_copy_to_removes_target_when_opening_finished_copy_fails(
             store.copy_to(target)
 
     assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
+def test_copy_to_refuses_existing_target_without_changing_its_files(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    existing = {
+        target: b"existing target",
+        Path(f"{target}-wal"): b"existing wal",
+        Path(f"{target}-shm"): b"existing shm",
+    }
+    for path, contents in existing.items():
+        path.write_bytes(contents)
+
+    with Store.open(base) as store, pytest.raises(FileExistsError):
+        store.copy_to(target)
+
+    assert {path: path.read_bytes() for path in existing} == existing
 
 
 @pytest.mark.parametrize("deleted", [False, True])

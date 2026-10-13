@@ -847,7 +847,9 @@ def test_say_appends_two_events_then_refuses_backdating_without_write(tmp_path: 
     assert log.read_bytes() == log_before_refusal
 
 
-def test_say_refuses_existing_script_log_before_creating_scratch(tmp_path: Path) -> None:
+def test_say_refuses_existing_script_log_before_creating_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = tmp_path / "base.sqlite"
     scratch = tmp_path / "scratch.sqlite"
     log = _script_log(scratch)
@@ -855,17 +857,26 @@ def test_say_refuses_existing_script_log_before_creating_scratch(tmp_path: Path)
     log.write_bytes(b"keep this session\n")
     base_before = base.read_bytes()
 
+    def fail_copy(store: Store, target: Path) -> Store:
+        raise AssertionError("copy must not run")
+
+    monkeypatch.setattr(Store, "copy_to", fail_copy)
     result = runner.invoke(app, _say_args(scratch, base))
 
     assert result.exit_code == 1
-    assert str(log) in result.output
-    assert len(result.output.splitlines()) == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
+    assert result.output.splitlines() == [
+        f"script log {log} already exists; remove it or give another --db"
+    ]
     assert log.read_bytes() == b"keep this session\n"
     assert base.read_bytes() == base_before
     assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
 
 
-def test_say_script_refuses_existing_session_log_before_creating_scratch(tmp_path: Path) -> None:
+def test_say_script_refuses_existing_session_log_before_creating_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = tmp_path / "base.sqlite"
     scratch = tmp_path / "scratch.sqlite"
     source = tmp_path / "scenario.jsonl"
@@ -885,12 +896,18 @@ def test_say_script_refuses_existing_session_log_before_creating_scratch(tmp_pat
     log.write_bytes(b"keep this session\n")
     base_before = base.read_bytes()
 
+    def fail_copy(store: Store, target: Path) -> Store:
+        raise AssertionError("copy must not run")
+
+    monkeypatch.setattr(Store, "copy_to", fail_copy)
     result = runner.invoke(
         app,
         ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
     )
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
     assert result.output.splitlines() == [
         f"script log {log} already exists; remove it or give another --db"
     ]
@@ -982,6 +999,7 @@ def test_say_script_removes_scratch_and_prints_no_ts_when_later_write_fails(
     )
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
     assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
     assert re.search(r"(?m)^\d{10}\.\d{6}$", result.output) is None
     assert result.output.splitlines() == [f"{source}:2: forced second-line failure"]
@@ -1166,6 +1184,30 @@ def test_say_removes_fresh_scratch_when_event_write_fails(
     assert isinstance(result.exception, SystemExit)
     assert result.output.splitlines() == ["forced event write failure"]
     assert not any(path.exists() for path in (*_store_files(scratch), _script_log(scratch)))
+
+
+def test_say_keeps_existing_scratch_when_event_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    _seed_store(base, events=(_event(),))
+    _seed_store(scratch, events=(_event(),))
+
+    def fail_upsert(store: Store, *args: Any, **kwargs: Any) -> int:
+        raise sqlite3.OperationalError("forced event write failure")
+
+    monkeypatch.setattr(Store, "upsert_events", fail_upsert)
+    result = runner.invoke(app, _say_args(scratch, base))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
+    assert result.output.splitlines() == ["forced event write failure"]
+    assert scratch.exists()
+    with sqlite3.connect(scratch) as connection:
+        stored = connection.execute("SELECT text FROM events ORDER BY event_ts_us").fetchall()
+    assert stored == [("Existing message",)]
 
 
 def test_say_script_refuses_existing_db_without_write(tmp_path: Path) -> None:
