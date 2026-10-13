@@ -110,6 +110,38 @@ def test_copy_to_includes_uncheckpointed_wal_rows_and_keeps_base_unchanged(
             writer.close()
 
 
+def test_copy_to_removes_target_when_backup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        real_connect = sqlite3.connect
+
+        class FailingBackupConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self.connection = connection
+
+            def backup(self, target_connection: sqlite3.Connection) -> None:
+                raise sqlite3.OperationalError("forced backup failure")
+
+            def close(self) -> None:
+                self.connection.close()
+
+        def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection | FailingBackupConnection:
+            connection = real_connect(*args, **kwargs)
+            if kwargs.get("uri"):
+                return FailingBackupConnection(connection)
+            return connection
+
+        monkeypatch.setattr(sqlite3, "connect", connect)
+
+        with pytest.raises(sqlite3.OperationalError, match="forced backup failure"):
+            store.copy_to(target)
+
+    assert not target.exists()
+
+
 @pytest.mark.parametrize("deleted", [False, True])
 def test_edit_and_delete_remain_readable(store: Store, deleted: bool) -> None:
     original = event(text="oldword")

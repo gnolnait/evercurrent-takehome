@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
@@ -336,6 +337,36 @@ def test_say_keeps_base_logical_contents_with_uncheckpointed_wal_rows(tmp_path: 
         writer.close()
 
 
+def test_say_uses_read_only_base_without_changing_database_or_wal(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    _seed_store(base, events=(_event(),))
+    writer = sqlite3.connect(base)
+    original_mode = stat.S_IMODE(base.stat().st_mode)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("INSERT INTO meta (key, value) VALUES ('wal_marker', 'present')")
+        writer.commit()
+        wal = Path(f"{base}-wal")
+        assert wal.stat().st_size > 0
+        base_before = base.read_bytes()
+        wal_before = wal.read_bytes()
+        os.chmod(base, stat.S_IREAD)
+
+        try:
+            result = runner.invoke(app, _say_args(scratch, base))
+        finally:
+            os.chmod(base, original_mode)
+
+        assert result.exit_code == 0, result.output
+        assert base.read_bytes() == base_before
+        assert wal.read_bytes() == wal_before
+    finally:
+        os.chmod(base, original_mode)
+        writer.close()
+
+
 def test_diff_same_store_copy_reports_no_change_and_stable_json(tmp_path: Path) -> None:
     base = tmp_path / "base.sqlite"
     copy = tmp_path / "copy.sqlite"
@@ -585,6 +616,29 @@ def test_say_refuses_non_working_store_day_without_write(tmp_path: Path) -> None
     _assert_refused_without_write(base, scratch, "working day", **{"--at": "2026-10-17T12:00"})
 
 
+@pytest.mark.parametrize(
+    ("contents", "reason"),
+    [
+        (b"", r"(?i)(schema|store)"),
+        (b"this is not sqlite", r"(?i)(database|sqlite)"),
+    ],
+    ids=["empty", "text"],
+)
+def test_say_refuses_base_that_is_not_a_store_without_changing_it(
+    tmp_path: Path, contents: bytes, reason: str
+) -> None:
+    base = tmp_path / "not-a-store.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    base.write_bytes(contents)
+
+    result = runner.invoke(app, _say_args(scratch, base))
+
+    assert result.exit_code == 1
+    assert re.search(reason, result.output), result.output
+    assert base.read_bytes() == contents
+    assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
 def test_say_refuses_each_path_to_same_file_without_write(tmp_path: Path) -> None:
     base = tmp_path / "base.sqlite"
     _seed_store(base)
@@ -671,6 +725,24 @@ def test_say_appends_two_events_then_refuses_backdating_without_write(tmp_path: 
     assert log.read_bytes() == log_before_refusal
 
 
+def test_say_refuses_existing_script_log_before_creating_scratch(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    log = _script_log(scratch)
+    _seed_store(base, events=(_event(),))
+    log.write_bytes(b"keep this session\n")
+    base_before = base.read_bytes()
+
+    result = runner.invoke(app, _say_args(scratch, base))
+
+    assert result.exit_code == 1
+    assert str(log) in result.output
+    assert len(result.output.splitlines()) == 1
+    assert log.read_bytes() == b"keep this session\n"
+    assert base.read_bytes() == base_before
+    assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
 def test_say_script_runs_lines_in_order_without_writing_session_log(tmp_path: Path) -> None:
     base = tmp_path / "base.sqlite"
     scratch = tmp_path / "scratch.sqlite"
@@ -711,6 +783,94 @@ def test_say_script_runs_lines_in_order_without_writing_session_log(tmp_path: Pa
         ).fetchall()
     assert messages == [("First scripted line",), ("Second scripted line",)]
     assert not _script_log(scratch).exists()
+
+
+def test_say_script_removes_scratch_and_prints_no_ts_when_later_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    _seed_store(base, events=(_event(),))
+    lines = [
+        ScriptLine(
+            **{
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": f"2026-10-19T17:{minute}",
+                "text": f"Line at {minute}",
+            }
+        )
+        for minute in ("30", "40")
+    ]
+    source.write_text(
+        "".join(f"{line.model_dump_json()}\n" for line in lines),
+        encoding="utf-8",
+    )
+    original_upsert = Store.upsert_events
+    call_count = 0
+
+    def fail_second_upsert(store: Store, *args: Any, **kwargs: Any) -> int:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise sqlite3.OperationalError("forced second-line failure")
+        return original_upsert(store, *args, **kwargs)
+
+    monkeypatch.setattr(Store, "upsert_events", fail_second_upsert)
+
+    result = runner.invoke(
+        app,
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+    assert re.search(r"(?m)^\d{10}\.\d{6}$", result.output) is None
+
+
+def test_say_script_keeps_u2028_in_event_text(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    text = "First paragraph\u2028second paragraph"
+    _seed_store(base, events=(_event(),))
+    source.write_text(
+        json.dumps(
+            {
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:30",
+                "text": text,
+                "thread": None,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(scratch) as connection:
+        stored = connection.execute("SELECT text FROM events WHERE text = ?", (text,)).fetchone()
+    assert stored == (text,)
+
+
+def test_say_bad_thread_format_has_one_line_refusal(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    _seed_store(base, events=(_event(),))
+
+    result = runner.invoke(app, _say_args(scratch, base, **{"--thread": "not-a-ts"}))
+
+    assert result.exit_code == 1
+    assert "thread" in result.output.lower()
+    assert len(result.output.splitlines()) == 1
 
 
 def test_say_script_refuses_existing_db_without_write(tmp_path: Path) -> None:
