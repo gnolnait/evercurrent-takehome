@@ -192,6 +192,9 @@ def test_blocks_windows_shell_syntax_forms():
     assert _verdict('cmd /c "echo It\'s done & git commit --no-verify -m x"') == "BLOCK"
     assert _verdict('cmd //c"git commit --no-verify -m x & echo done"') == "BLOCK"
     assert _verdict('pwsh -Command "git commit -an -m x"') == "BLOCK"
+    assert _verdict("pwsh -Command 'git commit -m fix -n; Write-Output done'") == "BLOCK"
+    assert _verdict('powershell -Command "git commit \'-n\' -m fix"') == "BLOCK"
+    assert _verdict('pwsh -Command "git commit -anmfix"') == "BLOCK"
 
 
 def test_bypass_words_as_powershell_arguments_fail_closed():
@@ -204,6 +207,11 @@ def test_bypass_words_as_powershell_arguments_fail_closed():
 def test_allows_long_options_that_hold_n_in_windows_shells():
     assert _verdict('powershell -ExecutionPolicy Bypass -NoProfile -Command "git status"') == "ALLOW"
     assert _verdict('cmd //c "git --no-pager log"') == "ALLOW"
+
+
+def test_allows_git_option_after_powershell_command_flag():
+    """After -Command the text is the command, so git's -E is not -EncodedCommand."""
+    assert _verdict("powershell -Command git log -E --grep fix -1 --oneline") == "ALLOW"
 
 
 def test_blocks_encoded_powershell_command():

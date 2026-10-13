@@ -287,6 +287,9 @@ ALLOW = [
     pytest.param("powershell -ExecutionPolicy Bypass -File build.ps1", id="powershell-file"),
     pytest.param("powershell -ep Bypass -File build.ps1", id="powershell-ep-is-execution-policy"),
     pytest.param('cmd //c "git merge main"', id="cmd-git-merge-has-no-gh"),
+    pytest.param(
+        "powershell -Command git log -E --grep fix -1 --oneline", id="powershell-git-e-is-not-encoded"
+    ),
     pytest.param('cmd //c "dir"', id="cmd-unrelated"),
 ]
 

@@ -113,6 +113,7 @@ def test_blocks_plain_project_commit_on_main(repos):
         pytest.param("/usr/bin/git commit -m update", id="full-path"),
         pytest.param('"/c/Program Files/Git/cmd/git.exe" commit -m update', id="windows-full-path"),
         pytest.param("if true; then git.exe commit -m update; fi", id="after-then-keyword"),
+        pytest.param("2>&1 git.exe commit -m update", id="after-leading-redirection"),
     ],
 )
 def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
@@ -121,6 +122,12 @@ def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
 
 def test_allows_foreign_commit_by_full_git_path(repos):
     cmd = f'"/c/Program Files/Git/cmd/git.exe" -C {repos["sibling"]} commit -m update'
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize("cmd", ["command -v git commit", "command -V git.exe commit"])
+def test_allows_command_lookup_on_main(cmd, repos):
+    """`command -v` only looks a name up; it runs nothing."""
     assert _verdict(cmd, repos["project"]) == "ALLOW"
 
 
