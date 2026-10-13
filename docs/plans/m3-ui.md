@@ -270,20 +270,21 @@ B8.4 Reset: after `reset`, the selections equal `RoomBase.recorded` and every di
 `reworded` entry and `last_effect` is empty or zero.
 
 B8.5 Effects on day 6 (2026-10-19), each computed on the day-6 store with `model_copy`
-worlds on 2026-10-12 and derived again by the test author from `world.yaml` and plan B5.3:
+worlds, measured again on 2026-10-13 after the digest window merged (PR 58), and derived
+again by the test author from `world.yaml` and plan B5.3:
 - `U0SC01` to role `EM`: the reader's role prior changes and the entities whose owner is
   `EM` join the owned set; `PO-45002211` stays, because `U0SC01` owns it directly
   (`world.yaml:89`, `profile.py:39`). The G-DVT1 EMC and thermal checklist absences and
   the top-cover DFM blocker become must-see lines, the thermal review blocker becomes
-  must-see, and the stale drawing pack blocker and the ECO-0142 decision leave. The test
-  pins the whole `ReaderDiff`.
+  must-see, and the stale drawing pack blocker leaves. The test pins the whole
+  `ReaderDiff`.
 - `#ext-sunrise-cm` (`C0EXTCM`) private: its members are `U0ME01`, `U0SC01`, `U0PM01` and
   `U0CM01`. `U0EM01` loses the decision "PN-51010 T1 gate date moved to 2026-10-21" and
   `hidden` goes from 0 to 4; `U0ME01` and `U0SC01` are unchanged.
 - Then `U0SC01` out of `#ext-sunrise-cm`: `U0SC01` loses the must-see ask "Confirm anodize
   PO for DVT-1 brackets", the risk "PN-11020 chassis base built to stale Rev B drawing
-  pack" and the T1 decision, gains two ranked lines that the freed caps admit, and
-  `hidden` goes from 0 to 4.
+  pack" and the T1 decision, gains the top-cover DFM blocker as a ranked line that the
+  freed caps admit, and `hidden` goes from 0 to 4.
 - A persona added to or removed from a public channel: no change (`profile.py:52`).
 - `U0ME01` or `U0SC01` added to the private `#kestrel-leads`: no line and no `hidden`
   count changes (measured: `hidden` 0 before and after), because no leads line clears a
@@ -358,7 +359,7 @@ same room.
 | P11 | Unit 7's `diff_selections` merges before unit 8 needs it | the unit 7 session ships it alone on branch `m3-diff`, ahead of `say` and `diff`, 2026-10-13 | TBD: the schedule's first dependency |
 | P8 | The room world can skip the `World` script checks | `model_copy` worlds ran through `select_digest` with no error, 2026-10-12 | verified, pinned by B8.1 |
 | P9 | A gate moved past its buffer drops its checklist absences | `src/digest/absence.py:41-43` | verified |
-| P10 | The B8.5 effects | computed on the day-6 store, 2026-10-12, by this session and by an independent reviewer | verified |
+| P10 | The B8.5 effects | computed on the day-6 store, 2026-10-12, by this session and by an independent reviewer; measured again on 2026-10-13 after PR 58 | verified |
 
 ## Decided
 
