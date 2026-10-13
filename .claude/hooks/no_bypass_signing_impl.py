@@ -124,10 +124,11 @@ def tokenize(segment):
 TRIGGER_HINTS = ("--no-verify", "--no-veri", "--no-gpg", "--no-g", "gpgsign", "-n")
 
 # For Windows shell text, which is searched on every call, a bare `-n` substring
-# would block `-NoProfile` and `--no-pager`. There, `-n` counts only as a short
-# option cluster that holds `n` (`-n`, `-an`, `-nm`).
+# would block `--no-pager`. There, `-n` counts only as a single-dash option word
+# that holds `n` (`-n;`, `"-n"`, `-an`, `-anmfix`), not after a letter or a dash.
+# The shell's own options (`-NoProfile`) are already out of the text.
 _LONG_HINTS = tuple(h for h in TRIGGER_HINTS if h != "-n")
-_SHORT_N = re.compile(r"(?<!\S)-[a-z]{0,3}n[a-z]{0,3}(?!\S)")
+_SHORT_N = re.compile(r"(?<![\w-])-[a-z]*n[a-z]*")
 
 
 def _mentions_git(text):

@@ -659,23 +659,53 @@ def windows_shell_text(name, args):
     guard to search. Return None for an encoded PowerShell command, which
     cannot be read.
 
-    A flag starts with `-`, `--` or `/`. Any PowerShell flag that is a prefix of
-    `-EncodedCommand`, or `-ec`, names an encoded command, in any position.
-    cmd also runs a command glued to its switch (`/cgh pr merge`, or
-    `/c"gh pr merge & x"`), so that command is split off first.
+    A flag starts with `-`, `--` or `/`. PowerShell's own options and their
+    values end at `-Command` or at the first other word. Any of those options
+    that is a prefix of `-EncodedCommand`, or `-ec`, names an encoded command;
+    after `-Command`, git's `-E` is git's. cmd also runs a command glued to its switch
+    (`/cgh pr merge`, or `/c"gh pr merge & x"`), so that command is split off
+    first.
     """
+    i = 0
     if name == "cmd":
         split = []
         for arg in args:
             glued = re.fullmatch(r"(/+[ck])([^/].*)", arg, re.I | re.S)
             split += [glued.group(1), glued.group(2)] if glued else [arg]
         args = split
-    else:
-        for arg in args:
-            flag = arg.lower().lstrip("-/") if arg[:1] in ("-", "/") else ""
-            if flag == "ec" or (flag and "encodedcommand".startswith(flag)):
-                return None
-    i = 0
+        while i < len(args) and args[i][:1] == "/":
+            i += 1
+        return " ".join(args[i:]).lower()
+    # PowerShell: skip its own options and their values up to the command.
     while i < len(args) and args[i][:1] in ("-", "/"):
-        i += 1
+        flag = args[i].lower().lstrip("-/")
+        if flag and ("command".startswith(flag) or flag.startswith("command")):
+            i += 1
+            break
+        if flag == "ec" or (flag and "encodedcommand".startswith(flag)):
+            return None
+        takes_value = flag in _PS_VALUE_ALIASES or (
+            len(flag) >= 3 and any(n.startswith(flag) for n in _PS_VALUE_FLAGS)
+        )
+        i += 2 if takes_value else 1
     return " ".join(args[i:]).lower()
+
+
+# PowerShell options that take a value, so their value is not the command. A
+# flag matches a name by any prefix of three or more letters, or by an alias.
+# An unknown flag's value stays in the searched text, which only widens it.
+_PS_VALUE_FLAGS = (
+    "configurationfile",
+    "configurationname",
+    "custompipename",
+    "executionpolicy",
+    "file",
+    "inputformat",
+    "outputformat",
+    "psconsolefile",
+    "settingsfile",
+    "version",
+    "windowstyle",
+    "workingdirectory",
+)
+_PS_VALUE_ALIASES = frozenset({"ep", "ex", "f", "if", "of", "o", "v", "w", "wd"})

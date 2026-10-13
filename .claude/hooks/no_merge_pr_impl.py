@@ -12,6 +12,8 @@ Why Python, and which interpreter:
     tokenize each command segment with shlex and dispatch on the COMMAND WORD:
     only a real merge-capable tool (gh / curl / ...) with merge-shaped args is
     blocked; jj / git / echo / cat carrying merge prose in their args are not.
+    The exception is the text of a Windows shell (`powershell -Command "..."`),
+    which is searched, not parsed, so merge prose there does block.
   - The bash fences resolve the interpreter (CLAUDE_HOOK_PYTHON, else python3,
     else python, skipping the Windows Store alias stub). This module is
     stdlib-only, so any Python 3.10+ works.

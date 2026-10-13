@@ -339,8 +339,13 @@ def is_env_assignment(tok):
     return "=" in tok and name and name.replace("_", "").isalnum() and not name[0].isdigit()
 
 
-def process_segment(toks, effdir, piped=()):
-    """Handle one simple command; return the new effective dir (cd) or None."""
+def process_segment(toks, effdir, piped=(), lead=0):
+    """Handle one simple command; return the new effective dir (cd) or None.
+
+    `lead` is 1 when the segment starts with a redirection target (`2>&1 git
+    ...` splits at `>&`, so this segment starts with `1`); the command word
+    comes after it.
+    """
     if not toks:
         return None
     if toks[0] == "cd" and len(toks) >= 2 and not toks[1].startswith("-"):
@@ -348,7 +353,7 @@ def process_segment(toks, effdir, piped=()):
 
     # GIT_DIR / GIT_WORK_TREE redirect the repo somewhere this parser cannot attribute,
     # so a commit under them is ambiguous.
-    head, redirected = 0, False
+    head, redirected = min(lead, len(toks)), False
     while head < len(toks) and is_env_assignment(toks[head]):
         if toks[head].split("=", 1)[0] in ("GIT_DIR", "GIT_WORK_TREE"):
             redirected = True
@@ -368,10 +373,13 @@ def process_segment(toks, effdir, piped=()):
         if os.path.basename(toks[h]) in (
             "env", "command", "builtin", "exec", "sudo", "nohup", "nice",
         ):
+            lookup = os.path.basename(toks[h]) == "command"
             h += 1
             while h < len(toks) and (
                 toks[h].startswith("-") or is_env_assignment(toks[h])
             ):
+                if lookup and re.match(r"-\w*[vV]", toks[h]):
+                    return None  # `command -v` only looks a name up; it runs nothing
                 if toks[h] == "-S" and h + 1 < len(toks):
                     env_s_cmd = toks[h + 1]  # `env -S "bash -s"`: quoted command string
                     h += 2
@@ -523,9 +531,11 @@ def _emit(cmd, default):
     scope_stack = []  # effdir saved at each '(' - a cd inside a subshell is scoped
     segment = []
     piped = []  # heredoc bodies flowing into the next segment's stdin via '|'
+    lead = 0  # 1 when the current segment starts with a redirection target
     for tok in tokens:
         if tok and not tok.strip("();<>|&"):  # pure-operator token -> boundary
-            new_dir = process_segment(segment, effdir, piped)
+            new_dir = process_segment(segment, effdir, piped, lead)
+            lead = 1 if set(tok) & set("<>") and "(" not in tok else 0
             if new_dir is not None:
                 effdir = new_dir
             # Heredoc bodies flow into the next segment's stdin across pipe hops (`cat
@@ -548,7 +558,7 @@ def _emit(cmd, default):
                     effdir = scope_stack.pop()
             continue
         segment.append(tok)
-    new_dir = process_segment(segment, effdir, piped)
+    new_dir = process_segment(segment, effdir, piped, lead)
 
 
 def emit_events(cmd: str, default_dir: str) -> str:
