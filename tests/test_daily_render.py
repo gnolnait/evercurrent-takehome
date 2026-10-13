@@ -754,6 +754,32 @@ def test_render_digest_window_line_under_header(
     assert rendered.splitlines()[:2] == ["Daily digest for Nadia Brenner (ME) - 2026-10-14", label]
 
 
+@pytest.mark.parametrize(
+    ("previous", "expected"),
+    [
+        (None, "First digest: the last 3 working days"),
+        (date(2026, 10, 13), "Since your digest of 2026-10-13"),
+    ],
+    ids=["first-digest", "previous-digest"],
+)
+def test_window_line_matches_render_digest(
+    world: World, profile: Profile, previous: date | None, expected: str
+) -> None:
+    selected = Selection(
+        profile=profile,
+        day=DAY,
+        lines=(),
+        hidden=0,
+        previous_digest=previous,
+        first_working_days=3,
+    )
+
+    window_line = getattr(daily_render, "window_line", None)
+
+    assert callable(window_line), "daily.render must expose window_line(selection)"
+    assert window_line(selected) == render_digest(world, selected).splitlines()[1] == expected
+
+
 @pytest.mark.parametrize("newest_first", [False, True], ids=["old-first", "new-first"])
 def test_select_digest_uses_max_event_time_across_cited_messages(
     world: World, profile: Profile, newest_first: bool

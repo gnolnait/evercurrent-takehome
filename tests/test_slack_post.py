@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 import digest.cli as cli
 from digest.cli import app
 from digest.daily.profile import Profile
+from digest.daily.render import render_digest
 from digest.daily.select import Line, Section, Selection
 from digest.daily.slack import slack_message
 from digest.extract.stage import ExtractReport
@@ -129,20 +130,82 @@ def test_slack_message_has_header_section_titles_lines_and_sources(
 
     header = "Daily digest for Nadia Brenner (ME) - 2026-10-14"
     assert set(message) == {"text", "blocks"}
-    assert message["text"] == header
+    assert message["text"] == header + "\nFirst digest: the last 5 working days"
     assert message["blocks"][0]["type"] == "header"
     assert message["blocks"][0]["text"]["type"] == "plain_text"
     assert block_text(message["blocks"][0]) == header
     blocks = message["blocks"][1:]
-    assert [block["type"] for block in blocks] == ["section"] * 4
+    assert [block["type"] for block in blocks] == ["section"] * 5
     texts = [block_text(block) for block in blocks]
-    assert texts[0] == "*Decisions*"
-    assert "*Drawing released*" in texts[1]
-    assert "*[must see]*" in texts[1]
-    assert f"<{evidence(1).permalink}|source>" in texts[1]
-    assert f"<{evidence(2).permalink}|source>" in texts[1]
-    assert texts[2] == "*Risks*"
-    assert "*Tooling risk*" in texts[3]
+    assert texts[0] == "First digest: the last 5 working days"
+    assert texts[1] == "*Decisions*"
+    assert "*Drawing released*" in texts[2]
+    assert "*[must see]*" in texts[2]
+    assert f"<{evidence(1).permalink}|source>" in texts[2]
+    assert f"<{evidence(2).permalink}|source>" in texts[2]
+    assert texts[3] == "*Risks*"
+    assert "*Tooling risk*" in texts[4]
+
+
+@pytest.mark.parametrize(
+    ("previous", "expected"),
+    [
+        (None, "First digest: the last 3 working days"),
+        (date(2026, 10, 13), "Since your digest of 2026-10-13"),
+    ],
+    ids=["first-digest", "previous-digest"],
+)
+@pytest.mark.parametrize("empty", [False, True], ids=["with-lines", "empty-day"])
+def test_slack_window_matches_terminal_as_verbatim_section(
+    world: World, profile: Profile, previous: date | None, expected: str, empty: bool
+) -> None:
+    selected = Selection(
+        profile=profile,
+        day=DAY,
+        lines=() if empty else (line(item()),),
+        hidden=0,
+        previous_digest=previous,
+        first_working_days=3,
+    )
+
+    message = slack_message(world, selected)
+    terminal_window = render_digest(world, selected).splitlines()[1]
+
+    assert terminal_window == expected
+    assert message["blocks"][1] == {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": terminal_window, "verbatim": True},
+    }
+    if empty:
+        assert len(message["blocks"]) == 3
+        assert block_text(message["blocks"][2]) == "Nothing new for Nadia Brenner."
+
+
+@pytest.mark.parametrize(
+    ("previous", "expected"),
+    [
+        (None, "First digest: the last 3 working days"),
+        (date(2026, 10, 13), "Since your digest of 2026-10-13"),
+    ],
+    ids=["first-digest", "previous-digest"],
+)
+def test_slack_fallback_has_escaped_header_then_window(
+    world: World, profile: Profile, previous: date | None, expected: str
+) -> None:
+    selected = Selection(
+        profile=profile.model_copy(update={"name": "Nadia & <ME>"}),
+        day=DAY,
+        lines=(),
+        hidden=0,
+        previous_digest=previous,
+        first_working_days=3,
+    )
+
+    message = slack_message(world, selected)
+
+    assert message["text"] == (
+        "Daily digest for Nadia &amp; &lt;ME&gt; (ME) - 2026-10-14\n" + expected
+    )
 
 
 def test_slack_message_escapes_model_text_before_mrkdwn(world: World, profile: Profile) -> None:
@@ -158,7 +221,8 @@ def test_slack_message_escapes_model_text_before_mrkdwn(world: World, profile: P
 
     message = slack_message(world, selected)
 
-    rendered = block_text(message["blocks"][2])
+    assert len(message["blocks"]) == 4
+    rendered = block_text(message["blocks"][3])
     assert "*Alert &amp; &lt;@U123&gt; &gt;*" in rendered
     assert "Do not open &lt;https://x|y&gt; &amp; wait &gt; now." in rendered
     assert "<@U123>" not in rendered
@@ -188,22 +252,41 @@ def test_slack_message_cuts_a_long_line_with_ellipsis(world: World, profile: Pro
 
     message = slack_message(world, selected)
 
-    rendered = block_text(message["blocks"][2])
+    assert len(message["blocks"]) == 4
+    rendered = block_text(message["blocks"][3])
     assert len(rendered) <= 3000
     assert rendered.endswith("\N{HORIZONTAL ELLIPSIS}")
 
 
+@pytest.mark.parametrize(
+    ("count", "hidden", "kept", "omitted"),
+    [(47, 0, 47, 0), (48, 0, 46, 2), (51, 0, 46, 5), (46, 2, 46, 0), (47, 2, 45, 2)],
+    ids=["exactly-50", "one-over", "51-lines", "exactly-50-with-footer", "one-over-with-footer"],
+)
 def test_slack_message_limits_blocks_and_reports_omitted_lines(
-    world: World, profile: Profile
+    world: World, profile: Profile, count: int, hidden: int, kept: int, omitted: int
 ) -> None:
-    lines = tuple(line(item(number, title=f"Decision {number}")) for number in range(1, 52))
+    lines = tuple(line(item(number, title=f"Decision {number}")) for number in range(1, count + 1))
+    selected = Selection(profile=profile, day=DAY, lines=lines, hidden=hidden)
 
-    message = slack_message(world, selection(profile, *lines))
+    message = slack_message(world, selected)
 
     assert len(message["blocks"]) == 50
-    assert block_text(message["blocks"][2]).startswith("*Decision 1*")
-    assert block_text(message["blocks"][-2]).startswith("*Decision 47*")
-    assert block_text(message["blocks"][-1]) == "4 lines left out."
+    texts = [block_text(block) for block in message["blocks"]]
+    assert [text.split("*", 2)[1] for text in texts if text.startswith("*Decision ")] == [
+        f"Decision {number}" for number in range(1, kept + 1)
+    ]
+    assert texts[1] == "First digest: the last 5 working days"
+    assert texts[2] == "*Decisions*"
+    assert [text.split("*", 2)[1] for text in texts[3 : 3 + kept]] == [
+        f"Decision {number}" for number in range(1, kept + 1)
+    ]
+    footer = []
+    if hidden:
+        footer.append("2 items hidden by the visibility filter.")
+    if omitted:
+        footer.append(f"{omitted} lines left out.")
+    assert texts[3 + kept :] == footer
 
 
 class FakeResponse:
