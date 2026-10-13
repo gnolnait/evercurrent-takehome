@@ -44,13 +44,24 @@ set -euo pipefail
 INPUT="$(cat)"
 
 # Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
-# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
-# PATH but only print an install hint and exit non-zero, so they are skipped.
+# python (Git Bash tries python first: there python3 is usually only the
+# Store alias, and each lookup below forks). The Windows Store alias stubs
+# (.../WindowsApps/python3.exe) sit on PATH but only print an install hint
+# and exit non-zero, so they are skipped.
 # Nothing found -> a name that cannot resolve, so the launch below exits 127
 # and the fence blocks.
+# This script's directory, without a `$(dirname)` fork. On Windows `$0` can
+# hold backslashes.
+_here=${0%/*}
+case $_here in "$0") _here=. ;; esac
+case ${0##*/} in *\\*) _here=${0%\\*} ;; esac
 PY="${CLAUDE_HOOK_PYTHON:-}"
 if [ -z "$PY" ]; then
-  for _c in python3 python; do
+  case "${OSTYPE:-}" in
+    msys* | cygwin*) _cands="python python3" ;;
+    *) _cands="python3 python" ;;
+  esac
+  for _c in $_cands; do
     _p="$(command -v "$_c" 2>/dev/null)" || continue
     case "$_p" in *WindowsApps*) continue ;; esac
     PY="$_p"
@@ -100,7 +111,7 @@ fi
 # non-2 exit as non-blocking. (`exec` would surface Python's raw exit code, so a
 # syntax error -> exit 1 -> allow: the exact fail-open this guard exists to
 # prevent.)
-PARSER="$(dirname "$0")/no-bypass-signing.py"
+PARSER="$_here/no-bypass-signing.py"
 # A missing/unreadable parser makes python exit 2 ("can't open
 # file"), which the rc dispatch below would misread as a parser BLOCK verdict —
 # still the safe direction, but the user would see a raw Python traceback with

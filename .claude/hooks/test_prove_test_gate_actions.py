@@ -139,6 +139,20 @@ def test_other_session_markers_do_not_gate(repo, state):
     assert not _denied(_gate("git push", repo))
 
 
+def test_no_session_marker_skips_the_repo_lookup(repo, state, monkeypatch):
+    """Most Bash calls have no marker for their session. The repo lookup spawns
+    git (about 90 ms on Windows), so the gate must not run it before it finds
+    one. Another session's marker is present, as stale ones are in real use."""
+    import prove_test_gate_actions as gate
+
+    _pending_test(repo, state, session="someone-else")
+    calls = []
+    monkeypatch.setattr(gate, "git_toplevel", lambda d: calls.append(d) or str(repo))
+    data = {"session_id": SESSION, "cwd": str(repo)}
+    assert gate.evaluate(data, "Bash", {"command": "git commit -m x"}) is None
+    assert calls == []
+
+
 def test_other_repo_markers_do_not_gate(repo, state, tmp_path):
     other = tmp_path / "other"
     other.mkdir()
@@ -147,9 +161,15 @@ def test_other_repo_markers_do_not_gate(repo, state, tmp_path):
     assert not _denied(_gate("git push", repo))
 
 
-def test_non_bash_tool_is_not_gated(repo, state):
+def test_non_shell_tool_is_not_gated(repo, state):
     _pending_test(repo, state)
     assert not _denied(_gate("git push", repo, tool="Edit"))
+
+
+def test_powershell_tool_is_gated(repo, state):
+    """The PowerShell tool can commit and push too."""
+    _pending_test(repo, state)
+    assert _denied(_gate("git push", repo, tool="PowerShell"))
 
 
 def test_bypass_allows_and_logs(repo, state, monkeypatch, tmp_path):

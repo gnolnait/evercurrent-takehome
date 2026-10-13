@@ -9,8 +9,8 @@ running unrelated code) until the agent runs prove-test (or records a
 structured skip).
 
 Two-stage by design: edits are iterative, so blocking each Edit is wrong.
-Blocking at the next non-trivial action is right. Registered on Bash only;
-edits and reads are never gated.
+Blocking at the next non-trivial action is right. Registered on the Bash and
+PowerShell tools only; edits and reads are never gated.
 
 A marker resolves (and is deleted) when the test file's CURRENT sha256 has a
 `.test-proof/<sha>.json` or `.test-proof/<sha>.skip.json` at the marker's repo
@@ -54,6 +54,7 @@ from prove_test_track_edit import (  # noqa: E402
     sha256_file,
     state_dir,
 )
+from shell_segments import SHELL_TOOLS  # noqa: E402
 
 _SUBJECT = "the prove-test gate"
 
@@ -142,15 +143,22 @@ def _remove(path):
         pass
 
 
-def unresolved_markers(session_id, current_repo):
+def unresolved_markers(session_id, cwd):
     """Resolve this session's markers; return [(marker, test_path)] still
-    pending. Stale markers are deleted as a side effect."""
+    pending. Stale markers are deleted as a side effect.
+
+    `cwd`'s repo is looked up only when the session has a marker: the lookup
+    spawns git, and most Bash calls have none."""
     sdir = state_dir()
     if not os.path.isdir(sdir):
         return []
     pattern = os.path.join(glob.escape(sdir), glob.escape(safe_session(session_id)) + "-*.json")
+    markers = sorted(glob.glob(pattern))
+    if not markers:
+        return []
+    current_repo = git_toplevel(cwd)
     pending = []
-    for marker in sorted(glob.glob(pattern)):
+    for marker in markers:
         try:
             with open(marker, encoding="utf-8") as fh:
                 record = json.load(fh)
@@ -210,7 +218,7 @@ Pending:
 Run prove-test on each to confirm the test catches the bug it asserts:
   prove-test --test <test-id> \\
     --break blank:<src-file>:<line>-<line> \\
-    --run "uv run pytest <test-file>::<test-name>" \\
+    --run "uv run python -m pytest <test-file>::<test-name>" \\
     --expect-error '<specific regex from broken output>' \\
     --format "uv run ruff format <test-file>"
   (blank BLANKS those source lines - aim at the SINGLE load-bearing line, not a
@@ -247,7 +255,7 @@ hooks.""".format(n=len(paths), listing=listing, sha=first_sha)
 
 def evaluate(data, tool, tool_input):
     """Return None to allow, or the deny reason string."""
-    if tool != "Bash":
+    if tool not in SHELL_TOOLS:
         return None
     session_id = data.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -259,7 +267,7 @@ def evaluate(data, tool, tool_input):
     cwd = data.get("cwd")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
         cwd = os.getcwd()
-    pending = unresolved_markers(session_id, git_toplevel(cwd))
+    pending = unresolved_markers(session_id, cwd)
     if not pending:
         return None
     if is_allowed(command):

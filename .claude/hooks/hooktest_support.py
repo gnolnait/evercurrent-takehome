@@ -44,10 +44,10 @@ def _find(name):
         found = shutil.which(name)
         return found or "/bin/%s" % name
     # Prefer Git for Windows' `<root>/bin/<name>.exe` launcher: it puts the MSYS
-    # tool dir (`usr/bin`: dirname, cat, grep) on PATH before starting the
-    # shell, as Claude Code's own Git Bash does. The raw `usr/bin/<name>.exe`
-    # inherits the caller's PATH, so started from PowerShell or a uv-run venv
-    # it cannot find `dirname`/`cat` and every hook fence misfires.
+    # tool dir (`usr/bin`: cat, grep) on PATH before starting the shell, as
+    # Claude Code's own Git Bash does. The raw `usr/bin/<name>.exe` inherits
+    # the caller's PATH, so started from PowerShell or a uv-run venv it cannot
+    # find `cat`, and the standalone guard shims that read stdin with it misfire.
     roots = [_git_root()] + [
         Path(base) for base in (r"C:\Program Files\Git", r"C:\Program Files (x86)\Git")
     ]

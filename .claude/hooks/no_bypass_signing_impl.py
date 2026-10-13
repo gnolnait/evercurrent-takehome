@@ -22,10 +22,14 @@ Parsing is quote-aware (shlex tokens, not a substring regex): the trigger has
 to be an actual argument token of a git command. A commit message or PR title
 that merely MENTIONS --no-verify is one quoted token and never matches — the
 old `tr`-split + regex version false-blocked exactly that (a message with a
-`;` before `git ... --no-verify ...` prose).
+`;` before `git ... --no-verify ...` prose). The exception is the text of a
+Windows shell (`powershell -Command "..."`), which is searched, not parsed.
 
 It also follows transparent wrappers (env / command / sudo / nice / timeout),
 shell-string wrappers (`sh -c '...'`, `eval '...'`, incl. `bash -lc`),
+Windows shells (`powershell`, `pwsh`, `cmd`: their text is not parsed, so git
+plus a bypass hint anywhere in it, or an encoded command, fails closed),
+Windows program names (`git.exe`, a full path to git),
 unambiguous flag abbreviations (--no-gpg-sig), short-option clusters (-nm),
 and inline `-c alias.*=...` definitions. This is an ACCIDENT guard, not an
 adversary guard (an adversary has BYPASS_GIT_GUARD=1): deliberately-obfuscated
@@ -38,14 +42,14 @@ arg-wrapper option that takes a separate non-numeric value (`timeout -s TERM
 trigger fails CLOSED.
 
 Interpreter: the bash fences resolve one (CLAUDE_HOOK_PYTHON, else python3, else
-python, skipping the Windows Store alias stub). This module is stdlib-only, so
-any Python 3.10+ works. Mirrors no-merge-pr.py.
+python, python first under Git Bash, skipping the Windows Store alias stub).
+This module is stdlib-only, so any Python 3.10+ works. Mirrors no-merge-pr.py.
 """
 import re
 import shlex
 import sys
 
-from shell_segments import split_segments
+from shell_segments import WINDOWS_SHELLS, command_name, split_segments, windows_shell_text
 
 # Full long-option triggers. A token also matches by unambiguous PREFIX (git
 # accepts `--no-gpg-sig`, `--no-verif`, ...): any `--no-v*` that is a prefix of
@@ -118,6 +122,15 @@ def tokenize(segment):
 # trigger-shaped and unparseable, so the extra breadth of `-n` only ever blocks
 # in the safe direction.
 TRIGGER_HINTS = ("--no-verify", "--no-veri", "--no-gpg", "--no-g", "gpgsign", "-n")
+
+# For Windows shell text, which is searched on every call, a bare `-n` substring
+# would block `--no-pager`. There, `-n` counts only as a single-dash, lower-case
+# option word that holds `n` (`-n;`, `"-n"`, `-an`, `-anmfix`), not after a
+# letter or a dash. It is matched with case kept: git's short options are lower
+# case, and PowerShell's parameters (`-NoEnumerate`) are not. The shell's own
+# options (`-NoProfile`) are already out of the text.
+_LONG_HINTS = tuple(h for h in TRIGGER_HINTS if h != "-n")
+_SHORT_N = re.compile(r"(?<![\w-])-[a-z]*n[a-z]*")
 
 
 def _mentions_git(text):
@@ -216,7 +229,7 @@ def check_segment(toks, depth=0, inherited_gpgsign_off=False):
     if head >= len(toks):
         return False
 
-    word = toks[head].rsplit("/", 1)[-1]
+    word = command_name(toks[head])
     # Shell-string wrappers: recurse into the code they run. `-c` may be its
     # own token or the trailing char of a leading option cluster (bash -lc).
     # Only LEADING options count: once a non-option operand appears the shell is
@@ -242,6 +255,16 @@ def check_segment(toks, depth=0, inherited_gpgsign_off=False):
                 break
             m += 1
         return False
+    if word in WINDOWS_SHELLS:
+        # Not parsed (see shell_segments): an encoded command, or git with a
+        # bypass hint anywhere in the text, fails closed.
+        text = windows_shell_text(word, toks[head + 1 :])
+        if text is None:
+            return True
+        low = text.lower()
+        return _mentions_git(low) and (
+            any(h in low for h in _LONG_HINTS) or _SHORT_N.search(text) is not None
+        )
     if word != "git":
         return False
     rest = toks[head + 1 :]

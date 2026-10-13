@@ -325,6 +325,37 @@ def test_mcp_merge_payload_blocks(repo):
     assert _run(RUNNER, payload, env=_env(repo), cwd=repo) == 2
 
 
+@pytest.mark.parametrize(
+    "cmd,expected",
+    [
+        pytest.param("Get-ChildItem C:\\Users", 0, id="unrelated"),
+        pytest.param(f"git {_C} -m x", 0, id="clean-commit-on-feature-branch"),
+        pytest.param(f"git {_C} {_NV} -m x", 2, id="signing"),
+        pytest.param(f"gh pr {_MERGE} 5 --squash", 2, id="merge"),
+        pytest.param(
+            f'& "C:\\Program Files\\GitHub CLI\\gh.exe" pr {_MERGE} 5', 2, id="merge-full-path"
+        ),
+    ],
+)
+def test_powershell_payload_reaches_the_guards(cmd, expected, repo):
+    """The PowerShell tool runs the same git and gh commands as Bash, so the
+    runner must judge its payload too."""
+    payload = {"tool_name": "PowerShell", "tool_input": {"command": cmd}, "cwd": str(repo)}
+    assert _run(RUNNER, payload, env=_env(repo), cwd=repo) == expected
+
+
+def test_powershell_commit_on_main_blocks(repo):
+    _git(repo, "checkout", "main")
+    payload = {"tool_name": "PowerShell", "tool_input": {"command": f"git {_C} -m x"}, "cwd": str(repo)}
+    assert _run(RUNNER, payload, env=_env(repo), cwd=repo) == 2
+
+
+def test_mcp_auto_merge_payload_blocks(repo):
+    """Turning on auto-merge is a deferred merge."""
+    payload = {"tool_name": "mcp__ccd_pr__set_auto_merge", "tool_input": {"enabled": True}}
+    assert _run(RUNNER, payload, env=_env(repo), cwd=repo) == 2
+
+
 def test_edit_payload_is_allowed(repo):
     """An edit tool must pass through, including on docs content.
 
