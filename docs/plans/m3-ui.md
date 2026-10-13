@@ -348,7 +348,7 @@ same room.
 | P4 | Building the day-6 base store from cassettes takes under 20 seconds | `digest demo` from a fresh clone: 9 seconds, 2026-10-12 | verified |
 | P5 | A rebuild after an edit takes under 200 ms | three `build_digest` calls on the day-6 store: 10 to 12 ms; `load_world` 61 ms | verified |
 | P7 | Core needs no unit 7 code beyond `diff_selections` | the cut list | verified |
-| P11 | Unit 7's `diff_selections` merges before unit 8 needs it | the unit 7 session is building it on 2026-10-13 | TBD: the schedule's first dependency |
+| P11 | Unit 7's `diff_selections` merges before unit 8 needs it | the unit 7 session ships it alone on branch `m3-diff`, ahead of `say` and `diff`, 2026-10-13 | TBD: the schedule's first dependency |
 | P8 | The room world can skip the `World` script checks | `model_copy` worlds ran through `select_digest` with no error, 2026-10-12 | verified, pinned by B8.1 |
 | P9 | A gate moved past its buffer drops its checklist absences | `src/digest/absence.py:41-43` | verified |
 | P10 | The B8.5 effects | computed on the day-6 store, 2026-10-12, by this session and by an independent reviewer | verified |
