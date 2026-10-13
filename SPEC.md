@@ -341,7 +341,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    term in `config/priors.yaml`, so no single input takes a score to zero. Must-see rules
    run over all open items. A ranked-lane candidate is an item whose newest evidence
    falls in the digest window (step 9), or, whatever the age of its evidence, an open
-   blocker, unanswered ask, absence, stale belief, open contradiction, item with a
+   blocker, unanswered ask (in v1, the ask absence of step 5 once the reply cadence
+   passes; an ask made of the reader is must-see), absence, stale belief, open
+   contradiction, item with a
    `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
    been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an

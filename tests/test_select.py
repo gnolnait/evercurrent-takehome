@@ -1,4 +1,5 @@
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -7,8 +8,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from digest.daily.profile import Profile, can_see, profile_for
+from digest.daily.render import render_digest
 from digest.daily.select import SECTION_CAPS, Selection, select
-from digest.models import AbsenceDetail, Evidence, Item, ItemType, Role, Severity
+from digest.models import AbsenceDetail, Event, Evidence, Item, ItemType, Role, Severity, ts_micros
 from digest.priors import AbsencePriors, DailyPriors, Priors, TriagePriors, load_priors
 from digest.world.schema import World
 
@@ -223,8 +225,19 @@ def choose(
     profile: Profile | None = None,
     table: Priors | None = None,
     day: date = DAY,
+    previous_digest: date | None = None,
+    newest_evidence: Mapping[str, int] | None = None,
 ) -> Selection:
-    return select(world(), profile or reader(), items, absences, table or priors(), day)
+    return select(
+        world(),
+        profile or reader(),
+        items,
+        absences,
+        table or priors(),
+        day,
+        previous_digest=previous_digest,
+        newest_evidence=newest_evidence if newest_evidence is not None else {},
+    )
 
 
 def slack_ts(moment: datetime) -> str:
@@ -906,3 +919,227 @@ def test_all_evidence_hidden_returns_only_hidden_count() -> None:
 
     assert selection.lines == ()
     assert selection.hidden == 1
+
+
+@pytest.mark.parametrize(
+    "item_type", ["decision", "schedule_change", "spec_change", "bom_change", "risk", "fyi"]
+)
+@pytest.mark.parametrize("offset", [-1, 0, 1], ids=["before", "at", "after"])
+def test_window_uses_newest_evidence_after_previous_day_end(
+    item_type: ItemType, offset: int
+) -> None:
+    """W1: compare newest evidence even when last_updated is in the window."""
+    previous = date(2026, 10, 13)
+    boundary = datetime.combine(previous, time.max, ZoneInfo(world().timezone))
+    row = item(
+        "updated",
+        type=item_type,
+        first_seen=slack_ts(boundary - timedelta(days=30)),
+        last_updated=BASE_TS,
+    )
+
+    selected = choose(
+        [row],
+        previous_digest=previous,
+        newest_evidence={
+            row.item_id: ts_micros(slack_ts(boundary + timedelta(microseconds=offset)))
+        },
+    )
+
+    assert [line.item.item_id for line in selected.lines] == (["updated"] if offset > 0 else [])
+    assert selected.hidden == 0
+
+
+@pytest.mark.parametrize("kind", ["blocker", "ask", "ask-absence", "checklist-absence", "decision"])
+def test_window_keeps_only_open_ranked_exceptions(kind: str) -> None:
+    """W3: only old blockers and ask absences remain ranked candidates."""
+    old = slack_ts(datetime(2026, 9, 1, tzinfo=UTC))
+    row = (
+        absence(
+            "old",
+            source="ask" if kind == "ask-absence" else "checklist",
+            asker="UASKER",
+            owner="UEMPTY",
+            affected_roles=(),
+        )
+        if kind.endswith("absence")
+        else item("old", type=kind, owner="UEMPTY")
+    ).model_copy(update={"first_seen": old, "last_updated": old})
+
+    selected = choose(
+        [] if row.type == "absence" else [row],
+        [row] if row.type == "absence" else [],
+        previous_digest=date(2026, 10, 13),
+    )
+
+    assert [(line.item.item_id, line.must_see) for line in selected.lines] == (
+        [("old", False)] if kind in {"blocker", "ask-absence"} else []
+    )
+
+
+@pytest.mark.parametrize("item_type", ["blocker", "ask"])
+def test_window_does_not_restore_resolved_exceptions(item_type: ItemType) -> None:
+    """W3: an age exception does not reopen a resolved item."""
+    row = item("resolved", type=item_type, status="resolved")
+
+    assert choose([row], previous_digest=date(2026, 10, 13)).lines == ()
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        item("ask", type="ask", owner="UREADER"),
+        item("blocker", type="blocker", entities=("PN-OWNED",)),
+        item("gate", type="schedule_change", entities=("G-DVT1",)),
+        absence("checklist", affected_roles=("ME",)),
+        absence("asker", source="ask", asker="UREADER", owner="UEMPTY"),
+        absence("asked", source="ask", asker="UASKER", owner="UREADER"),
+    ],
+    ids=["owned-ask", "owned-blocker", "owned-gate", "checklist", "asker", "asked"],
+)
+def test_window_preserves_old_must_see_lines(row: Item) -> None:
+    """W4: every current must-see rule bypasses the window and score threshold."""
+    old = slack_ts(datetime(2026, 9, 1, tzinfo=UTC))
+    row = row.model_copy(update={"first_seen": old, "last_updated": old})
+    items = [] if row.type == "absence" else [row]
+    absences = [row] if row.type == "absence" else []
+    table = priors(min_score=1.1)
+
+    first = choose(items, absences, table=table, previous_digest=None)
+    later = choose(items, absences, table=table, previous_digest=date(2026, 10, 13))
+
+    assert [(line.item.item_id, line.must_see) for line in later.lines] == [(row.item_id, True)]
+    assert later.lines == first.lines
+
+
+@pytest.mark.parametrize(
+    ("previous", "boundary_day"),
+    [
+        (None, date(2026, 10, 12)),
+        (date(2026, 9, 1), date(2026, 10, 5)),
+        (date(2026, 10, 5), date(2026, 10, 5)),
+        (date(2026, 10, 15), date(2026, 10, 15)),
+    ],
+    ids=["first-five-weekdays", "cap-ten-weekdays", "exact-cap", "recent-previous"],
+)
+def test_window_default_working_day_boundaries(previous: date | None, boundary_day: date) -> None:
+    """W5: count weekdays back from Monday, without clamping to world start."""
+    boundary = datetime.combine(boundary_day, time.max, ZoneInfo(world().timezone))
+    rows = [
+        item("at", last_updated=slack_ts(boundary)),
+        item("after", last_updated=slack_ts(boundary + timedelta(microseconds=1))),
+    ]
+
+    selected = choose(rows, day=date(2026, 10, 19), previous_digest=previous)
+
+    assert [line.item.item_id for line in selected.lines] == ["after"]
+
+
+@pytest.mark.parametrize(
+    "previous",
+    [None, date(2026, 9, 1), date(2026, 10, 16)],
+    ids=["first", "capped", "friday-to-monday"],
+)
+def test_window_reads_configured_working_days(previous: date | None) -> None:
+    """W5: a configured one-day window on Monday starts at Friday's end."""
+    data = priors().model_dump()
+    data["daily"]["window"] = {"first_working_days": 1, "max_working_days": 1}
+    table = Priors.model_validate(data)
+    boundary = datetime(2026, 10, 16, 23, 59, 59, 999999, ZoneInfo(world().timezone))
+    rows = [
+        item("at", last_updated=slack_ts(boundary)),
+        item("weekend", last_updated=slack_ts(boundary + timedelta(microseconds=1))),
+    ]
+
+    selected = choose(rows, table=table, day=date(2026, 10, 19), previous_digest=previous)
+
+    assert [line.item.item_id for line in selected.lines] == ["weekend"]
+
+
+@pytest.mark.parametrize("edited", [False, True], ids=["old-message", "edited-message"])
+def test_window_uses_cited_message_event_time(edited: bool) -> None:
+    """W2: an edit admits evidence whose message time is before the window."""
+    previous = date(2026, 10, 13)
+    boundary = datetime.combine(previous, time.max, ZoneInfo(world().timezone))
+    old = slack_ts(boundary - timedelta(days=1))
+    event = Event(
+        source="replay",
+        channel_id="CPUBLIC",
+        channel_name="program",
+        thread_ts=old,
+        ts=old,
+        event_ts=slack_ts(boundary + timedelta(microseconds=1)) if edited else old,
+        user_id="UASKER",
+        text="Drawing released.",
+        edited=edited,
+        permalink="https://kestrel.slack.com/archives/CPUBLIC/p" + old.replace(".", ""),
+    )
+    row = item(
+        "edited",
+        first_seen=old,
+        last_updated=old,
+        evidence=(
+            Evidence(
+                channel_id=event.channel_id,
+                message_ts=event.ts,
+                quote=event.text,
+                permalink=event.permalink,
+            ),
+        ),
+    )
+
+    selected = choose(
+        [row],
+        previous_digest=previous,
+        newest_evidence={row.item_id: ts_micros(event.event_ts)},
+    )
+
+    assert [line.item.item_id for line in selected.lines] == (["edited"] if edited else [])
+
+
+@pytest.mark.parametrize("offset", [0, 1], ids=["day-end", "after-day"])
+def test_window_excludes_evidence_after_digest_day(offset: int) -> None:
+    boundary = datetime.combine(DAY, time.max, ZoneInfo(world().timezone))
+    row = item("future")
+
+    selected = choose(
+        [row],
+        previous_digest=date(2026, 10, 13),
+        newest_evidence={"future": ts_micros(slack_ts(boundary + timedelta(microseconds=offset)))},
+    )
+
+    assert [line.item.item_id for line in selected.lines] == ([] if offset else ["future"])
+
+
+def test_first_digest_header_uses_configured_working_days() -> None:
+    data = priors().model_dump()
+    data["daily"]["window"] = {"first_working_days": 3, "max_working_days": 10}
+
+    selected = choose(table=Priors.model_validate(data))
+
+    assert selected.previous_digest is None
+    assert selected.first_working_days == 3
+    assert render_digest(world(), selected).splitlines()[1] == (
+        "First digest: the last 3 working days"
+    )
+
+
+@pytest.mark.parametrize("edited_first", [False, True], ids=["edited-last", "edited-first"])
+def test_ranked_ties_use_newest_event_time(edited_first: bool) -> None:
+    """An edit outranks a newer message when the scores are equal."""
+    edited = item("z-edited", evidence=(evidence("CPUBLIC", 1),))
+    newer = item("a-newer-message", evidence=(evidence("CPUBLIC", 2),))
+    rows = [edited, newer] if edited_first else [newer, edited]
+
+    selected = choose(
+        rows,
+        newest_evidence={
+            edited.item_id: ts_micros(evidence("CPUBLIC", 3).message_ts),
+            newer.item_id: ts_micros(newer.evidence[0].message_ts),
+        },
+    )
+
+    assert len(selected.lines) == 2
+    assert all(not line.must_see for line in selected.lines)
+    assert selected.lines[0].score == selected.lines[1].score
+    assert [line.item.item_id for line in selected.lines] == [edited.item_id, newer.item_id]

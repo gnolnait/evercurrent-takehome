@@ -18,3 +18,8 @@ daily:
     EM: {decision: 1.0, blocker: 1.0, risk: 1.0, schedule_change: 1.0, spec_change: 0.7, bom_change: 0.6, ask: 0.7, fyi: 0.5, absence: 1.0}
     PM: {decision: 1.0, blocker: 0.9, risk: 1.0, schedule_change: 1.0, spec_change: 0.6, bom_change: 0.6, ask: 0.6, fyi: 0.5, absence: 0.9}
   min_score: 0.15
+  # The digest window, in working days back from the digest day. A first digest covers
+  # first_working_days; a window after a previous digest starts at most max_working_days back.
+  window:
+    first_working_days: 5
+    max_working_days: 10

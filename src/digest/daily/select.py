@@ -1,6 +1,8 @@
 """Choose a reader's lines: the visibility filter, the must-see lane and the ranked lane (plan B5.2 to B5.5).
 
-When the digest shows an ask absence line, the line of the ask its id names is left out.
+The ranked lane takes items whose newest evidence is in the digest window, plus open blockers
+and ask absences of any age (SPEC section 5 steps 6 and 9). When the digest shows an ask
+absence line, the line of the ask its id names is left out.
 """
 
 from __future__ import annotations
@@ -12,7 +14,8 @@ from zoneinfo import ZoneInfo
 
 from digest.daily.profile import Profile, can_see
 from digest.models import Frozen, Item, ItemType, Severity, micros_since_epoch, ts_micros
-from digest.priors import Priors
+from digest.priors import Priors, WindowPriors
+from digest.project import add_working_days
 from digest.world.schema import World
 
 Section = Literal["needs_you", "not_happened", "decisions", "risks", "fyi"]
@@ -69,6 +72,8 @@ class Selection(Frozen):
     day: date
     lines: tuple[Line, ...]  # section order; must-see by item_id, then ranked in the B5.4 order
     hidden: int  # items dropped by the visibility filter
+    previous_digest: date | None = None  # None for a first digest
+    first_working_days: int = WindowPriors().first_working_days  # the window of a first digest
 
 
 def select(
@@ -78,13 +83,21 @@ def select(
     absences: Sequence[Item],
     priors: Priors,
     day: date,
+    previous_digest: date | None,
+    newest_evidence: Mapping[str, int],
 ) -> Selection:
     """Choose the reader's lines for the day. Items must be open and updated by the end of the day.
 
-    A checklist absence that is not must-see for the reader is left out. It is not counted in
-    `hidden`.
+    `newest_evidence` maps an item id to its newest evidence in microseconds since the epoch.
+    An absence, or an item not in the map, uses its `last_updated`. A checklist absence that
+    is not must-see for the reader is left out. It is not counted in `hidden`.
     """
-    end = micros_since_epoch(datetime.combine(day, time.max, ZoneInfo(world.timezone)))
+    zone = ZoneInfo(world.timezone)
+    end = micros_since_epoch(datetime.combine(day, time.max, zone))
+    window = priors.daily.window
+    start_day = previous_digest or add_working_days(day, -window.first_working_days)
+    start_day = max(start_day, add_working_days(day, -window.max_working_days))
+    start = micros_since_epoch(datetime.combine(start_day, time.max, zone))
     current = [
         item for item in items if item.status == "open" and ts_micros(item.last_updated) <= end
     ]
@@ -105,19 +118,30 @@ def select(
             continue
         if _is_checklist_absence(trimmed):
             continue  # a checklist absence never enters the ranked lane (plan B5.5)
+        newest = newest_evidence.get(item.item_id, ts_micros(item.last_updated))
+        aged = trimmed.type == "blocker" or _cited_ask(trimmed) is not None
+        if not (aged or start < newest <= end):
+            continue
         line = _ranked_line(trimmed, section, profile, priors)
         if line.score >= priors.daily.min_score:
             ranked[section].append(line)
     lines: list[Line] = []
     for section, cap in SECTION_CAPS.items():
         lines += sorted(must_see[section], key=lambda line: line.item.item_id)
-        lines += sorted(ranked[section], key=_rank_key)[:cap]
+        lines += sorted(ranked[section], key=lambda line: _rank_key(line, newest_evidence))[:cap]
     # After the caps and the threshold: a shown ask absence line replaces the one ask its id names.
     absent_asks = {_cited_ask(line.item) for line in lines} - {None}
     lines = [
         line for line in lines if not (line.item.type == "ask" and line.item.item_id in absent_asks)
     ]
-    return Selection(profile=profile, day=day, lines=tuple(lines), hidden=hidden)
+    return Selection(
+        profile=profile,
+        day=day,
+        lines=tuple(lines),
+        hidden=hidden,
+        previous_digest=previous_digest,
+        first_working_days=window.first_working_days,
+    )
 
 
 def _is_checklist_absence(item: Item) -> bool:
@@ -164,10 +188,17 @@ def _section_of(item: Item, profile: Profile) -> Section:
     return SECTIONS[item.type]
 
 
-def _rank_key(line: Line) -> tuple[float, int, str]:
-    """Score to six significant figures, highest first; then newest evidence; then item_id."""
-    newest = max(ts_micros(entry.message_ts) for entry in line.item.evidence)
-    return (-float(f"{line.score:.6g}"), -newest, line.item.item_id)
+def _rank_key(line: Line, newest_evidence: Mapping[str, int]) -> tuple[float, int, str]:
+    """Score to six significant figures, highest first; then newest evidence; then item_id.
+
+    Newest evidence comes from `newest_evidence`. When the id is not in the map, it is the
+    greatest `message_ts` of the item's evidence.
+    """
+    item = line.item
+    newest = newest_evidence.get(
+        item.item_id, max(ts_micros(entry.message_ts) for entry in item.evidence)
+    )
+    return (-float(f"{line.score:.6g}"), -newest, item.item_id)
 
 
 def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
