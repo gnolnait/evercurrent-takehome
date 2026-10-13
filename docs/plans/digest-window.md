@@ -54,7 +54,9 @@ digest.
   newest_evidence: Mapping[str, int])`: `newest_evidence` maps each item id to its
   newest evidence in microseconds since the epoch; an absence item, or an item missing
   from the map, uses `ts_micros(last_updated)`. Both parameters are required.
-- `Selection.previous_digest: date | None` (additive field).
+- `Selection.previous_digest: date | None` and `Selection.first_working_days: int`
+  (additive fields; `select` sets the second from `priors.daily.window`, so the header
+  line can name the configured first-digest length without the priors).
 - `select_digest(store, world, priors, user_id, day, *, previous_digest: date | None =
   None)`: the new keyword defaults to a first digest, so existing callers (the Slack post
   branch) keep working.

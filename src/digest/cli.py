@@ -68,6 +68,9 @@ def demo(
     any extract run stops the command before it builds a digest. The command never constructs the settings
     object, so it reads no API key and no `.env` file. It writes nothing outside the
     temporary directory.
+
+    The demo assumes that each reader got the digest of the previous world day. On world
+    day 1, each digest is a first digest.
     """
     world_dir = Path("data") / "world" / _DEMO_WORLD
     source = world_dir / "world.yaml"
@@ -94,6 +97,7 @@ def demo(
         _refuse(f"cassette directory {cassettes} does not exist or holds no cassette file")
     llm = LLM(None, Cassettes(cassettes), "replay")
     today = loaded.date_of(day)
+    previous = loaded.date_of(day - 1) if day > 1 else None
     zone = ZoneInfo(loaded.timezone)
     digests: list[str] = []
     shown: list[set[str]] = []
@@ -114,7 +118,9 @@ def demo(
                     "the demo builds no digest from a partial extraction"
                 )
             for user_id in _DEMO_READERS:
-                selection = select_digest(store, loaded, priors, user_id, today)
+                selection = select_digest(
+                    store, loaded, priors, user_id, today, previous_digest=previous
+                )
                 digests.append(render_digest(loaded, selection))
                 shown.append({line.item.item_id for line in selection.lines})
         # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
