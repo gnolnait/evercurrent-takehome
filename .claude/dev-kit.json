@@ -1,5 +1,5 @@
 {
-  "kit_commit": "b6a0d8ffe1b057226020156804faaeaa09054a21",
+  "kit_commit": "aa10d79caa2288c1673ba07c0ae1b97c27111acb",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
@@ -22,7 +22,7 @@
     ".claude/hooks/no_bypass_signing_impl.py": "cf167cc5013cd6ea09b6a090a1ae35af76ac786bebf4e84c3b662116bd3ff8c2",
     ".claude/hooks/no_commit_to_main_impl.py": "daee49693eaf744467156ea3703476fa25b1736db681e805721de569c4b4ddab",
     ".claude/hooks/no_merge_pr_impl.py": "38cfad82d2a1a68b2ab8d1397face5c132d71b4280e3f00f93990d5d6daf39ca",
-    ".claude/hooks/no_unreviewed_pr_impl.py": "310fe64f276a31139c97143e4b412c75874abff03c6c8a97b0b618603c15540f",
+    ".claude/hooks/no_unreviewed_pr_impl.py": "496573971cfaca3a5f3c22ba58f23defa1b8edb4d4c3d3d3fcfb5b36d1617a75",
     ".claude/hooks/prove-test-gate-actions": "9d356fbf9c7c89377d1a6bde0440fa6bf34168ab1be6952b599188b7c9840786",
     ".claude/hooks/prove-test-track-edit": "c3c828aaf5bca0fca71da67df3ba83a2a0ef90261e10302b72a92c79e1d457e0",
     ".claude/hooks/prove_test_gate_actions.py": "367b9df76354a9b0b626295a36f252b1b0b75da2c2fba8e621049b7667714b5f",
@@ -35,7 +35,7 @@
     ".claude/hooks/test_no_bypass_signing.py": "b03726d601a667f56ea9531c95cc2db7f35dfb7607492cbcbd32e2150d72d641",
     ".claude/hooks/test_no_commit_to_main.py": "7120461d7a65720b140a23bcb8e3f73dd5eda63a23d3c8ef523928cb219fda63",
     ".claude/hooks/test_no_merge_pr.py": "f8272290f5efd79dee0bb90526c17e2c673a4bbf092ee8d3bf795812b38675f9",
-    ".claude/hooks/test_no_unreviewed_pr.py": "85b8b90fd6eb4e80f8afd2cec28d93850c2e045dda104cd2801db9847ae73af8",
+    ".claude/hooks/test_no_unreviewed_pr.py": "286b6d2fe335c9cc9f0c5b5b1c599584b6d593a0653cd68c2247e6cad934f201",
     ".claude/hooks/test_prove_test_gate_actions.py": "a485b245e3a4615902f159d4192d8eb333bfdecb18578b927215290f0f250a65",
     ".claude/hooks/test_prove_test_track_edit.py": "279904c737a54477edb2ca5796dcd807a4c27ce931efff11707526cff9bb24d2",
     ".claude/hooks/test_settings_guards.py": "fbf42a89666f56b04356d74e7bfd6f71fd944d3449396033dad28fbb2ccfca24",

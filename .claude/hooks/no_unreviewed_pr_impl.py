@@ -14,7 +14,7 @@ exists under the main checkout:
 same root /review-local writes to. <sha> is HEAD of the directory the creation
 runs in, or the `--head` branch of `gh pr create`. That directory is the hook
 cwd, or <path> when the command starts with `cd <path> &&` and <path> is
-absolute or starts with ".". A later commit changes <sha>, so a review
+absolute, ".", "..", or starts with "./" or "../". A later commit changes <sha>, so a review
 goes stale by construction.
 
 Override, for a trivial PR only: an assignment on the same command segment,
@@ -227,8 +227,9 @@ def _writes_symbolic_ref(rest):
 def _leading_cd(cmd, base):
     """Split off a leading `cd <path> &&`: return (directory, rest of command).
 
-    Returns (base, cmd) when there is none. Only an absolute path, or one that
-    starts with "." counts: bash looks a bare name up in CDPATH.
+    Returns (base, cmd) when there is none. Only an absolute path, ".", "..",
+    or a path that starts with "./" or "../" counts: bash looks any other name,
+    .claude included, up in CDPATH.
     """
     m = LEADING_CD.match(cmd)
     if not m:
@@ -239,7 +240,7 @@ def _leading_cd(cmd, base):
     if os.name == "nt":
         # Git Bash spells C:/x as /c/x.
         path = MSYS_DRIVE.sub(lambda d: d.group(1).upper() + ":/", path)
-    if not (os.path.isabs(path) or path.startswith(".")):
+    if not (os.path.isabs(path) or path in (".", "..") or path.startswith(("./", "../"))):
         return base, cmd
     if BACKGROUND.search(cmd, m.end()):
         return base, cmd
