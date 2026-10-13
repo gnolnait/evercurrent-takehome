@@ -129,8 +129,10 @@ In order. Each item names its trigger. Measured numbers are from
    text, by a labeler who does not see the extractor output. The ledger gate becomes the
    key-error rate, with a recall guard and key stability across two recordings.
    Trigger: before the ledger.
-5. Digest window per reader and a seen record, so a reader is not told the same thing
-   twice. Trigger: every demo digest is a first digest (`docs/plans/m3-demo.md`).
+5. Delivery records and a seen record per reader. The digest window is built
+   (`docs/plans/digest-window.md`); today the caller states the previous digest, and an
+   item cut by a score threshold or a section cap on its own day does not come back.
+   Trigger: live delivery (D7).
 6. Stage key records the concrete model id, and a run refuses a mismatch. Today the key
    holds the logical name, so a model change in `config/models.yaml` reuses old runs.
 7. Extraction payload limit: open items, plus items that share an entity with the new

@@ -161,7 +161,8 @@ default day 6:
 - No digest window. Every demo digest is a first digest. SPEC's first window is five
   working days back; from day 6 (Monday 2026-10-19) that reaches day 1, the corpus
   start, so it holds every item. From day 7 on, the slice also shows older items that
-  a first window leaves out. The window is M3 proper.
+  a first window leaves out. The window is M3 proper. Amended 2026-10-12: the window is
+  built (`docs/plans/digest-window.md`), and the demo passes the previous world day.
 - B5.1 leaves out entities whose `owner` is the reader's user id: `Entity.owner` in the
   world schema is a role only.
 - `personal_relevance` is not the neutral 1 for a reader who owns nothing. Each of the

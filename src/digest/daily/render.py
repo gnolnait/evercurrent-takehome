@@ -67,8 +67,8 @@ def select_digest(
 ) -> Selection:
     """Select the reader's lines for `day` from a replayed and extracted store.
 
-    The window starts at the end of `previous_digest`; without one, the digest is a first
-    digest. An item's newest evidence is the greatest `event_ts` among the stored messages
+    The window starts at the end of `previous_digest`, at most `max_working_days` back;
+    without one, the digest is a first digest. An item's newest evidence is the greatest `event_ts` among the stored messages
     its evidence cites, so an edit counts as new evidence.
 
     Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not

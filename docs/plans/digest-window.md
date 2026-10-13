@@ -94,6 +94,13 @@ digest.
   total lines for days 5, 6 and 7 before and after. Must-see counts must not change.
 - The extraction eval report does not change.
 
+## Known limit
+
+An item appears in the ranked lane on the day its newest evidence lands. If the score
+threshold or a section cap cuts it that day, a later digest does not bring it back. A
+dogfood read of the demo (days 1 to 6) found no such item; a seen record (later.md) is
+the fix.
+
 ## Not in scope
 
 Delivery records, `seen` per item, the `novelty` score term of the D6 amendment (this
