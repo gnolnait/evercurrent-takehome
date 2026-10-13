@@ -35,6 +35,7 @@ from digest.llm.cassette import CassetteMiss, Cassettes
 from digest.llm.client import LLM, from_settings
 from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
 from digest.replay import replay_world
+from digest.seed import SlackSeedClient
 from digest.settings import Settings
 from digest.store import Store
 from digest.world.golden import derive_golden, write_golden
@@ -258,6 +259,36 @@ def _rerun_note(sent: int, total: int) -> str:
 def _not_set(key: str) -> str:
     """The refusal for a missing `key`. It names the `.env` file in the working directory."""
     return f"{key} is not set in the environment or in {Path.cwd() / '.env'}"
+
+
+# --- digest seed (docs/plans/m5-seed.md) -------------------------------------------------
+
+
+@app.command()
+def seed(
+    world: str = typer.Option(..., "--world", help="World name under data/world/."),
+    map_path: Path | None = typer.Option(
+        None,
+        "--map",
+        help="Seed map file. Default: .slack-seed/<team_id>-<world>.json.",
+    ),
+    until_day: int | None = typer.Option(
+        None, "--until-day", help="Seed only the events up to the end of this world day."
+    ),
+    pace: float = typer.Option(1.2, "--pace", min=0, help="Seconds between two writes."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Make no write; print what a run would do."
+    ),
+) -> None:
+    """Post the world's corpus into the Slack workspace of SLACK_BOT_TOKEN, under persona
+    names, and record a map from each world message to its Slack message."""
+    raise NotImplementedError
+
+
+def _seed_client(token: str) -> SlackSeedClient:
+    """The seeder's Slack client: a `SlackWebSeedClient` over a `WebClient` with no retry
+    handler, so the seeder owns retries (plan B11). Tests patch this factory."""
+    raise NotImplementedError
 
 
 @app.command()
