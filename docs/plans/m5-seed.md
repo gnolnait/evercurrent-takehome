@@ -1,6 +1,6 @@
 # Plan: M5 slice, the corpus seeder (`digest seed`)
 
-Status: v0.1, 2026-10-13. Process stage 1 (`docs/process.md`). Depends on PR #52
+Status: v0.2, 2026-10-13 (no channel creation; next units split). Process stage 1 (`docs/process.md`). Depends on PR #52
 (`digest post`): the seeder reuses its Slack token loading, its error text rules and its
 `slack_sdk` client. The code branch starts from `main` after #52 merges. The link change
 in `digest/daily/slack.py` that reads the seed map is a separate unit (see Out of scope).
@@ -25,8 +25,7 @@ message preview (`is_msg_unfurl`) in a bot DM.
 ## Command
 
 ```
-digest seed --world kestrel [--map PATH] [--until-day N] [--pace SECONDS]
-            [--create-channels] [--dry-run]
+digest seed --world kestrel [--map PATH] [--until-day N] [--pace SECONDS] [--dry-run]
 ```
 
 - Reads `SLACK_BOT_TOKEN` as `digest post` does (environment, then `.env`).
@@ -35,8 +34,8 @@ digest seed --world kestrel [--map PATH] [--until-day N] [--pace SECONDS]
 - `--until-day N`: seed only the events up to the end of world day N (default: all).
 - `--pace SECONDS`: the wait between two posts (default 1.2). A rate-limited call waits
   for Slack's `Retry-After`, then tries again, as `digest post` does on its DM path.
-- `--create-channels`: create a missing channel. Without it, a missing channel stops
-  the command before any post, and the message lists the missing names.
+- A missing channel stops the command before any post, and the message lists the
+  missing names. The user creates the channels; the seeder never creates one.
 - `--dry-run`: no write to Slack. Print the counts the run would post, by channel, and
   the missing channels and scopes.
 
@@ -47,8 +46,8 @@ Exit 0 when every selected event is in the map; exit 1 with the reason otherwise
 B1. **Channels.** A world channel maps to the Slack channel with the same name. Public
 channels are found with `conversations.list`; private ones need `groups:read`. The bot
 joins a public channel it is not in (`conversations.join`). It cannot join a private
-channel: a private channel must exist with the bot invited, or be created by the bot
-with `--create-channels` (`groups:write`). The map records `world_channel -> slack_id`.
+channel: the user creates it and invites the bot. The map records
+`world_channel -> slack_id`.
 
 B2. **Order.** Events post in world order: by `ts`, then by input order. A reply posts
 after its thread root, into the root's Slack thread (`thread_ts` from the map). A reply
@@ -69,7 +68,10 @@ channel: <world channel>, ts: <world ts>, thread_ts: <world thread_ts>}}`.
 B6. **Files.** An event with `files` posts its text first (B2 to B5). Then each file is
 uploaded into that message's thread with `files_upload_v2`, as a small placeholder PDF
 whose page shows the file name and the line "Kestrel K2 test data". The map records each
-file's Slack `permalink` by world file name. Without `files:write` the command posts the
+file's Slack `permalink` by world file name. Open: the response shape of
+`files_upload_v2` into a thread, and where the permalink sits in it, is not yet seen. A
+live spike in Scratch (after `files:write` is added) records the shape here before the
+test author starts. Without `files:write` the command posts the
 text with one line per file (":paperclip: <name>"), records no file, and says so once.
 
 B7. **Edits and deletes.** An event with `edited: true` updates its earlier post with
@@ -114,8 +116,8 @@ the file.
 - `digest/seed.py`: `SeedMap` (model, `load`, `save`), `plan_seed(world, events, map) ->
   list[Post]` (pure: order, text, metadata, skips), `seed(world, events, client, map,
   *, pace, sleep) -> SeedReport` (drives the client), `placeholder_pdf(name) -> bytes`.
-- `client` is a small protocol with the eight calls the seeder uses (`auth_test`,
-  `list_channels`, `join`, `create_channel`, `post`, `update`, `delete`, `upload_file`).
+- `client` is a small protocol with the seven calls the seeder uses (`auth_test`,
+  `list_channels`, `join`, `post`, `update`, `delete`, `upload_file`).
   The CLI passes an adapter over `slack_sdk.WebClient`; tests pass a fake. `sleep` is
   injected, so tests do not wait.
 - `cli.py`: a `seed` command in its own block (the driver unit also edits `cli.py`).
@@ -125,9 +127,8 @@ the file.
 ## Slack app scopes
 
 Present: `chat:write`, `chat:write.customize`, `chat:write.public`, `channels:read`,
-`channels:join`. To add for this slice, all marked "seeding only" in the manifest:
-`groups:read` (find private channels), `files:write` (B6), and, for
-`--create-channels` only, `channels:manage` and `groups:write`. The user edits the
+`channels:join`. To add for this slice, both marked "seeding only" in the manifest:
+`groups:read` (find private channels) and `files:write` (B6). The user edits the
 manifest and reinstalls the app; the seeder never changes app settings. SPEC already
 says to remove the seeding scopes before a deployment outside the test workspace.
 
@@ -137,9 +138,9 @@ A1. On a fake client, the Kestrel corpus seeds with 132 posts in world order; ea
 reply's `thread_ts` is its root's Slack ts; each post's metadata names its world ts.
 A2. A second run on the same map makes no call that writes. A run stopped after post k
 and run again posts the rest exactly once.
-A3. A missing public channel without `--create-channels` stops before any post and
-names it; with the flag, the channel is created first. A private channel the bot
-cannot see stops the run with the same message.
+A3. A missing channel stops before any post and names it. A private channel the bot
+cannot see stops the run with the same message. A public channel the bot is not in is
+joined before the first post into it.
 A4. A rate-limited post waits for `Retry-After` (through the injected `sleep`) and
 succeeds; no event posts twice.
 A5. Mentions become `@<name>`; no `<@` remains in posted text.
@@ -162,10 +163,18 @@ open one thread and one file link in Slack, and read one message's metadata back
 - The CLI tests use `CliRunner` with the fake client patched in, as
   `tests/test_slack_post.py` does for `digest post`. No test touches the network.
 
-## Out of scope
+## Next units
 
-- Links in the digest from the map (`<#C>`, permalinks, file links, previews): the
-  next unit, on `digest/daily/slack.py`, after #52 and the layout rework.
+1. **Links from the map** (small, next): in `digest/daily/slack.py` as #52 left it,
+   `digest post --seed-map PATH` swaps each evidence permalink for the mapped Slack
+   permalink, writes a channel as `<#C...>`, and links a file name to its mapped
+   permalink. With no map, the output stays as it is today. This unit gives the native
+   links.
+2. **Layout rework** (larger, after): the v5 layout in
+   `notes/research/slack-layout/` (top message, one thread reply per section), with the
+   digest-window line. It reads the same map.
+
+## Out of scope
 - Live ingest reading the seeded messages back (M5).
 - Pacing by world day (`one world day per N minutes`): `--pace` is per post; per-day
   pacing is SPEC M5 stretch.
