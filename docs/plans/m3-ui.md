@@ -1,11 +1,12 @@
 # Plan: M3 units 8 and 9, the shared demo room (a web UI over the world and the digests)
 
-Status: v0.5, 2026-10-12. Process stage 1 (`docs/process.md`), the full process the user
+Status: v0.6, 2026-10-12. Process stage 1 (`docs/process.md`), the full process the user
 set for M3 at 11:00 on 2026-10-12 (`docs/plans/m3-demo.md`): Codex writes the tests, an
 Opus subagent writes the code, every test is RED-GREEN proven, both review lanes run on
 every commit with fix rounds until clean, then the stage 4 adversarial pass and a stage 5
 retro entry. Written with Codex (`gpt-6-astra`). Core needs nothing from M3 unit 7 except
-`diff_selections`, which lands first in `digest/driver.py` (branch `m3-diff-stubs`);
+`diff_selections`, which lands first in `digest/driver.py` (PR 54, stacked on the
+pre-push fix in PR 53);
 unit 7 itself is built in parallel by the session that owns the driver plan, with its two
 scenarios recorded, and the scenario buttons are stretch.
 
@@ -32,12 +33,16 @@ Core, in build order:
    its sources as links to the message anchors in the world panel. The fictional Slack
    permalink is shown as text, not as a link.
 3. Diff panel: each reader against the recorded world on the same day, from
-   `diff_selections`.
+   `diff_selections`, plus the lines whose words changed while their `LineView` did not
+   (an absence's buffer count after a gate move), and a note when the latest edit
+   changed no digest.
 4. Free edits (table below) through an edit log; reset by the presenter.
 5. Sharing: one room per server, a participant name, everyone's edits visible within two
    seconds, the edit log with who did what.
 
-Core reads one base store, built once at start and never written, and calls no model.
+Core reads one base store, built once at start and never written. Building it uses
+only the replay client with no backend that `digest demo` uses, which cannot call a
+model (`src/digest/cli.py:95`, `src/digest/llm/client.py:37`).
 
 Stretch, only after core is green and reviewed, in this order: the two recorded scenarios
 of unit 7 (the CM bracket blocker, the private leads message) as one-click buttons, after
@@ -141,9 +146,9 @@ Rules:
 - Presenter. The presenter link sets an HttpOnly, SameSite=Lax presenter cookie and
   redirects to the participant link, so the token does not stay in the address bar on a
   shared screen. Reset and (stretch) recording need that cookie.
-- Participants. A participant types a name once (at most 40 characters, shown as text).
-  The server keeps a random participant id in an HttpOnly, SameSite=Lax cookie and maps it
-  to the name; the name never enters a header. Every POST needs the participant cookie, so
+- Participants. The first `GET /r/<room_id>` without a participant cookie sets one: a
+  random participant id, HttpOnly, SameSite=Lax. The participant then types a name once
+  (at most 40 characters, shown as text), and the server maps the id to the name; the name never enters a header. Every POST needs the participant cookie, so
   a cross-site form cannot post (SameSite=Lax withholds the cookie).
 - Updates. Every page polls `GET /r/<room_id>/version` every 1.5 seconds and reloads its
   panels when the version changes. The page loads no script from a CDN: one inline script
@@ -154,14 +159,15 @@ Rules:
   `Store.open` uses `sqlite3.connect` with the default `check_same_thread`
   (`src/digest/store.py:99`), and FastAPI runs sync routes on a thread pool. Pages read
   the published immutable `RoomState` only.
-- Model calls. Core builds no `LLM`. `digest serve` reads no key unless it runs with
-  `--allow-record` (stretch); without it, `Settings` is not built, as in `digest demo`.
-  The stretch scenarios build `LLM` in replay mode with no backend, which cannot call a
-  model (`src/digest/llm/client.py:37`). A tunnel makes every request arrive from
+- Model calls. Core builds only the replay `LLM` with no backend, for the base store and
+  (stretch) the scenarios; it cannot call a model (`src/digest/llm/client.py:37`).
+  `digest serve` reads no key unless it runs with `--allow-record` (stretch); without it,
+  `Settings` is not built, as in `digest demo`. A tunnel makes every request arrive from
   localhost, so no check reads the client address.
 - Limits. A log holds at most 500 world edits; `Reset` is always accepted. All text is
-  rendered with Jinja autoescape; only links built by code are links (SPEC section 5
-  step 7).
+  rendered with Jinja autoescape. The only links are the in-page message anchors; the
+  fictional Slack permalinks, which SPEC section 5 step 7 makes links in a real
+  workspace, show as text here because the workspace does not exist.
 
 ## Hosting, for the user to choose
 
@@ -182,10 +188,13 @@ the user's decision.
 | 8 Room model and the selection diff | `m3-room` | `digest/room.py`; `diff_selections` in `digest/driver.py` | `tests/test_room.py`, `tests/test_driver.py` (the diff only) |
 | 9 Web app and `digest serve` | `m3-web` | `digest/web/app.py`, `digest/web/templates/*.html`, `digest serve` in `digest/cli.py` | `tests/test_web.py` |
 
-The diff types land first on `m3-diff-stubs`: `diff_selections`, `LineView`, `Change`,
-`ReaderDiff` and `DiffField` in `digest/driver.py` as the unit 7 plan gives them, and
-`digest.driver` beside `digest.eval` in the layers contract. Unit 7's stubs base on it;
-unit 7 later adds `make_event` and `Store.copy_to` beside it without moving it.
+The diff types land first (PR 54): `diff_selections`, `LineView`, `Change` and
+`ReaderDiff` in `digest/driver.py` as the unit 7 plan gives them, with `DiffField` as the
+name of the field Literal that the plan writes inline, and `digest.driver` beside
+`digest.eval` in the layers contract. Unit 7's stubs base on it; unit 7 adds
+`make_event` and `Store.copy_to` beside it without moving it. The UI stubs commit adds
+one line to `docs/plans/m3-driver.md` saying unit 8 of this plan builds and tests
+`diff_selections`, which the session that owns unit 7 agreed on 2026-10-12.
 
 A stubs commit on `m3-ui-stubs` follows: the types and signatures below raising
 `NotImplementedError`; `line_parts` in `digest/daily/render.py` (below), with `_line`
@@ -230,7 +239,7 @@ class LogEntry(Frozen):
 class MessageView(Frozen):           # one stored message, for the world panel
     channel_id: str
     thread_ts: str
-    ts: str                          # also the anchor id
+        ts: str                          # the anchor id is f"{channel_id}-{ts}" (a message is keyed by both)
     author: str                      # persona name
     text: str
     permalink: str                   # the fictional Slack URL, shown as text
@@ -248,7 +257,10 @@ class RoomState(Frozen):
     version: int                     # the log length; the page polls it
     world: World                     # the room world
     selections: tuple[Selection, ...]  # same order as RoomBase.readers
-    diffs: tuple[ReaderDiff, ...]    # each reader against RoomBase.recorded
+        diffs: tuple[ReaderDiff, ...]    # each reader against RoomBase.recorded
+    reworded: tuple[tuple[str, ...], ...]  # per reader: item ids in both selections whose LineView is equal
+                                           # but whose `line_parts` differ from the recorded ones
+    last_effect: tuple[int, ...]     # per reader: lines added, removed, changed or reworded by the latest world edit
     owners: dict[str, tuple[str, ...]]  # entity id -> user ids whose owned set holds it
     log: tuple[LogEntry, ...]
 
@@ -270,11 +282,10 @@ the world panel shows it, so the page never claims a transfer the selection does
 
 Routes: `GET /p/{presenter_token}` (sets the presenter cookie, redirects), `GET
 /r/{room_id}` (the room page), `GET /r/{room_id}/version`, `GET /r/{room_id}/panel/{name}`
-(HTML fragments: `world`, `digests`, `diff`, `log`), `POST /r/{room_id}/edit` (one form per
-edit kind), `POST /r/{room_id}/name`, `POST /r/{room_id}/reset` (presenter cookie).
+(HTML fragments: `world`, `digests`, `diff`, `log`, `edits`; the `edits` panel holds the
+edit forms and the last refusal), `POST /r/{room_id}/edit` (one form per edit kind), `POST /r/{room_id}/name`, `POST /r/{room_id}/reset` (presenter cookie).
 
-`digest serve [--host 127.0.0.1] [--port 8000] [--day 6]` builds the base store for the
-day once, as `digest demo` does and with the same helper, prints the participant and
+`digest serve [--host 127.0.0.1] [--port 8000]` builds the base store for day 6 once, as `digest demo` does and with the same helper, prints the participant and
 presenter links, and serves. The world is `kestrel`.
 
 ## Behaviours
@@ -294,11 +305,12 @@ B8.4 Reset: the world edits after the last `Reset` decide the state; a log endin
 
 B8.5 Effects on day 6 (2026-10-19), each computed on the day-6 store with `model_copy`
 worlds on 2026-10-12 and derived again by the test author from `world.yaml` and plan B5.3:
-- `U0SC01` to role `EM`: the reader's role prior and owned set change (entities whose
-  owner is `EM` join, those owned by `supply_chain` leave). The G-DVT1 EMC and thermal
-  checklist absences and the top-cover DFM risk become must-see lines, the thermal review
-  risk becomes must-see, and the stale drawing pack risk and the ECO-0142 decision leave.
-  The test pins the whole `ReaderDiff`.
+- `U0SC01` to role `EM`: the reader's role prior changes and the entities whose owner is
+  `EM` join the owned set; `PO-45002211` stays, because `U0SC01` owns it directly
+  (`world.yaml:89`, `profile.py:39`). The G-DVT1 EMC and thermal checklist absences and
+  the top-cover DFM blocker become must-see lines, the thermal review blocker becomes
+  must-see, and the stale drawing pack blocker and the ECO-0142 decision leave. The test
+  pins the whole `ReaderDiff`.
 - `#ext-sunrise-cm` (`C0EXTCM`) private: its members are `U0ME01`, `U0SC01`, `U0PM01` and
   `U0CM01`. `U0EM01` loses the decision "PN-51010 T1 gate date moved to 2026-10-21" and
   `hidden` goes from 0 to 4; `U0ME01` and `U0SC01` are unchanged.
@@ -307,16 +319,24 @@ worlds on 2026-10-12 and derived again by the test author from `world.yaml` and 
   pack" and the T1 decision, gains two ranked lines that the freed caps admit, and
   `hidden` goes from 0 to 4.
 - A persona added to or removed from a public channel: no change (`profile.py:52`).
-- `U0ME01` or `U0SC01` added to the private `#kestrel-leads`: no change, because no
-  leads line clears a cap on day 6. The page says so when it happens; the stretch leads
-  scenario is what puts a leads line in play.
-- G-DVT1 from 2026-10-22 to 2026-10-29 (buffer 7 working days): day 6 falls before the
-  buffer (`src/digest/absence.py:41-43`), so the G-DVT1 checklist absences leave every
-  digest. A date of 2026-10-28 or earlier changes nothing on day 6.
+- `U0ME01` or `U0SC01` added to the private `#kestrel-leads`: no line and no `hidden`
+  count changes (measured: `hidden` 0 before and after), because no leads line clears a
+  cap on day 6. `last_effect` is all zero and the page says the edit changed no digest;
+  the stretch leads scenario is what puts a leads line in play.
+- G-DVT1 moved (buffer 7 working days; an absence fires only when
+  `buffer_start <= day <= gate date`, `src/digest/absence.py:41-43`), measured for
+  `U0EM01`: to 2026-10-16 (before day 6) or 2026-10-29 (day 6 before the buffer) the EMC
+  and thermal absences leave; to 2026-10-23 they stay with 3 of 7 buffer days used; to
+  2026-10-28 they stay with 0 of 7. The last two leave every `LineView` equal and show in
+  `reworded`.
 
-B8.6 (stretch) `RunScenario("cm_bracket")` and `RunScenario("leads_gate")` each give the
-unit 7 acceptance results D2 and D3 in the room's diffs, from committed cassettes, with
-no key in the process.
+B8.6 (stretch) `RunScenario("cm_bracket")` and `RunScenario("leads_gate")` each give, for
+the room's three readers, the parts of the unit 7 acceptance results D2 and D3 that name
+them, from committed cassettes, with no key in the process.
+
+B8.9 `reworded` and `last_effect`: after G-DVT1 moves to 2026-10-23, `U0EM01`'s
+`reworded` holds the two absence ids and its `ReaderDiff` is empty; after the leads
+membership edit above, `last_effect` is zero for every reader.
 
 B8.7 Concurrency: two `append` calls started together give a log with dense sequence
 numbers and a state equal to applying the two edits in log order.
@@ -324,7 +344,7 @@ numbers and a state equal to applying the two edits in log order.
 B8.8 Atomicity: an edit whose build fails (a forced exception in `select`) leaves
 `state()` and the log file byte-identical to before.
 
-B9.1 The room page shows the four panels. All persona, channel, entity and message text
+B9.1 The room page shows the five panels. All persona, channel, entity and message text
 is escaped: a name or message containing `<script>` renders as text. Each digest line's
 source links point at message anchors on the page; no link points at the Slack
 workspace.
@@ -369,7 +389,7 @@ line, so the page and `digest run` use the same words.
 |---|---|---|---|
 | P1 | The extraction request carries the glossary and checklist tasks, so edits to them would miss cassettes | read `src/digest/extract/prompts.py:104-124` | verified |
 | P2 | `select_digest` takes the world separately from the store | read `src/digest/daily/render.py:53-100` | verified |
-| P3 | `detect_absences` reads gates from the project passed to it | `render.py:99`; `src/digest/absence.py:205-222` | verified |
+| P3 | `detect_absences` reads gates from the project passed to it | `render.py:98`; `src/digest/absence.py:205-222` | verified |
 | P4 | Building the day-6 base store from cassettes takes under 20 seconds | `digest demo` from a fresh clone: 9 seconds, 2026-10-12 | verified |
 | P5 | A rebuild after a free edit takes under 200 ms | three `build_digest` calls on the day-6 store: 10 to 12 ms; `load_world` 61 ms | verified |
 | P6 | A quick tunnel serves 1.5-second polling for five clients | `cloudflared` against `digest serve`, five tabs | TBD, before the user picks hosting |
