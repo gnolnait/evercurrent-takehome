@@ -1,7 +1,8 @@
 # Plan: M5 slice, the corpus seeder (`digest seed`)
 
-Status: v0.3, 2026-10-13. Process stage 1 (`docs/process.md`). v0.3 applies the first
-plan review (Codex, `-p review`) and the advisor review. PR #52 (`digest post`) is
+Status: v0.4, 2026-10-13. Process stage 1 (`docs/process.md`). v0.3 applied the first
+plan review (Codex, `-p review`) and the advisor review; v0.4 applies the second Codex
+review (seven medium findings, none high). PR #52 (`digest post`) is
 merged; the seeder reuses its token loading and its error text rules, not its client
 retry setup (see B11).
 
@@ -57,12 +58,14 @@ bot joins a public channel it is not in (`conversations.join`) before its first 
 there. The seeder never creates a channel. The map records `world_channel -> slack_id`.
 
 B2. **Order.** Events post in world order: by `ts`, then by input order. A reply posts
-into its root's Slack thread (`thread_ts` = the root's Slack `ts` from the map). A reply
-whose root is not in the map and not earlier in this run stops the run with the event's
-world id.
+into its root's Slack thread (`thread_ts` = the root's Slack `ts` from the map). `seed`
+checks every reply before its first write: the reply's root must be in the saved map or
+earlier in the same run's posts. If not, the run stops before any write and names the
+reply's world key. (`plan_seed` cannot see the map, so it does not check this.)
 
-B3. **Persona.** Each post sets `username` to the persona's name and `icon_emoji` from a
-fixed table: one emoji per role, and `:robot_face:` for a bot persona (no role).
+B3. **Persona.** Each post sets `username` to the persona's name and `icon_emoji` from
+this table: ME `:gear:`, EE `:zap:`, FW `:floppy_disk:`, supply_chain `:package:`, EM
+`:clipboard:`, PM `:calendar:`, and `:robot_face:` for a bot persona (no role).
 
 B4. **Text.** The event text, with each `<@U...>` mention of a persona replaced by
 `@<persona name>` (personas have no Slack accounts). An unknown user id becomes
@@ -106,16 +109,32 @@ Read-back by metadata to close the gap is deferred.
 B10. **Map identity.** A map whose `team_id` or `world` differs from the run stops the
 run before any write.
 
-B11. **Rate limits.** The adapter builds a `slack_sdk.WebClient` with **no** retry
-handler. On a rate-limited response (HTTP 429), it raises `RateLimited(retry_after)` with
-the `Retry-After` seconds. The seeder catches it, calls the injected `sleep(retry_after)`
-and tries the same operation again, up to 5 times per operation, for every call
-(discovery, join, post, upload). After 5, the run stops, the map keeps what is done, and
-the message says to run again.
+B11. **Rate limits and transfer errors.** The adapter builds a `slack_sdk.WebClient`
+with **no** retry handler. A Web API error with HTTP status 429 (a `SlackApiError`
+whose response has a `Retry-After` header) becomes `RateLimited(retry_after)`. The
+seeder catches it, calls the injected `sleep(retry_after)` and tries the same operation
+again, up to 5 times per operation, for every call (`auth_test`, listing, join, post,
+upload). After 5, the run stops. Any other error, including a `SlackRequestError` from
+the byte-transfer step inside `files_upload_v2`, stops the run at once with no retry.
+In both cases the map keeps what is done, and the message says to run the command again.
+
+B13. **Pace.** Before each write call (post or upload) except the first write of the
+run, the seeder calls `sleep(pace)`. It makes no such call when `pace` is 0. A retry wait
+(B11) is a separate `sleep` call and does not replace the pace wait. Reads (`auth_test`,
+listing) and joins are not paced.
+
+B14. **Scopes.** A real run checks the granted scopes (the `x-oauth-scopes` value that
+`auth_test` returns) before its first write. Required: `chat:write`,
+`chat:write.customize`, `channels:read`, `channels:join`, `groups:read`, and
+`files:write` when the selection holds a file. A missing scope stops the run before any
+write and names it. The history scopes in "Slack app scopes" are for the manual check
+only and are not checked. `--dry-run` reports the same missing scopes.
 
 B12. **Output and secrets.** Progress lines name world events and counts only. The
 summary line: "seeded P posts and F files in C channels; R reactions not seeded; map
-<path>". No output, log record or exception text holds the token (the `digest post`
+<path>". P and F count the posts and uploads acknowledged **in this run**; C counts the
+distinct Slack channels those writes went to; R counts the reactions on the selected
+events (B8). So a rerun on a complete map reports 0, 0, 0 and the same R. No output, log record or exception text holds the token (the `digest post`
 rules: a Slack error shows its error code only, any other error its type only).
 
 ## Seed map (JSON)
@@ -184,7 +203,7 @@ class SeedReport:
     complete: bool
 
 def plan_seed(world: World, events: Sequence[Event], until_day: int | None) -> list[Post]: ...
-    # pure: selection, order, text, metadata; raises ValueError for B2 and B7 input errors
+    # pure: selection, order, text, metadata; raises ValueError for a B7 event or a bad day
 def seed(world: World, posts: Sequence[Post], client: SlackSeedClient, map_path: Path,
          *, pace: float, sleep: Callable[[float], None], dry_run: bool) -> SeedReport: ...
     # owns all map reads and writes
@@ -207,10 +226,10 @@ a one-off setup script, or the user creates them by hand; the seeder itself need
 
 ## Before tests
 
-1. Scopes added and the app reinstalled; the eight channels exist (B1).
-2. Live spike: upload one placeholder PDF into a thread with `files_upload_v2`; record
-   the response keys and where the permalink sits, under B6.
-3. A second review of this plan (Codex `-p review`, fresh thread) and the advisor.
+1. Done 2026-10-13: scopes added and the app reinstalled; the eight channels exist in
+   Scratch with their world visibility, and the bot and the user are in each (B1).
+2. Done 2026-10-13: the upload spike; the response shape is under B6.
+3. Done 2026-10-13: a second Codex review (fresh thread); v0.4 applies it.
 
 ## Acceptance
 
@@ -239,12 +258,25 @@ A11 (Command). `--dry-run` makes no write call, prints counts by channel and the
 scopes, and exits 1 when a channel is missing.
 A12 (B8). The summary states the reactions in the selection that were not seeded, and a
 resumed run states the same number.
-A13 (B11, adapter). `SlackWebSeedClient` over a fake `WebClient`: a 429 response
-becomes `RateLimited` with its `Retry-After`; a post sends `username`, `icon_emoji`,
-`metadata` and `thread_ts`; an upload returns the file permalink.
-A14 (live, manual, recorded in the PR). Seed day 1 into Scratch with `--pace 1.2`, open
-one thread and one file link in Slack, and read one message's metadata back with
-`conversations.history` (`include_all_metadata=true`).
+A13 (B11, adapter). `SlackWebSeedClient` over a fake `WebClient`: a `SlackApiError`
+with status 429 and `Retry-After: 3` becomes `RateLimited(3)`; a `SlackRequestError`
+from an upload is not retried and stops the run; a post sends `username`, `icon_emoji`,
+`metadata` and `thread_ts`; an upload returns `file.permalink`.
+A14 (B2). A reply whose root is in the saved map posts into the mapped thread; a reply
+whose root is neither in the map nor earlier in the run stops `seed` before any write.
+A15 (B12). Summary counts: a first full run on a fake client reports 132 posts, 5 files
+and 8 channels; a rerun on the complete map reports 0, 0, 0; a run that resumes only the
+missing FAI upload reports 0 posts, 1 file, 1 channel. R is the same in all three.
+A16 (B13). With `pace=1.2`, the recording `sleep` gets 1.2 before every write but the
+first, in order with the writes; with `pace=0` it gets no pace call; a retry adds its
+own `sleep(retry_after)` call before the retried write.
+A17 (B14). A missing `files:write` with a file in the selection, or a missing
+`chat:write.customize`, stops a real run before any write and names the scope;
+`--dry-run` lists it and exits 1.
+A18 (live, manual, recorded in the PR). With the bot in every channel, seed through day
+4 into Scratch with `--pace 1.2`. Open one thread and one file link in Slack. Read back
+with `include_all_metadata=true` the metadata of one public root and of the first root in
+`kestrel-leads` (world day 4).
 
 ## Test seams (for the test author)
 
