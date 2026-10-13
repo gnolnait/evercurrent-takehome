@@ -85,6 +85,31 @@ def test_upsert_key_includes_channel(store: Store) -> None:
     assert store.events_in_thread(second.thread_id, AS_OF) == [second]
 
 
+def test_copy_to_includes_uncheckpointed_wal_rows_and_keeps_base_unchanged(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.sqlite"
+    copy = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        writer = sqlite3.connect(base)
+        try:
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("INSERT INTO meta (key, value) VALUES ('wal_marker', 'present')")
+            writer.commit()
+            assert Path(f"{base}-wal").stat().st_size > 0
+            base_rows = list(writer.execute("SELECT key, value FROM meta ORDER BY key"))
+
+            copied = store.copy_to(copy)
+
+            with copied:
+                assert copied.get_meta("wal_marker") == "present"
+            assert store.get_meta("wal_marker") == "present"
+            assert list(writer.execute("SELECT key, value FROM meta ORDER BY key")) == base_rows
+        finally:
+            writer.close()
+
+
 @pytest.mark.parametrize("deleted", [False, True])
 def test_edit_and_delete_remain_readable(store: Store, deleted: bool) -> None:
     original = event(text="oldword")
