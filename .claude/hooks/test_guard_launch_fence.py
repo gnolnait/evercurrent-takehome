@@ -29,51 +29,61 @@ These tests execute the command string exactly as Claude Code does (`/bin/sh
 Run: pytest .claude/hooks/test_guard_launch_fence.py
 """
 
+import dataclasses
+import functools
 import json
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
 from hooktest_support import IS_WINDOWS, PYTHON, sh_exe
 
 SETTINGS = Path(__file__).parent.parent / "settings.json"
-PROJECT = Path(__file__).parents[2]
+PROJECT = SETTINGS.parent.parent
+
+
+@functools.cache
+def _hooks() -> dict:
+    return json.loads(SETTINGS.read_text())["hooks"]
+
+
+def _commands(event: str, group_ok: Callable[[str], bool], needle: str) -> list[str]:
+    """The commands containing `needle` in the `event` groups whose matcher
+    passes `group_ok`."""
+    return [
+        h["command"]
+        for entry in _hooks()[event]
+        if group_ok(entry.get("matcher", ""))
+        for h in entry["hooks"]
+        if needle in h["command"]
+    ]
 
 
 def guard_commands() -> list[str]:
     """The guard commands from the exact matcher groups the guards rely on."""
-    hooks = json.loads(SETTINGS.read_text())["hooks"]["PreToolUse"]
-    bash = [
-        h["command"]
-        for entry in hooks
-        if entry.get("matcher") == "Bash"
-        for h in entry["hooks"]
-        if "guard_runner" in h["command"]
-    ]
-    mcp = [
-        h["command"]
-        for entry in hooks
-        if "merge_pull_request" in entry.get("matcher", "")
-        for h in entry["hooks"]
-        if "guard_runner" in h["command"]
-    ]
+    bash = _commands("PreToolUse", lambda m: m == "Bash", "guard_runner")
+    mcp = _commands("PreToolUse", lambda m: "merge_pull_request" in m, "guard_runner")
     assert bash and mcp
     return bash + mcp
 
 
 def gate_command() -> str:
     """The prove-test gate's command from the Bash matcher group."""
-    hooks = json.loads(SETTINGS.read_text())["hooks"]["PreToolUse"]
-    (command,) = {
-        h["command"]
-        for entry in hooks
-        if entry.get("matcher") == "Bash"
-        for h in entry["hooks"]
-        if "prove-test-gate-actions" in h["command"]
-    }
+    (command,) = set(
+        _commands("PreToolUse", lambda m: m == "Bash", "prove-test-gate-actions")
+    )
+    return command
+
+
+def track_command() -> str:
+    """The track-edit launcher from the PostToolUse edit-tools group."""
+    (command,) = set(
+        _commands("PostToolUse", lambda m: "Edit" in m, "prove-test-track-edit")
+    )
     return command
 
 
@@ -161,7 +171,7 @@ class Fence:
     branch: str  # "wrapper" or "direct"
 
     def command(self) -> str:
-        return guard_commands()[0] if self.hook == "guard_runner" else gate_command()
+        return _COMMAND[self.hook]()
 
     def place(self, project: Path, body: str) -> Path:
         """Put a runner that does `body` where this branch launches it."""
@@ -177,7 +187,30 @@ class Fence:
         env.update(extra)
         return env
 
+    def run(
+        self,
+        project_dir: Path | None,
+        cwd: Path,
+        *,
+        prefix: str = "",
+        env: dict[str, str] | None = None,
+        **kw,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run this fence's command on this branch; `env` adds to or overrides
+        the branch's own variables."""
+        return run_fence(
+            prefix + self.command(),
+            project_dir,
+            cwd,
+            extra_env=self.env(**(env or {})),
+            **kw,
+        )
 
+
+_COMMAND: dict[str, Callable[[], str]] = {
+    "guard_runner": lambda: guard_commands()[0],
+    "prove-test-gate-actions": gate_command,
+}
 _RUNNERS = (
     ("guard_runner", "guard_runner.py"),
     ("prove-test-gate-actions", "prove_test_gate_actions.py"),
@@ -229,21 +262,16 @@ def test_the_runner_runs_and_its_verdict_passes_through(
 ) -> None:
     """The happy path: the project dir's runner owns the verdict. Only this
     branch's runner exists, so an exit 0 proves the branch ran it."""
-    fence.place(primary, "exit 0")
-    result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
-    assert result.returncode == 0
-    fence.place(primary, "exit 2")
-    result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
-    assert result.returncode == 2
+    for verdict in (0, 2):
+        fence.place(primary, f"exit {verdict}")
+        assert fence.run(primary, primary).returncode == verdict
 
 
 def test_missing_runner_fails_closed(
     primary: Path, elsewhere: Path, fence: Fence
 ) -> None:
     """The incident: the runner is absent mid-checkout — block, don't skip."""
-    result = run_fence(
-        fence.command(), project_dir=primary, cwd=elsewhere, extra_env=fence.env()
-    )
+    result = fence.run(primary, elsewhere)
     assert result.returncode == 2
     assert "missing or not executable" in result.stderr
 
@@ -252,10 +280,7 @@ def test_the_current_directory_cannot_supply_the_runner(
     primary: Path, elsewhere: Path, fence: Fence
 ) -> None:
     """A runner sitting in the cwd must never stand in for the project's."""
-    result = run_fence(
-        fence.command(), project_dir=primary, cwd=elsewhere, extra_env=fence.env()
-    )
-    assert result.returncode == 2, "a cwd runner was executed"
+    assert fence.run(primary, elsewhere).returncode == 2, "a cwd runner was executed"
 
 
 def test_a_crafted_gitfile_cannot_supply_the_runner(
@@ -265,9 +290,7 @@ def test_a_crafted_gitfile_cannot_supply_the_runner(
     pass a `--git-common-dir` equality check while `--show-toplevel` resolved
     to the attacker's directory, so the fence ran the attacker's runner."""
     (elsewhere / ".git").write_text(f"gitdir: {primary}/.git\n")
-    result = run_fence(
-        fence.command(), project_dir=primary, cwd=elsewhere, extra_env=fence.env()
-    )
+    result = fence.run(primary, elsewhere)
     assert result.returncode == 2, "a crafted gitfile supplied the runner"
     assert "failing closed" in result.stderr
 
@@ -277,35 +300,18 @@ def test_inherited_git_env_cannot_supply_the_runner(
 ) -> None:
     """The env-var sibling of the gitfile vector: GIT_DIR/GIT_WORK_TREE must
     not influence which runner the fence launches."""
-    result = run_fence(
-        fence.command(),
-        project_dir=primary,
-        cwd=elsewhere,
-        extra_env=fence.env(
-            GIT_DIR=str(primary / ".git"), GIT_WORK_TREE=str(elsewhere)
-        ),
-    )
-    assert result.returncode == 2
+    git_env = {"GIT_DIR": str(primary / ".git"), "GIT_WORK_TREE": str(elsewhere)}
+    assert fence.run(primary, elsewhere, env=git_env).returncode == 2
 
 
 def test_unset_project_dir_fails_closed(primary: Path, fence: Fence) -> None:
     """CLAUDE_PROJECT_DIR unset: nothing to launch — block."""
     fence.place(primary, "exit 0")
-    result = run_fence(
-        fence.command(), project_dir=None, cwd=primary, extra_env=fence.env()
-    )
-    assert result.returncode == 2
+    assert fence.run(None, primary).returncode == 2
     # An inherited nounset must not abort the fence on the unset var — that
     # exit would be 127, which Claude Code reads as non-blocking (fail-open).
     for shell in SHELLS:
-        result = run_fence(
-            fence.command(),
-            project_dir=None,
-            cwd=primary,
-            set_opts="u",
-            shell=shell,
-            extra_env=fence.env(),
-        )
+        result = fence.run(None, primary, set_opts="u", shell=shell)
         assert result.returncode == 2, shell
         assert "failing closed" in result.stderr
 
@@ -321,31 +327,26 @@ def test_non_executable_runner_fails_closed(primary: Path, fence: Fence) -> None
     direct branch hands its script to the interpreter, so it has no exec bit
     to lose."""
     fence.place(primary, "exit 0").chmod(0o644)
-    assert run_fence(fence.command(), primary, primary).returncode == 2
+    assert fence.run(primary, primary).returncode == 2
 
 
-def test_a_crashing_runner_is_coerced_to_a_block(primary: Path, fence: Fence) -> None:
+@pytest.mark.parametrize("crash_rc", ["1", "126", "127"])
+def test_a_crashing_runner_is_coerced_to_a_block(
+    primary: Path, fence: Fence, crash_rc: str
+) -> None:
     """A runner exiting outside {0, 2} — including sh's 126/127 when the file
     vanishes between the probe and the launch — must read as a block."""
-    for crash_rc in ("1", "126", "127"):
-        fence.place(primary, f"exit {crash_rc}")
-        result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
-        assert result.returncode == 2
-        # The coercion's own message: a fence that never launched the runner
-        # also exits 2, but says "missing".
-        assert f"exited {crash_rc}" in result.stderr
-        # An inherited errexit must not bail the fence between the crashing
-        # child and the rc coercion — that would re-open fail-open.
-        for shell in SHELLS:
-            result = run_fence(
-                fence.command(),
-                project_dir=primary,
-                cwd=primary,
-                set_opts="e",
-                shell=shell,
-                extra_env=fence.env(),
-            )
-            assert result.returncode == 2, shell
+    fence.place(primary, f"exit {crash_rc}")
+    result = fence.run(primary, primary)
+    assert result.returncode == 2
+    # The coercion's own message: a fence that never launched the runner
+    # also exits 2, but says "missing".
+    assert f"exited {crash_rc}" in result.stderr
+    # An inherited errexit must not bail the fence between the crashing
+    # child and the rc coercion — that would re-open fail-open.
+    for shell in SHELLS:
+        result = fence.run(primary, primary, set_opts="e", shell=shell)
+        assert result.returncode == 2, shell
 
 
 def test_closed_stderr_cannot_break_the_block(primary: Path, fence: Fence) -> None:
@@ -359,27 +360,14 @@ def test_closed_stderr_cannot_break_the_block(primary: Path, fence: Fence) -> No
     an intentional edit updates that pin in lockstep, so only a behavioural
     assertion catches the semantic regression.
     """
+    closed = {"prefix": "exec 2>&-; ", "set_opts": "e"}
     for shell in SHELLS:
         # Missing-runner branch: nothing stubbed yet.
-        result = run_fence(
-            f"exec 2>&-; {fence.command()}",
-            project_dir=primary,
-            cwd=primary,
-            set_opts="e",
-            shell=shell,
-            extra_env=fence.env(),
-        )
+        result = fence.run(primary, primary, shell=shell, **closed)
         assert result.returncode == 2, f"missing branch, {shell}"
         # rc-coercion branch: a runner whose exit is outside {0, 2}.
         runner = fence.place(primary, "exit 1")
-        result = run_fence(
-            f"exec 2>&-; {fence.command()}",
-            project_dir=primary,
-            cwd=primary,
-            set_opts="e",
-            shell=shell,
-            extra_env=fence.env(),
-        )
+        result = fence.run(primary, primary, shell=shell, **closed)
         assert result.returncode == 2, f"coercion branch, {shell}"
         runner.unlink()
 
@@ -390,13 +378,7 @@ def test_stdin_payload_reaches_the_runner(primary: Path, fence: Fence) -> None:
     the sentinel."""
     fence.place(primary, "grep -q sentinel-payload && exit 2 || exit 0")
     for payload, want in (('{"x": "sentinel-payload"}', 2), ('{"x": "other"}', 0)):
-        result = run_fence(
-            fence.command(),
-            project_dir=primary,
-            cwd=primary,
-            payload=payload,
-            extra_env=fence.env(),
-        )
+        result = fence.run(primary, primary, payload=payload)
         assert result.returncode == want, payload
 
 
@@ -405,12 +387,8 @@ def test_a_missing_interpreter_fails_closed(primary: Path, fence: Fence) -> None
     """CLAUDE_HOOK_PYTHON names nothing runnable: the shell exits 127, which
     Claude Code would read as non-blocking unless the fence coerces it."""
     fence.place(primary, "exit 0")
-    result = run_fence(
-        fence.command(),
-        primary,
-        primary,
-        extra_env={"CLAUDE_HOOK_PYTHON": str(primary / "no-such-python")},
-    )
+    missing = {"CLAUDE_HOOK_PYTHON": str(primary / "no-such-python")}
+    result = fence.run(primary, primary, env=missing)
     assert result.returncode == 2
     assert "exited 127" in result.stderr
 
@@ -424,9 +402,7 @@ def test_a_shell_builtin_cannot_stand_in_for_the_interpreter(
     exit would skip the coercion. Only a path (a name with a slash) may name
     the interpreter; any other value falls back to the wrapper, absent here."""
     fence.place(primary, "exit 1")
-    result = run_fence(
-        fence.command(), primary, primary, extra_env={"CLAUDE_HOOK_PYTHON": builtin}
-    )
+    result = fence.run(primary, primary, env={"CLAUDE_HOOK_PYTHON": builtin})
     assert result.returncode == 2
     assert "missing or not executable" in result.stderr
 
@@ -438,9 +414,8 @@ def test_without_its_script_the_direct_branch_runs_the_wrapper(
     """CLAUDE_HOOK_PYTHON set but no python file beside the wrapper (a
     project synced from an older kit): the fence runs the wrapper. Its exit 0
     proves that, since a fence that found no runner would block with 2."""
-    Fence(fence.hook, fence.script, "wrapper").place(primary, "exit 0")
-    result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
-    assert result.returncode == 0
+    dataclasses.replace(fence, branch="wrapper").place(primary, "exit 0")
+    assert fence.run(primary, primary).returncode == 0
 
 
 @pytest.mark.parametrize("fence", DIRECT, ids=_id)
@@ -449,23 +424,9 @@ def test_with_both_runners_present_the_direct_branch_wins(
 ) -> None:
     """A project holds both files. If the fence preferred the wrapper there,
     every other case would still pass and the direct branch would never run."""
-    Fence(fence.hook, fence.script, "wrapper").place(primary, "exit 2")
+    dataclasses.replace(fence, branch="wrapper").place(primary, "exit 2")
     fence.place(primary, "exit 0")
-    result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
-    assert result.returncode == 0
-
-
-def track_command() -> str:
-    """The track-edit launcher from the PostToolUse edit-tools group."""
-    hooks = json.loads(SETTINGS.read_text())["hooks"]["PostToolUse"]
-    (command,) = {
-        h["command"]
-        for entry in hooks
-        if "Edit" in entry.get("matcher", "")
-        for h in entry["hooks"]
-        if "prove-test-track-edit" in h["command"]
-    }
-    return command
+    assert fence.run(primary, primary).returncode == 0
 
 
 @pytest.mark.parametrize("branch", ["wrapper", "direct"])

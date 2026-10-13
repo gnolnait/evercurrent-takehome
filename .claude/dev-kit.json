@@ -1,5 +1,5 @@
 {
-  "kit_commit": "8b1f42a93ed58401df81b894a6a3c10a761de417",
+  "kit_commit": "e4178ec114139bbaaa3600d575efc3435b8563a9",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
@@ -27,7 +27,7 @@
     ".claude/hooks/shell_segments.py": "5a737d3ad10e301f6e767d701dc85c2f75f64f3b2e898ac326036999217a2560",
     ".claude/hooks/test_context_snapshot.py": "d809a17b6b097fb827f21be0158eb88fe1830c09bec0586f4a3036bbddba66ac",
     ".claude/hooks/test_git_env_scrub.py": "bd5b5bcfde55cbe8b5c81b9abe871395b7e423a753740d445f80785fadb28d81",
-    ".claude/hooks/test_guard_launch_fence.py": "6468e7181a2d61a1ef9bdbf6ea51dffc6f0a28ec233afb15d6b3b6f7ef57a4fa",
+    ".claude/hooks/test_guard_launch_fence.py": "2def17adaeb7e6d5af0776ce9be047e9eb3d14de5238fe653bc5a31e8c4aa858",
     ".claude/hooks/test_guard_runner.py": "2d7de56aa75e869387eec1c7521eee51fa972965c588e6f4a74ae4954b6e063a",
     ".claude/hooks/test_no_bypass_signing.py": "b03726d601a667f56ea9531c95cc2db7f35dfb7607492cbcbd32e2150d72d641",
     ".claude/hooks/test_no_commit_to_main.py": "7120461d7a65720b140a23bcb8e3f73dd5eda63a23d3c8ef523928cb219fda63",
