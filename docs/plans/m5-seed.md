@@ -39,10 +39,11 @@ digest seed --world kestrel [--map PATH] [--until-day N] [--pace SECONDS] [--dry
   the world's time zone (`World.date_of(N)`, end of day inclusive). N must be 1 to
   `world.days`, else the command refuses. A later run with a larger N extends the map.
 - `--pace SECONDS`: the wait between two posts (default 1.2, at least 0).
-- `--dry-run`: makes no call that writes. It prints the number of posts and uploads the
-  run would make, by world channel, the missing or mismatched channels, and the missing
-  scopes (from the `x-oauth-scopes` header of `auth.test`). Exit 0 when nothing blocks a
-  real run, else 1.
+- `--dry-run`: makes no call that writes. It prints, in this order: one line per world
+  channel with posts or uploads to make, `<channel name>: <P> posts, <F> files`, using the
+  world channel's name; then one line per blocker (`missing channel: <name>`,
+  `visibility mismatch: <name>`, `missing scope: <scope>`). Scopes come from the
+  `x-oauth-scopes` header of `auth.test`. Exit 0 when nothing blocks a real run, else 1.
 
 A real run exits 0 when every selected event and every one of its files is complete in
 the map, else 1 with the reason. The last line is a summary (see B12).
