@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from digest.daily.profile import Profile, can_see, profile_for
+from digest.daily.render import render_digest
 from digest.daily.select import SECTION_CAPS, Selection, select
 from digest.models import AbsenceDetail, Event, Evidence, Item, ItemType, Role, Severity, ts_micros
 from digest.priors import AbsencePriors, DailyPriors, Priors, TriagePriors, load_priors
@@ -1108,3 +1109,37 @@ def test_window_excludes_evidence_after_digest_day(offset: int) -> None:
     )
 
     assert [line.item.item_id for line in selected.lines] == ([] if offset else ["future"])
+
+
+def test_first_digest_header_uses_configured_working_days() -> None:
+    data = priors().model_dump()
+    data["daily"]["window"] = {"first_working_days": 3, "max_working_days": 10}
+
+    selected = choose(table=Priors.model_validate(data))
+
+    assert selected.previous_digest is None
+    assert selected.first_working_days == 3
+    assert render_digest(world(), selected).splitlines()[1] == (
+        "First digest: the last 3 working days"
+    )
+
+
+@pytest.mark.parametrize("edited_first", [False, True], ids=["edited-last", "edited-first"])
+def test_ranked_ties_use_newest_event_time(edited_first: bool) -> None:
+    """An edit outranks a newer message when the scores are equal."""
+    edited = item("z-edited", evidence=(evidence("CPUBLIC", 1),))
+    newer = item("a-newer-message", evidence=(evidence("CPUBLIC", 2),))
+    rows = [edited, newer] if edited_first else [newer, edited]
+
+    selected = choose(
+        rows,
+        newest_evidence={
+            edited.item_id: ts_micros(evidence("CPUBLIC", 3).message_ts),
+            newer.item_id: ts_micros(newer.evidence[0].message_ts),
+        },
+    )
+
+    assert len(selected.lines) == 2
+    assert all(not line.must_see for line in selected.lines)
+    assert selected.lines[0].score == selected.lines[1].score
+    assert [line.item.item_id for line in selected.lines] == [edited.item_id, newer.item_id]

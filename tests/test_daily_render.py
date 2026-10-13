@@ -484,11 +484,21 @@ def test_demo_overlap_line_reports_zero_for_two_empty_digests() -> None:
     assert overlap == ("Item overlap: ME/supply_chain 0.00, ME/EM 0.00, supply_chain/EM 0.00")
 
 
+@pytest.mark.parametrize(
+    ("day", "label"),
+    [(6, "Since your digest of 2026-10-16"), (1, "First digest: the last 5 working days")],
+    ids=["previous-world-day", "first-world-day"],
+)
 def test_cli_demo_prints_item_overlap_last_without_cassettes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    day: int,
+    label: str,
 ) -> None:
-    demo_ts = f"{int(datetime(2026, 10, 19, 12, tzinfo=ZoneInfo('America/Los_Angeles')).timestamp())}.000001"
+    today = world.date_of(day)
+    zone = ZoneInfo(world.timezone)
+    demo_ts = f"{int(datetime.combine(today, time(12), zone).timestamp())}.000001"
     item_inputs = (
         ("C0KPROG", ("ME", "supply_chain", "EM"), "high"),
         ("C0ENGME", ("ME",), "low"),
@@ -512,7 +522,9 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
         )
 
     def extract_known_items(store: Store, *args: object, **kwargs: object) -> ExtractReport:
-        set_replay_meta(store, until="2026-10-20T06:59:59.999999+00:00")
+        set_replay_meta(
+            store, until=datetime.combine(today, time.max, zone).astimezone(UTC).isoformat()
+        )
         store.upsert_items(items, prompt_version="m2.1", model="extract")
         return ExtractReport(
             threads=0,
@@ -532,9 +544,12 @@ def test_cli_demo_prints_item_overlap_last_without_cassettes(
     monkeypatch.setattr(cli, "_extract_days", extract_known_items)
     monkeypatch.setattr("digest.daily.render.detect_absences", lambda *args, **kwargs: [])
 
-    result = runner.invoke(app, ["demo"])
+    result = runner.invoke(app, ["demo", "--day", str(day)])
 
     assert result.exit_code == 0, result.output
+    headers = re.findall(r"Daily digest for .*\n([^\n]+)", result.stdout)
+    assert headers == [label] * 3
+    assert result.stdout.splitlines().count(label) == 3
     assert result.stdout.splitlines()[-1] == (
         "Item overlap: ME/supply_chain 0.33, ME/EM 0.33, supply_chain/EM 0.33"
     )
@@ -624,6 +639,7 @@ def test_cli_demo_prints_three_offline_digests_under_sixty_seconds(
         assert header in result.stdout
     dates = re.findall(r"Daily digest for .* - (\d{4}-\d{2}-\d{2})", result.stdout)
     assert dates == ["2026-10-19"] * 3
+    assert result.stdout.splitlines().count("Since your digest of 2026-10-16") == 3
     assert len(re.findall(r"(?m)^-{3,}$", result.stdout)) == 2
 
 
@@ -736,3 +752,54 @@ def test_render_digest_window_line_under_header(
     rendered = render_digest(world, selected)
 
     assert rendered.splitlines()[:2] == ["Daily digest for Nadia Brenner (ME) - 2026-10-14", label]
+
+
+@pytest.mark.parametrize("newest_first", [False, True], ids=["old-first", "new-first"])
+def test_select_digest_uses_max_event_time_across_cited_messages(
+    world: World, profile: Profile, newest_first: bool
+) -> None:
+    """Select an item when either cited message is after the window start."""
+    until = datetime.combine(DAY, time.max, ZoneInfo(world.timezone)).astimezone(UTC)
+    old = pending_event()
+    recent_ts = (
+        f"{int(datetime.combine(DAY, time(12), ZoneInfo(world.timezone)).timestamp())}.000001"
+    )
+    recent = old.model_copy(
+        update={
+            "ts": recent_ts,
+            "event_ts": recent_ts,
+            "permalink": evidence(ts=recent_ts).permalink,
+        }
+    )
+    citations = (evidence(ts=old.ts), evidence(ts=recent.ts))
+    row = item(
+        entities=(),
+        last_updated=recent.ts,
+        evidence=tuple(reversed(citations)) if newest_first else citations,
+    )
+    with Store.open(":memory:") as store:
+        set_replay_meta(store, until=until.isoformat())
+        store.upsert_events([old, recent])
+        store.upsert_items([row], prompt_version=EXTRACT_PROMPT_VERSION, model="extract")
+        store.record_stage_run(
+            StageRun(
+                stage="extract",
+                thread_id=old.thread_id,
+                last_ts=recent.event_ts,
+                prompt_version=EXTRACT_PROMPT_VERSION,
+                model="extract",
+                run_at=until,
+                status="ok",
+            )
+        )
+
+        selected = daily_render.select_digest(
+            store,
+            world,
+            load_priors(),
+            profile.user_id,
+            DAY,
+            previous_digest=date(2026, 10, 13),
+        )
+
+    assert [(line.item.item_id, line.must_see) for line in selected.lines] == [(row.item_id, False)]
