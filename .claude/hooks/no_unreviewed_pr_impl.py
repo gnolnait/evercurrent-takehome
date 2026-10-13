@@ -79,7 +79,6 @@ from shell_segments import split_segments
 OVERRIDE_VAR = "PR_REVIEW_OVERRIDE"
 LOG_NAME = "pr-create.jsonl"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-GQL_CREATE = re.compile(r"createPullRequest")
 # The GraphQL endpoint as an argument: gh's "graphql" or "/graphql", or a URL
 # whose path is /graphql or /api/graphql. A field value (head=fix/graphql) does
 # not match.
@@ -134,7 +133,7 @@ def _flag_value(rest, short, long):
             return rest[i + 1]
         if tok.startswith(long + "="):
             return tok[len(long) + 1:]
-        if tok.startswith(short) and len(tok) > len(short) and not tok.startswith("--"):
+        if tok.startswith(short) and len(tok) > len(short):
             return tok[len(short):]
     return None
 
@@ -177,7 +176,7 @@ def _has_flag(toks, flags):
             if tok == flag or tok.startswith(flag + "="):
                 return True
             # A glued short flag: -ftitle=x, -d{}.
-            if len(flag) == 2 and tok.startswith(flag) and not tok.startswith("--"):
+            if len(flag) == 2 and tok.startswith(flag):
                 return True
     return False
 
@@ -200,7 +199,7 @@ def _create_kind(cmdword, rest):
         return "", False
     graphql = any(GQL_ENDPOINT.match(t) for t in rest)
     if graphql:
-        if any(GQL_CREATE.search(t) for t in rest):
+        if any("createPullRequest" in t for t in rest):
             return "GraphQL createPullRequest", True
         if _opaque_body(rest):
             return "a GraphQL request read from a file or stdin", True
@@ -435,11 +434,11 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
         return True, _ambiguous_message("the command also changes directory or HEAD",
                                         movers[0])
     try:
-        entries = []
         root = _main_checkout(cwd)
+        if not root:
+            raise _Ambiguous("cannot find the main checkout from %s" % cwd)
+        entries = []
         for kind, through_api, seg, prefix, cmdword, rest in found:
-            if not root:
-                raise _Ambiguous("cannot find the main checkout from %s" % cwd)
             # For an API creation this is HEAD, which only the log records.
             sha = _target_sha(cwd, cmdword, rest)
             reason = _override_reason(prefix)
@@ -456,17 +455,17 @@ def evaluate(cmd: str, hook_cwd: str) -> tuple[bool, str]:
                 route, problems = _evidence(root, sha)
                 if not route:
                     return True, _missing_message(kind, sha, root, problems)
-            entries.append((root, {
+            entries.append({
                 "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(
                     timespec="seconds"),
                 "head": sha,
                 "route": route,
                 "reason": reason or "",
                 "cwd": cwd,
-            }))
+            })
     except _Ambiguous as exc:
         return True, _ambiguous_message(str(exc), found[0][2])
-    for root, entry in entries:
+    for entry in entries:
         try:
             _log(root, entry)
         except OSError as exc:
