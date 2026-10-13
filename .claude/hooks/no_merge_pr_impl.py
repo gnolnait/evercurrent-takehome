@@ -177,6 +177,7 @@ def check_bash(cmd, depth=0):
             text = windows_shell_text(cmdword, rest)
             if text is None:
                 block("encoded PowerShell command (cannot be read)", seg)
+            text = text.lower()
             if GQL_MUT_LOWER.search(text) or ("merge" in text and GITHUB_WORD.search(text)):
                 block("merge words in a Windows shell command (not parsed)", seg)
             continue

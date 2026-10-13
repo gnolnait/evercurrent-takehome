@@ -535,7 +535,12 @@ def _emit(cmd, default):
     for tok in tokens:
         if tok and not tok.strip("();<>|&"):  # pure-operator token -> boundary
             new_dir = process_segment(segment, effdir, piped, lead)
+            # A redirection starts the next command only when nothing but an fd
+            # number stands before it (`2>&1 git ...`, `> f git ...`). In `echo
+            # 2>&1 a b`, the words after the target are still echo's arguments.
             lead = 1 if set(tok) & set("<>") and "(" not in tok else 0
+            if segment and not (len(segment) == 1 and segment[0].isdigit()):
+                lead = 0
             if new_dir is not None:
                 effdir = new_dir
             # Heredoc bodies flow into the next segment's stdin across pipe hops (`cat

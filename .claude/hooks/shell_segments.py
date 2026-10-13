@@ -655,9 +655,9 @@ def command_name(word):
 
 def windows_shell_text(name, args):
     """Return the text that the Windows shell `name` (`powershell`, `pwsh` or
-    `cmd`) gets in `args` after its own leading flags, in lower case, for a
-    guard to search. Return None for an encoded PowerShell command, which
-    cannot be read.
+    `cmd`) gets in `args` after its own leading flags, for a guard to search.
+    The case is kept: a guard lowers it where case does not matter. Return None
+    for an encoded PowerShell command, which cannot be read.
 
     A flag starts with `-`, `--` or `/`. PowerShell's own options and their
     values end at `-Command` or at the first other word. Any of those options
@@ -675,7 +675,7 @@ def windows_shell_text(name, args):
         args = split
         while i < len(args) and args[i][:1] == "/":
             i += 1
-        return " ".join(args[i:]).lower()
+        return " ".join(args[i:])
     # PowerShell: skip its own options and their values up to the command.
     while i < len(args) and args[i][:1] in ("-", "/"):
         flag = args[i].lower().lstrip("-/")
@@ -688,7 +688,7 @@ def windows_shell_text(name, args):
             len(flag) >= 3 and any(n.startswith(flag) for n in _PS_VALUE_FLAGS)
         )
         i += 2 if takes_value else 1
-    return " ".join(args[i:]).lower()
+    return " ".join(args[i:])
 
 
 # PowerShell options that take a value, so their value is not the command. A

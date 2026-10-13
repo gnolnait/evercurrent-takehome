@@ -124,9 +124,11 @@ def tokenize(segment):
 TRIGGER_HINTS = ("--no-verify", "--no-veri", "--no-gpg", "--no-g", "gpgsign", "-n")
 
 # For Windows shell text, which is searched on every call, a bare `-n` substring
-# would block `--no-pager`. There, `-n` counts only as a single-dash option word
-# that holds `n` (`-n;`, `"-n"`, `-an`, `-anmfix`), not after a letter or a dash.
-# The shell's own options (`-NoProfile`) are already out of the text.
+# would block `--no-pager`. There, `-n` counts only as a single-dash, lower-case
+# option word that holds `n` (`-n;`, `"-n"`, `-an`, `-anmfix`), not after a
+# letter or a dash. It is matched with case kept: git's short options are lower
+# case, and PowerShell's parameters (`-NoEnumerate`) are not. The shell's own
+# options (`-NoProfile`) are already out of the text.
 _LONG_HINTS = tuple(h for h in TRIGGER_HINTS if h != "-n")
 _SHORT_N = re.compile(r"(?<![\w-])-[a-z]*n[a-z]*")
 
@@ -257,9 +259,11 @@ def check_segment(toks, depth=0, inherited_gpgsign_off=False):
         # Not parsed (see shell_segments): an encoded command, or git with a
         # bypass hint anywhere in the text, fails closed.
         text = windows_shell_text(word, toks[head + 1 :])
-        return text is None or (
-            _mentions_git(text)
-            and (any(h in text for h in _LONG_HINTS) or _SHORT_N.search(text) is not None)
+        if text is None:
+            return True
+        low = text.lower()
+        return _mentions_git(low) and (
+            any(h in low for h in _LONG_HINTS) or _SHORT_N.search(text) is not None
         )
     if word != "git":
         return False
