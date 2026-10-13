@@ -37,8 +37,7 @@ from digest.llm.client import LLM, from_settings
 from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
 from digest.replay import read_events, replay_world
 from digest.seed import (
-    MAX_RETRIES,
-    RateLimited,
+    SeedBlocked,
     SlackSeedClient,
     SlackWebSeedClient,
     plan_seed,
@@ -316,25 +315,16 @@ def seed(
     if not token.startswith(_BOT_TOKEN_PREFIX):
         _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
     client = _seed_client(token)
-    rerun = "; the map keeps what is done; run the command again"
-    if map_path is None:
-        try:
-            team_id = client.auth_test().team_id
-        except Exception as error:
-            failure = f"cannot read the workspace: {_slack_failure(error)}; run the command again"
-        if failure is not None:
-            _refuse(failure)
-        map_path = Path(".slack-seed") / f"{team_id}-{world}.json"
     try:
         report = seed_corpus(
             loaded, posts, client, map_path, pace=pace, sleep=sleep, dry_run=dry_run
         )
-    except RateLimited:
-        failure = f"Slack rate limit after {MAX_RETRIES} retries{rerun}"
-    except ValueError as error:  # a check before the first write; the message names it
+    except SeedBlocked as error:  # a check before the first write; the message names it
         failure = str(error)
+    # The message of any other error can hold the token, so the refusal shows
+    # _slack_failure only.
     except Exception as error:
-        failure = f"seeding stopped: {_slack_failure(error)}{rerun}"
+        failure = f"{_slack_failure(error)}; the map keeps what is done; run the command again"
     if failure is not None:
         _refuse(failure)
     if dry_run:
@@ -343,7 +333,7 @@ def seed(
         return
     typer.echo(
         f"seeded {report.posts} posts and {report.files} files in {report.channels} channels; "
-        f"{report.reactions_not_seeded} reactions not seeded; map {map_path}"
+        f"{report.reactions_not_seeded} reactions not seeded; map {report.map_path}"
     )
 
 

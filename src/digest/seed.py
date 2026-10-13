@@ -155,6 +155,10 @@ class Post:
     reactions: int
 
 
+class SeedBlocked(ValueError):
+    """A check before the first write failed (B15). The message names the problem."""
+
+
 @dataclass(frozen=True)
 class SeedReport:
     """Counts for the summary line (B12): writes acknowledged in this run.
@@ -167,6 +171,7 @@ class SeedReport:
     channels: int
     reactions_not_seeded: int
     complete: bool
+    map_path: Path  # the map file the run used
 
 
 def plan_seed(world: World, events: Sequence[Event], until_day: int | None) -> list[Post]:
@@ -220,7 +225,7 @@ def seed(
     world: World,
     posts: Sequence[Post],
     client: SlackSeedClient,
-    map_path: Path,
+    map_path: Path | None,
     *,
     pace: float,
     sleep: Callable[[float], None],
@@ -228,33 +233,37 @@ def seed(
 ) -> SeedReport:
     """Make the posts and uploads that the map at `map_path` does not hold yet.
 
-    Owns every map read and write (B9, B10). See the plan for the checks before the
-    first write (B1, B2, B14), retries (B11) and pace (B13). A check that fails raises
-    ValueError before any write; a dry run prints it as a blocker line instead. A client
-    error stops the run as it is; the map keeps every acknowledged write.
+    Owns every map read and write (B9, B10). A `map_path` of None means
+    `.slack-seed/<team_id>-<world>.json` in the working directory. See the plan for the
+    checks before the first write (B1, B2, B10, B14), retries (B11) and pace (B13). A
+    check that fails raises `SeedBlocked`; a dry run prints it as a blocker line instead.
+    A client error stops the run as it is. A run that stops before its first write writes
+    no new map file; after a write, the map keeps every acknowledged write (B9, B15).
     """
     auth = _retry(client.auth_test, sleep)
-    seed_map = _open_map(map_path, auth, world.name)
-    if not dry_run:
-        if map_path.exists() and not seed_map.complete:
-            print(RESUME_LIMIT)
-        if not map_path.exists():
-            seed_map.save(map_path)
+    path = map_path or Path(".slack-seed") / f"{auth.team_id}-{world.name}.json"
+    seed_map = _open_map(path, auth, world.name)
     scopes = REQUIRED_SCOPES | ({FILE_SCOPE} if any(post.files for post in posts) else set())
     scope_blockers = [f"missing scope: {scope}" for scope in sorted(scopes - auth.scopes)]
     if scope_blockers and not dry_run:
-        raise ValueError("; ".join(scope_blockers))
+        raise SeedBlocked("; ".join(scope_blockers))
     listed = _retry(client.list_channels, sleep)
     slack_ids, to_join, blockers = _resolve_channels(world, posts, listed)
+    blockers += _changed_channels(world, slack_ids, seed_map)
     blockers += _missing_roots(posts, seed_map)
     blockers += scope_blockers
     reactions = sum(post.reactions for post in posts)
     if dry_run:
         for line in [*_pending_lines(world, posts, seed_map), *blockers]:
             print(line)
-        return SeedReport(0, 0, 0, reactions, complete=not blockers)
+        return SeedReport(0, 0, 0, reactions, complete=not blockers, map_path=path)
     if blockers:
-        raise ValueError("; ".join(blockers))
+        raise SeedBlocked("; ".join(blockers))
+    if path.exists() and not seed_map.complete:
+        print(RESUME_LIMIT)
+    if _has_pending(posts, seed_map):
+        seed_map.complete = False
+        seed_map.save(path)
     written = False  # pace only after the first acknowledged write of the run (B13)
     posted = uploaded = 0
     used: set[str] = set()
@@ -266,9 +275,6 @@ def seed(
         if channel in to_join:
             _retry(partial(client.join, channel), sleep)
             to_join.discard(channel)
-        if seed_map.complete:
-            seed_map.complete = False
-            seed_map.save(map_path)
         seed_map.channels[post.world_channel] = channel
         if post.key not in seed_map.messages:
             root = None if post.root_key == post.key else seed_map.messages[post.root_key].ts
@@ -286,7 +292,7 @@ def seed(
             seed_map.messages[post.key] = MappedMessage(
                 channel=channel, ts=ts, thread_ts=root or ts
             )
-            seed_map.save(map_path)
+            seed_map.save(path)
             posted += 1
             used.add(channel)
             print(f"posted {post.key}", flush=True)
@@ -296,13 +302,13 @@ def seed(
             permalink = _retry(send_file, sleep, pace if written else 0)
             written = True
             seed_map.files[f"{post.key}/{name}"] = MappedFile(permalink=permalink)
-            seed_map.save(map_path)
+            seed_map.save(path)
             uploaded += 1
             used.add(channel)
             print(f"uploaded {post.key}/{name}", flush=True)
     seed_map.complete = True
-    seed_map.save(map_path)
-    return SeedReport(posted, uploaded, len(used), reactions, complete=True)
+    seed_map.save(path)
+    return SeedReport(posted, uploaded, len(used), reactions, complete=True, map_path=path)
 
 
 def _retry[T](operation: Callable[[], T], sleep: Callable[[float], None], pace: float = 0) -> T:
@@ -324,12 +330,12 @@ def _retry[T](operation: Callable[[], T], sleep: Callable[[float], None], pace: 
 
 
 def _open_map(path: Path, auth: AuthInfo, world: str) -> SeedMap:
-    """The saved map, or a new one. Raise ValueError for a map of another workspace or world."""
+    """The saved map, or a new one. Raise `SeedBlocked` for a map of another workspace or world."""
     saved = SeedMap.load(path)
     if saved is None:
         return SeedMap(team_id=auth.team_id, workspace_url=auth.url.rstrip("/"), world=world)
     if saved.team_id != auth.team_id or saved.world != world:
-        raise ValueError(
+        raise SeedBlocked(
             f"map {path} is for team_id {saved.team_id} and world {saved.world}, "
             f"not team_id {auth.team_id} and world {world}"
         )
@@ -364,6 +370,32 @@ def _resolve_channels(
             if not found.is_member:
                 to_join.add(found.id)
     return slack_ids, to_join, blockers
+
+
+def _changed_channels(world: World, slack_ids: Mapping[str, str], seed_map: SeedMap) -> list[str]:
+    """One blocker per world channel whose Slack id differs from the one in the map (B10).
+
+    The map holds the id in `channels` and in the `channel` of each saved message.
+    """
+    saved: dict[str, set[str]] = {}
+    for world_channel, slack_id in seed_map.channels.items():
+        saved.setdefault(world_channel, set()).add(slack_id)
+    for key, message in seed_map.messages.items():
+        saved.setdefault(key.split(":", 1)[0], set()).add(message.channel)
+    return [
+        f"channel id changed: {channel.name}"
+        for channel in world.channels
+        if channel.id in slack_ids and saved.get(channel.id, set()) - {slack_ids[channel.id]}
+    ]
+
+
+def _has_pending(posts: Sequence[Post], seed_map: SeedMap) -> bool:
+    """Whether a post or an upload of `posts` is not in the map yet."""
+    return any(
+        post.key not in seed_map.messages
+        or any(f"{post.key}/{name}" not in seed_map.files for name in post.files)
+        for post in posts
+    )
 
 
 def _missing_roots(posts: Sequence[Post], seed_map: SeedMap) -> list[str]:
