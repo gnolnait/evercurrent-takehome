@@ -73,7 +73,8 @@ The room therefore keeps two views:
   `select_digest(store, world, priors, user_id, day)` (`src/digest/daily/render.py:53`)
   and the panels read it, through `profile_for`, `can_see`, `detect_absences` and
   `select`. `select_digest` takes the world as an argument separate from the store, so no
-  pipeline code changes.
+  pipeline code changes. The room passes `previous_digest` = the previous world day
+  (2026-10-16), as `digest demo` does, so the page shows the same window as the demo.
 
 The page states the consequence: an edit changes who reads what and what counts as late;
 it does not change what the model extracted, and it does not show what a reader was last
@@ -270,9 +271,10 @@ B8.3 Determinism: two `Room`s given the same edits give equal `RoomState` values
 B8.4 Reset: after `reset`, the selections equal `RoomBase.recorded` and every diff,
 `reworded` entry and `last_effect` is empty or zero.
 
-B8.5 Effects on day 6 (2026-10-19), each computed on the day-6 store with `model_copy`
-worlds, measured again on 2026-10-13 after the digest window merged (PR 58), and derived
-again by the test author from `world.yaml` and plan B5.3:
+B8.5 Effects on day 6 (2026-10-19) with the window since 2026-10-16, each computed on
+the day-6 store with `model_copy` worlds, measured again on 2026-10-13 after the digest
+window merged (PR 58), and derived again by the test author from `world.yaml` and plan
+B5.3:
 - `U0SC01` to role `EM`: the reader's role prior changes and the entities whose owner is
   `EM` join the owned set; `PO-45002211` stays, because `U0SC01` owns it directly
   (`world.yaml:89`, `profile.py:39`). The G-DVT1 EMC and thermal checklist absences and
@@ -280,12 +282,12 @@ again by the test author from `world.yaml` and plan B5.3:
   must-see, and the stale drawing pack blocker leaves. The test pins the whole
   `ReaderDiff`.
 - `#ext-sunrise-cm` (`C0EXTCM`) private: its members are `U0ME01`, `U0SC01`, `U0PM01` and
-  `U0CM01`. `U0EM01` loses the decision "PN-51010 T1 gate date moved to 2026-10-21" and
-  `hidden` goes from 0 to 4; `U0ME01` and `U0SC01` are unchanged.
+  `U0CM01`. `U0EM01` shows no line from that channel in this window, so its lines stay the
+  same and `hidden` goes from 0 to 4; `U0ME01` and `U0SC01` are unchanged.
 - Then `U0SC01` out of `#ext-sunrise-cm`: `U0SC01` loses the must-see ask "Confirm anodize
-  PO for DVT-1 brackets", the risk "PN-11020 chassis base built to stale Rev B drawing
-  pack" and the T1 decision, gains the top-cover DFM blocker as a ranked line that the
-  freed caps admit, and `hidden` goes from 0 to 4.
+  PO for DVT-1 brackets" and the risk "PN-11020 chassis base built to stale Rev B drawing
+  pack", gains the top-cover DFM blocker as a ranked line that the freed caps admit, and
+  `hidden` goes from 0 to 4.
 - A persona added to or removed from a public channel: no change (`profile.py:52`).
 - `U0ME01` or `U0SC01` added to the private `#kestrel-leads`: no line and no `hidden`
   count changes (measured: `hidden` 0 before and after), because no leads line clears a
