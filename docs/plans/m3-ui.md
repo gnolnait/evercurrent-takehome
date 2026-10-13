@@ -6,9 +6,9 @@ Opus subagent writes the code, every test is RED-GREEN proven, both review lanes
 every commit with fix rounds until clean, then the stage 4 adversarial pass and a stage 5
 retro entry. Written with Codex (`gpt-6-astra`). Scope: the presenter-operated room the
 user chose on 2026-10-13; sharing with interviewers' own browsers is stretch. Core needs
-nothing from M3 unit 7 except `diff_selections`, which lands first in `digest/driver.py`
-(PR 54, stacked on the pre-push fix in PR 53); unit 7 itself is built in parallel by the
-session that owns the driver plan, and its scenario buttons are stretch.
+nothing from M3 unit 7 except `diff_selections`; its types are on main (PR 54), and unit 7,
+built in parallel by the session that owns the driver plan, implements and tests it.
+The scenario buttons are stretch.
 
 ## Goal
 
@@ -150,16 +150,15 @@ Rules:
 
 | Unit | Branch | Modules | Tests |
 |---|---|---|---|
-| 8 Room model and the selection diff | `m3-room` | `digest/room.py`; `diff_selections` in `digest/driver.py` | `tests/test_room.py`, `tests/test_driver.py` (the diff only) |
+| 8 Room model | `m3-room` | `digest/room.py` | `tests/test_room.py` |
 | 9 Web page and `digest serve` | `m3-web` | `digest/web/app.py`, `digest/web/templates/room.html`, `digest serve` in `digest/cli.py` | `tests/test_web.py` |
 
-The diff types land first (PR 54): `diff_selections`, `LineView`, `Change` and
-`ReaderDiff` in `digest/driver.py` as the unit 7 plan gives them, with `DiffField` as the
-name of the field Literal that the plan writes inline, and `digest.driver` beside
-`digest.eval` in the layers contract. Unit 7's stubs base on it; unit 7 adds
-`make_event` and `Store.copy_to` beside it without moving it. The UI stubs commit adds
-one line to `docs/plans/m3-driver.md` saying unit 8 of this plan builds and tests
-`diff_selections`, which the session that owns unit 7 agreed on 2026-10-12.
+The diff types are on main (PR 54): `diff_selections`, `LineView`, `Change`,
+`ReaderDiff` and `DiffField` in `digest/driver.py` as the unit 7 plan gives them, and
+`digest.driver` beside `digest.eval` in the layers contract. Unit 7 implements and tests
+`diff_selections` (agreed with the session that owns unit 7 on 2026-10-13, when its CLI
+tests needed it first). Unit 8 needs it implemented before its tests can pass, so unit 8
+merges after unit 7's `diff_selections`.
 
 A stubs commit on `m3-ui-stubs` follows: the types and signatures below raising
 `NotImplementedError`; `line_parts` in `digest/daily/render.py` (below), with `_line`
@@ -308,7 +307,7 @@ B9.5 `digest serve` binds 127.0.0.1 and reads no key: it starts and serves with 
 
 - `apply_world_edits` and `build_state` on the Kestrel world and the day-6 base store
   built once per test session from the committed cassettes.
-- `diff_selections` on hand-built `Selection` values, as the unit 7 plan lists them.
+
 - The web page through FastAPI's `TestClient`; no real browser in tests. U1 is checked by
   hand with the browser-verify skill.
 
@@ -321,7 +320,8 @@ B9.5 `digest serve` binds 127.0.0.1 and reads no key: it starts and serves with 
 | P3 | `detect_absences` reads gates from the project passed to it | `render.py:98`; `src/digest/absence.py:205-222` | verified |
 | P4 | Building the day-6 base store from cassettes takes under 20 seconds | `digest demo` from a fresh clone: 9 seconds, 2026-10-12 | verified |
 | P5 | A rebuild after an edit takes under 200 ms | three `build_digest` calls on the day-6 store: 10 to 12 ms; `load_world` 61 ms | verified |
-| P7 | Core needs no unit 7 code beyond `diff_selections` | the cut list; unit 7 has stubs only on 2026-10-13 | verified |
+| P7 | Core needs no unit 7 code beyond `diff_selections` | the cut list | verified |
+| P11 | Unit 7's `diff_selections` merges before unit 8 needs it | the unit 7 session is building it on 2026-10-13 | TBD: the schedule's first dependency |
 | P8 | The room world can skip the `World` script checks | `model_copy` worlds ran through `select_digest` with no error, 2026-10-12 | verified, pinned by B8.1 |
 | P9 | A gate moved past its buffer drops its checklist absences | `src/digest/absence.py:41-43` | verified |
 | P10 | The B8.5 effects | computed on the day-6 store, 2026-10-12, by this session and by an independent reviewer | verified |
