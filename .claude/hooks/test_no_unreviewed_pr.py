@@ -50,8 +50,8 @@ def _head(repo):
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _run(cmd, cwd, env=None):
-    payload = {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)}
+def _run(cmd, cwd, env=None, tool="Bash"):
+    payload = {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd)}
     e = dict(os.environ)
     e.pop("PR_REVIEW_OVERRIDE", None)
     e.update(env or {})
@@ -311,6 +311,42 @@ def test_nul_in_head_flag_blocks_without_crash(repo):
     rc, err = _run('gh pr create --head "\x00"', repo)
     assert rc == 2
     assert "cannot resolve" in err
+
+
+# --- Windows: the PowerShell tool, Windows shells and .exe names ------------------
+def test_powershell_tool_creation_without_review_blocks(repo):
+    rc, err = _run(CREATE, repo, tool="PowerShell")
+    assert rc == 2
+    assert "needs a second-model review" in err
+
+
+def test_powershell_tool_creation_with_review_allows(repo):
+    _verdict(repo, _head(repo))
+    rc, err = _run(CREATE, repo, tool="PowerShell")
+    assert rc == 0, err
+
+
+@pytest.mark.parametrize("cmd", [
+    pytest.param("gh.exe pr create --fill", id="gh-exe"),
+    pytest.param('powershell -Command "gh pr create --fill"', id="powershell-command"),
+    pytest.param("pwsh -c 'gh pr create --fill'", id="pwsh-c"),
+    pytest.param("cmd /c gh pr create --fill", id="cmd-c"),
+])
+def test_windows_forms_without_review_block(cmd, repo):
+    rc, _err = _run(cmd, repo)
+    assert rc == 2
+
+
+@pytest.mark.parametrize("prefix", [
+    pytest.param('Set-Location "{d}"; ', id="set-location"),
+    pytest.param('sl "{d}"; ', id="sl"),
+    pytest.param('Push-Location "{d}"; ', id="push-location"),
+])
+def test_powershell_dir_change_blocks_despite_review(prefix, repo):
+    _verdict(repo, _head(repo))
+    rc, err = _run(prefix.format(d=repo.as_posix()) + CREATE, repo, tool="PowerShell")
+    assert rc == 2
+    assert "changes directory or HEAD" in err
 
 
 # --- A leading cd -------------------------------------------------------------
