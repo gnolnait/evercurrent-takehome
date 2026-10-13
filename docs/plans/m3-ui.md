@@ -1,10 +1,11 @@
 # Plan: M3 units 8 and 9, the demo room (a web UI over the world and the digests)
 
-Status: v0.7, 2026-10-13. Process stage 1 (`docs/process.md`), the full process the user
-set for M3 at 11:00 on 2026-10-12 (`docs/plans/m3-demo.md`): Codex writes the tests, an
-Opus subagent writes the code, every test is RED-GREEN proven, both review lanes run on
-every commit with fix rounds until clean, then the stage 4 adversarial pass and a stage 5
-retro entry. Written with Codex (`gpt-6-astra`). Scope: the presenter-operated room the
+Status: v0.7, 2026-10-13. Process stage 1 (`docs/process.md`). The plan was reviewed
+under the full process. Units 8 and 9 are built under the lighter process the user chose
+on 2026-10-13 for the 2026-10-14 deadline: Codex writes the tests, an Opus subagent writes
+the code, every test is RED-GREEN proven, one review lane per commit (alternating Codex
+and the Claude lenses), at most one fix round per commit; findings left over are recorded
+in the verdict. Written with Codex (`gpt-6-astra`). Scope: the presenter-operated room the
 user chose on 2026-10-13; sharing with interviewers' own browsers is stretch. Core needs
 nothing from M3 unit 7 except `diff_selections`; its types are on main (PR 54), and unit 7,
 built in parallel by the session that owns the driver plan, implements and tests it.
