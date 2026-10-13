@@ -143,15 +143,22 @@ def _remove(path):
         pass
 
 
-def unresolved_markers(session_id, current_repo):
+def unresolved_markers(session_id, cwd):
     """Resolve this session's markers; return [(marker, test_path)] still
-    pending. Stale markers are deleted as a side effect."""
+    pending. Stale markers are deleted as a side effect.
+
+    `cwd`'s repo is looked up only when the session has a marker: the lookup
+    spawns git, and most Bash calls have none."""
     sdir = state_dir()
     if not os.path.isdir(sdir):
         return []
     pattern = os.path.join(glob.escape(sdir), glob.escape(safe_session(session_id)) + "-*.json")
+    markers = sorted(glob.glob(pattern))
+    if not markers:
+        return []
+    current_repo = git_toplevel(cwd)
     pending = []
-    for marker in sorted(glob.glob(pattern)):
+    for marker in markers:
         try:
             with open(marker, encoding="utf-8") as fh:
                 record = json.load(fh)
@@ -211,7 +218,7 @@ Pending:
 Run prove-test on each to confirm the test catches the bug it asserts:
   prove-test --test <test-id> \\
     --break blank:<src-file>:<line>-<line> \\
-    --run "uv run pytest <test-file>::<test-name>" \\
+    --run "uv run python -m pytest <test-file>::<test-name>" \\
     --expect-error '<specific regex from broken output>' \\
     --format "uv run ruff format <test-file>"
   (blank BLANKS those source lines - aim at the SINGLE load-bearing line, not a
@@ -260,7 +267,7 @@ def evaluate(data, tool, tool_input):
     cwd = data.get("cwd")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
         cwd = os.getcwd()
-    pending = unresolved_markers(session_id, git_toplevel(cwd))
+    pending = unresolved_markers(session_id, cwd)
     if not pending:
         return None
     if is_allowed(command):

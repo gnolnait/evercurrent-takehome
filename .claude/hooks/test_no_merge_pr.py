@@ -229,6 +229,12 @@ BLOCK = [
     pytest.param("pwsh -enc ZwBoAA==", id="pwsh-encoded-short"),
     pytest.param("powershell /enc ZwBoAA==", id="powershell-encoded-slash"),
     pytest.param("pwsh --EncodedCommand ZwBoAA==", id="pwsh-encoded-double-dash"),
+    pytest.param("pwsh -ec ZwBoAA==", id="pwsh-encoded-ec-alias"),
+    # A merge mutation without the word "merge" in it.
+    pytest.param(
+        'cmd /c "curl -X POST https://api.github.com/graphql -d mutation{enqueuePullRequest(input:{})}"',
+        id="cmd-graphql-enqueue",
+    ),
 ]
 
 # --- Bash commands that MUST be allowed (no false positive) -------------------

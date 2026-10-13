@@ -15,8 +15,8 @@ Why Python, and which interpreter:
     The exception is the text of a Windows shell (`powershell -Command "..."`),
     which is searched, not parsed, so merge prose there does block.
   - The bash fences resolve the interpreter (CLAUDE_HOOK_PYTHON, else python3,
-    else python, skipping the Windows Store alias stub). This module is
-    stdlib-only, so any Python 3.10+ works.
+    else python, python first under Git Bash, skipping the Windows Store
+    alias stub). This module is stdlib-only, so any Python 3.10+ works.
 
 Vectors blocked:
   1. MCP tool   - any `mcp__<server>__*merge_pull_request*` or `*auto_merge*` tool
@@ -178,7 +178,9 @@ def check_bash(cmd, depth=0):
             if text is None:
                 block("encoded PowerShell command (cannot be read)", seg)
             text = text.lower()
-            if GQL_MUT_LOWER.search(text) or ("merge" in text and GITHUB_WORD.search(text)):
+            if GQL_MUT_LOWER.search(text):
+                block("merge mutation in a Windows shell command (not parsed)", seg)
+            if "merge" in text and GITHUB_WORD.search(text):
                 block("merge words in a Windows shell command (not parsed)", seg)
             continue
 

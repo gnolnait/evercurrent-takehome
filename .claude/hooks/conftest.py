@@ -19,6 +19,12 @@ from hooktest_support import scrub_git_env
 
 scrub_git_env(os.environ)
 
+# A developer who sets CLAUDE_HOOK_PYTHON (user settings `env`) passes it to
+# every hook a test launches with a copy of os.environ, and each wrapper then
+# skips its interpreter lookup. Drop it, so that lookup runs here as it does in
+# CI; the tests that need the variable set it themselves.
+os.environ.pop("CLAUDE_HOOK_PYTHON", None)
+
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_xdist_auto_num_workers(config):
