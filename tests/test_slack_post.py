@@ -5,7 +5,6 @@ import re
 import traceback
 from collections.abc import Callable
 from datetime import date, datetime
-from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +17,7 @@ import digest.cli as cli
 from digest.cli import app
 from digest.daily.profile import Profile
 from digest.daily.select import Line, Section, Selection
+from digest.daily.slack import slack_message
 from digest.extract.stage import ExtractReport
 from digest.extract.verify import DROP_FIELDS
 from digest.models import Evidence, Item
@@ -95,14 +95,6 @@ def line(value: Item, section: Section = "decisions", *, must_see: bool = False)
 
 def selection(profile: Profile, *lines: Line) -> Selection:
     return Selection(profile=profile, day=DAY, lines=lines, hidden=0)
-
-
-def slack_message(world: World, selected: Selection) -> dict[str, Any]:
-    try:
-        module = import_module("digest.daily.slack")
-    except ModuleNotFoundError:
-        pytest.fail("digest.daily.slack.slack_message is missing", pytrace=False)
-    return module.slack_message(world, selected)
 
 
 def block_text(block: dict[str, Any]) -> str:
@@ -318,7 +310,7 @@ def prepare_post(
         assert url == webhook_url
         return client
 
-    monkeypatch.setattr(cli, "_webhook_client", client_for, raising=False)
+    monkeypatch.setattr(cli, "_webhook_client", client_for)
 
 
 def prepare_dm(
@@ -341,7 +333,7 @@ def prepare_dm(
         assert value == token
         return client
 
-    monkeypatch.setattr(cli, "_slack_web_client", client_for, raising=False)
+    monkeypatch.setattr(cli, "_slack_web_client", client_for)
     return webhook_client
 
 
@@ -639,7 +631,7 @@ def test_cli_post_missing_credential_names_dotenv_working_directory(
     variable: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv(variable, False)
 
     result = runner.invoke(app, arguments)
 
@@ -657,7 +649,7 @@ def test_cli_post_dm_invalid_auth_names_token_source(
     source: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("SLACK_BOT_TOKEN", False)
     if source == "environment":
         monkeypatch.setenv("SLACK_BOT_TOKEN", BOT_TOKEN)
     else:
@@ -767,7 +759,7 @@ def test_webhook_url_reads_cwd_dotenv_and_environment_wins(
     dotenv_url = "https://hooks.slack.com/services/from-dotenv"
     environment_url = "https://hooks.slack.com/services/from-environment"
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", False)
     (tmp_path / ".env").write_text(f"SLACK_WEBHOOK_URL={dotenv_url}\n", encoding="utf-8")
 
     assert cli._webhook_url() == dotenv_url
@@ -793,7 +785,7 @@ def test_webhook_url_reads_supported_dotenv_encodings_and_inline_comment(
 ) -> None:
     dotenv_url = "https://hooks.slack.com/services/from-dotenv"
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", False)
     (tmp_path / ".env").write_text(
         f"SLACK_WEBHOOK_URL={dotenv_url}{suffix}\n",
         encoding=encoding,
@@ -804,7 +796,7 @@ def test_webhook_url_reads_supported_dotenv_encodings_and_inline_comment(
 
 def test_cli_post_names_unreadable_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", False)
     (tmp_path / ".env").write_bytes(b"\xff\xfe\x00")
 
     result = runner.invoke(app, ["post"])
