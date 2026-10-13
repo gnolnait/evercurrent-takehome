@@ -539,8 +539,9 @@ def say(
 
     The command refuses a `--db` equal to the base store path, or one that resolves to the
     same file. Without `--script`, the command uses an existing `--db` as it is. A failed
-    write refuses on one line. When the command made the scratch store, it removes that
-    store on any failure after the copy; it keeps a scratch store that already existed.
+    event write refuses on one line that starts with the `--db` path. A failed copy or
+    event write removes a scratch store that this say made. A failed log append keeps it.
+    The command keeps a scratch store that already existed.
 
     With `--script`, the command refuses a `--db` that already exists, or a
     `<db>.script.jsonl` that already exists, before the copy. It makes `--db` as a fresh
@@ -580,12 +581,13 @@ def say(
         if fresh:
             if log_path.exists():  # after the rule checks, so a broken rule names its reason
                 _refuse(f"script log {log_path} already exists; remove it or give another --db")
+            scratch = _copy_store(checked, db)  # before the try: a refused copy removes nothing
             try:
-                with _copy_store(checked, db) as scratch:
+                with scratch:  # inside the try: close before _remove_store, for Windows
                     scratch.upsert_events([event], meta=meta)
             except (OSError, sqlite3.Error) as error:
                 _remove_store(db)
-                _refuse(" ".join(str(error).split()))
+                _refuse(f"{db}: {' '.join(str(error).split())}")
             except BaseException:
                 _remove_store(db)
                 raise
@@ -593,7 +595,7 @@ def say(
             try:
                 checked.upsert_events([event], meta=meta)
             except (OSError, sqlite3.Error) as error:  # keep a store this say did not make
-                _refuse(" ".join(str(error).split()))
+                _refuse(f"{db}: {' '.join(str(error).split())}")
     with log_path.open("a", encoding="utf-8", newline="\n") as log_file:
         log_file.write(line.model_dump_json() + "\n")
     typer.echo(event.ts)

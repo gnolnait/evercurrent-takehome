@@ -97,23 +97,23 @@ class Store:
         if path != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path)
-        connection.row_factory = sqlite3.Row
         try:
+            connection.row_factory = sqlite3.Row
             _check_version(connection, path)
-        except Exception:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.executescript(Path(__file__).with_name("schema.sql").read_text("utf-8"))
+            with connection:
+                connection.execute(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
+                    " ON CONFLICT (key) DO NOTHING",
+                    (SCHEMA_VERSION,),
+                )
+            log.debug("store_opened", extra={"path": str(path)})
+            return cls(connection, path)
+        except BaseException:  # close, so a cleanup can delete the file on Windows
             connection.close()
             raise
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.executescript(Path(__file__).with_name("schema.sql").read_text("utf-8"))
-        with connection:
-            connection.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
-                " ON CONFLICT (key) DO NOTHING",
-                (SCHEMA_VERSION,),
-            )
-        log.debug("store_opened", extra={"path": str(path)})
-        return cls(connection, path)
 
     @classmethod
     def open_readonly(cls, path: Path) -> Self:
