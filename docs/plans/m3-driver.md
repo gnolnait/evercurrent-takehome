@@ -26,6 +26,22 @@ read-only connection (`sqlite3.Connection.backup`), so rows still in the base st
 write-ahead log are copied too. `--db` equal to the
 base path, or resolving to the same file, is refused.
 
+Review rulings (unit 7 code review, 2026-10-12):
+- The base store is opened read-only (`Store.open_readonly`, a `mode=ro` connection with
+  no schema script and no write); a file that is not a store of the current schema is
+  refused with its reason. `copy_to` reads from that connection.
+- `copy_to` removes the target file when the backup fails, so no half-made scratch
+  store is left behind.
+- A `say` that creates the scratch store refuses when `<db>.script.jsonl` already exists,
+  naming that file, so a log never mixes two sessions.
+- `--script` removes the scratch store (with its `-wal` and `-shm` files) on any
+  failure after the copy, not only on a refused line, and prints the event ts values
+  only after every line is stored.
+- A script file is split into lines on `
+` only, so a `--text` holding U+0085, U+2028
+  or U+2029 replays.
+- Every refusal is one line; a validation error is reduced to its first message.
+
 ## `digest say`
 
 ```
