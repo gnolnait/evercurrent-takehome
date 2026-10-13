@@ -40,8 +40,8 @@ from the command (a `cd`, `-C`, `--repo`).
 found them one by one.
 
 **Fix:** accept one exact, fully resolved shape and fail closed on every other form.
-`no_unreviewed_pr_impl._leading_cd` accepts only a leading `cd <path> &&` with an
-absolute, `./` or `../` path.
+`no_unreviewed_pr_impl._leading_cd` accepts only a leading `cd <path> &&` where the
+path is absolute, `.`, `..`, or starts with `./` or `../`.
 
 ## A green suite proves little for a parsing change (dev-harness 2026-07-26)
 

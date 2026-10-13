@@ -1,5 +1,5 @@
 {
-  "kit_commit": "ef921151e741c090b7f812576b58964dd6312ad7",
+  "kit_commit": "ee335bc4cae9100720bca991b1a2f3f5bc271bfe",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
@@ -62,7 +62,7 @@
     ".claude/review-lenses/secondary/review-vacuity.md": "beb00a8bee5604634926e2407fca59588c790c5ca4d172826e5758c67f5770a8",
     ".claude/rules/anti-sprawl.md": "28dd5277bf244846e82225df28061c7f76e07fc32e8cf4685691391ecfd14227",
     ".claude/rules/code-placement.md": "6d496659ab2320a6cf4bba1681eacbfb7a597f309d8180ec39914fe266403997",
-    ".claude/rules/hook-guards.md": "4dd49cc4a95391a6d04dbd0bcdb9061610265e190cc5ac673e50bf442dfa99e6",
+    ".claude/rules/hook-guards.md": "70ce89f0aaaf8a718ffa591379c5c909c1e65691272a8371ec377dc794cc0164",
     ".claude/rules/instruction-surfaces.md": "2ce48079c9d429b591800fa8abfb302194e9db898819d841e80c2d5862876682",
     ".claude/rules/logging.md": "d869371bc31f3d94233feb3aa104509d916d2a10106b64131aff96c068dd6f2f",
     ".claude/rules/prose-follows-mechanism.md": "4e85313786fbc7132fe98c1075e00c2e76e2639e66848492306d46aa808cb842",
