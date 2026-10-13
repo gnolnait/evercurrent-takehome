@@ -1,26 +1,29 @@
 import json
 import re
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from functools import partialmethod
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from typer.testing import CliRunner
 
 import digest.cli as cli
+import digest.daily.render as daily_render
 from digest.cli import app
 from digest.daily.profile import Profile
 from digest.daily.render import build_digest, render_digest
 from digest.daily.select import Line, Section, Selection
+from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport
 from digest.extract.verify import DROP_FIELDS
 from digest.models import AbsenceDetail, Claim, Event, Evidence, Item
 from digest.priors import load_priors
 from digest.settings import Settings
-from digest.store import Store
+from digest.store import StageRun, Store
 from digest.world.load import load_world
 from digest.world.schema import World
 
@@ -131,8 +134,12 @@ def line(value: Item, section: Section, *, must_see: bool = False) -> Line:
     )
 
 
-def selection(profile: Profile, *lines: Line, hidden: int = 0) -> Selection:
-    return Selection(profile=profile, day=DAY, lines=lines, hidden=hidden)
+def selection(
+    profile: Profile, *lines: Line, hidden: int = 0, previous_digest: date | None = None
+) -> Selection:
+    return Selection(
+        profile=profile, day=DAY, lines=lines, hidden=hidden, previous_digest=previous_digest
+    )
 
 
 def test_render_digest_exact_normal_line(world: World, profile: Profile) -> None:
@@ -150,6 +157,7 @@ def test_render_digest_exact_normal_line(world: World, profile: Profile) -> None
 
     assert rendered == (
         "Daily digest for Nadia Brenner (ME) - 2026-10-14\n"
+        "First digest: the last 5 working days\n"
         "\n"
         "Decisions\n"
         "- Drawing released (PN-51010, G-TR1) - owner Hamid Rostami [must see]\n"
@@ -239,7 +247,8 @@ def test_render_digest_empty_day_and_hidden_footer(world: World, profile: Profil
     hidden = render_digest(world, selection(profile, hidden=2))
 
     assert empty == (
-        "Daily digest for Nadia Brenner (ME) - 2026-10-14\n\nNothing new for Nadia Brenner."
+        "Daily digest for Nadia Brenner (ME) - 2026-10-14\n"
+        "First digest: the last 5 working days\n\nNothing new for Nadia Brenner."
     )
     assert "hidden by the visibility filter" not in empty
     assert "Nothing new for Nadia Brenner." in hidden
@@ -605,3 +614,114 @@ def test_cli_demo_prints_three_offline_digests_under_sixty_seconds(
     dates = re.findall(r"Daily digest for .* - (\d{4}-\d{2}-\d{2})", result.stdout)
     assert dates == ["2026-10-19"] * 3
     assert len(re.findall(r"(?m)^-{3,}$", result.stdout)) == 2
+
+
+@pytest.mark.parametrize(
+    "previous", [None, date(2026, 10, 13)], ids=["first-digest", "previous-digest"]
+)
+@pytest.mark.parametrize("edited", [False, True], ids=["original", "edited"])
+def test_select_digest_uses_delivery_history_and_stored_event_time(
+    world: World, profile: Profile, previous: date | None, edited: bool
+) -> None:
+    """W6: select stored evidence with omitted or explicit delivery history."""
+    zone = ZoneInfo(world.timezone)
+    until = datetime.combine(DAY, time.max, zone).astimezone(UTC)
+    rows = []
+    with Store.open(":memory:") as store:
+        set_replay_meta(store, until=until.isoformat())
+        for label, message_day in [
+            ("before-first", date(2026, 10, 7)),
+            ("at-previous", date(2026, 10, 13)),
+            ("after-previous", DAY),
+        ]:
+            moment = datetime.combine(message_day, time(12), zone)
+            if label == "at-previous":
+                moment = datetime.combine(message_day, time.max, zone)
+            ts = f"{int(moment.timestamp())}.{moment.microsecond:06d}"
+            observed = (
+                datetime.combine(DAY, time(9), zone)
+                if edited and label == "before-first"
+                else moment
+            )
+            event_ts = f"{int(observed.timestamp())}.{observed.microsecond:06d}"
+            event = Event(
+                source="replay",
+                channel_id="C0ENGME",
+                channel_name="eng-mech",
+                thread_ts=ts,
+                ts=ts,
+                event_ts=event_ts,
+                user_id="U0ME01",
+                text="Drawing released.",
+                edited=edited and label == "before-first",
+                permalink=f"{WORKSPACE}/archives/C0ENGME/p{ts.replace('.', '')}",
+            )
+            if event.edited:
+                store.upsert_events([event.model_copy(update={"event_ts": ts, "edited": False})])
+            store.upsert_events([event])
+            rows.append(
+                item(
+                    item_id=label,
+                    thread_id=event.thread_id,
+                    entities=(),
+                    first_seen=ts,
+                    last_updated=ts,
+                    evidence=(
+                        Evidence(
+                            channel_id=event.channel_id,
+                            message_ts=ts,
+                            quote=event.text,
+                            permalink=event.permalink,
+                        ),
+                    ),
+                )
+            )
+            store.record_stage_run(
+                StageRun(
+                    stage="extract",
+                    thread_id=event.thread_id,
+                    last_ts=event.event_ts,
+                    prompt_version=EXTRACT_PROMPT_VERSION,
+                    model="extract",
+                    run_at=until,
+                    status="ok",
+                )
+            )
+        store.upsert_items(rows, prompt_version=EXTRACT_PROMPT_VERSION, model="extract")
+        table = load_priors()
+        table = table.model_copy(
+            update={"daily": table.daily.model_copy(update={"min_score": 0.0})}
+        )
+
+        if previous is None:
+            selected = daily_render.select_digest(store, world, table, profile.user_id, DAY)
+        else:
+            selected = daily_render.select_digest(
+                store, world, table, profile.user_id, DAY, previous_digest=previous
+            )
+
+    expected = {"after-previous"}
+    if previous is None:
+        expected.add("at-previous")
+    if edited:
+        expected.add("before-first")
+    assert {line.item.item_id for line in selected.lines} == expected
+    assert selected.previous_digest == previous
+
+
+@pytest.mark.parametrize(
+    ("previous", "label"),
+    [
+        (None, "First digest: the last 5 working days"),
+        (date(2026, 10, 13), "Since your digest of 2026-10-13"),
+    ],
+)
+def test_render_digest_window_line_under_header(
+    world: World, profile: Profile, previous: date | None, label: str
+) -> None:
+    """W7: show delivery history directly below the digest header."""
+    selected = selection(profile, previous_digest=previous)
+
+    rendered = render_digest(world, selected)
+
+    assert rendered.splitlines()[:2] == ["Daily digest for Nadia Brenner (ME) - 2026-10-14", label]
