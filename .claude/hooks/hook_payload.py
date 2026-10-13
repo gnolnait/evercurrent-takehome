@@ -1,6 +1,6 @@
-"""Shared PreToolUse payload reader for the three git-guard entry points.
+"""Shared PreToolUse payload reader for the guard entry points.
 
-Every entry point — the production `guard_runner` and the two standalone shims —
+Every entry point — the production `guard_runner` and the standalone shims —
 used to carry its own copy of this parse-and-shape-check preamble. The copies
 drifted, and the drift WAS the bug class:
 

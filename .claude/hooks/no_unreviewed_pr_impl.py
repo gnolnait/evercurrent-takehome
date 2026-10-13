@@ -51,7 +51,16 @@ branch or main checkout also blocks.
 Not detected: a user-defined gh alias; an httpie POST that has only key=value
 items; a GraphQL body sent on stdin through a redirection
 (`http POST <url>/graphql < request.json`), because the segmenter removes the
-redirection before the guard reads the command. Two shell_segments gaps, shared with the merge and signing guards, hide
+redirection before the guard reads the command. Argument-position escapes of
+the shared command-word reader are known and not patched one by one: a flag
+between `pr` and the subcommand (`gh pr -R o/r create`), wrapper options
+before the command (`env -i`, `env -C dir`, `command -p`, `sudo -u x`,
+`exec -a x`), a GraphQL body held in a variable or a substitution
+(`-f query="$Q"`), and a help token that is a flag's value
+(`gh pr create --title --help`). The dev-kit doc
+docs/guard-parser/README.md tracks the shared-parser fix that closes them.
+When one command holds two creations and the second log write fails, the
+first stays logged as allowed. Two shell_segments gaps, shared with the merge and signing guards, hide
 a creation until the segmenter fix lands: an unquoted `{owner}`/`{repo}`
 placeholder in an API path, and a substitution inside double quotes
 (`url="$(gh pr create)"`).
@@ -77,7 +86,7 @@ GQL_CREATE = re.compile(r"createPullRequest")
 GQL_ENDPOINT = re.compile(r"^(/?graphql|(https?://)?[^/\s=]+(/api)?/graphql)/?(\?.*)?$")
 PULLS_PATH = re.compile(r"repos/[^/\s]+/[^/\s]+/pulls/?(\?.*)?$")
 # Raw substrings of any command that can create a PR, for the unreadable case.
-MAY_CREATE = ("gh", "pulls", "PullRequest")
+MAY_CREATE = ("gh", "pulls", "PullRequest", "graphql")
 DIR_CHANGERS = {"cd", "pushd", "popd"}
 # The one cd the guard follows: the command starts with `cd <path> &&`. Bash
 # then runs the rest in <path>, or not at all. The path is one quoted or bare
@@ -376,7 +385,8 @@ def _missing_message(kind, sha, root, problems):
         "",
         "Run one of these on the final commit, then retry:",
         "  /review-local --base main",
-        '  mkdir -p "%s" && codex exec -p review -o "%s" "<brief that names %s>" </dev/null'
+        '  mkdir -p "%s" && codex exec -p review -o "%s" "<brief>. Start your reply'
+        ' with the line Reviewed-HEAD: %s" </dev/null'
         % (base, _join(base, "codex.md"), sha),
         "",
         "For a trivial PR only, put an override with a reason on the same command:",

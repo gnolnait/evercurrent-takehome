@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """guard_runner - single-spawn PreToolUse dispatch for the git and PR guards.
 
-Replaces three bash-wrapper + python-parser spawns with ONE python
+Replaced one bash-wrapper + python-parser spawn per guard with ONE python
 process: read the payload once through hook_payload, then run each guard's pure
 evaluate() entry. First blocking verdict wins. Fail-closed is owned by the bash
 wrapper (guard_runner) which coerces any non-{0,2} exit to a block; this
