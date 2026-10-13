@@ -32,7 +32,7 @@ class Change(Frozen):
 
 
 class ReaderDiff(Frozen):
-    """What changed for one reader between two selections of the same day."""
+    """What changed for one reader between two selections."""
 
     user_id: str
     added: tuple[LineView, ...]
@@ -42,6 +42,8 @@ class ReaderDiff(Frozen):
 
 def diff_selections(before: Selection, after: Selection) -> ReaderDiff:
     """Compare two selections of one reader by `item_id` (plan m3-driver.md, `digest diff`).
+
+    The caller passes two selections of the same reader; `user_id` is `after.profile.user_id`.
 
     Each tuple is ordered by section (as `Selection.lines`), then lane (must-see first),
     then rank, then `item_id`; a `Change` sorts by its `after` view.
