@@ -138,6 +138,12 @@ def state() -> RoomState:
                 else c
                 for c in world.channels
             ),
+            "entities": tuple(
+                e.model_copy(update={"description": f"{e.description} <script>entity</script>"})
+                if e.id == "PN-51010"
+                else e
+                for e in world.entities
+            ),
             "project": world.project.model_copy(
                 update={
                     "gates": tuple(
@@ -178,7 +184,7 @@ def state() -> RoomState:
                 item(
                     item_id=f"DECISION-{index}",
                     title=f"Release {index} <script>item</script>",
-                    summary=f"Use revision {index}.\nKeep & inspect.",
+                    summary=f"Use revision {index}.\nKeep & inspect. <script>summary</script>",
                     owner="U0ME01",
                 ),
                 "decisions",
@@ -204,7 +210,7 @@ def state() -> RoomState:
         diffs=tuple(ReaderDiff(user_id=u, added=(), removed=(), changed=()) for u in READERS),
         reworded=((), (), ()),
         last_effect=(0, 0, 0),
-        owners={"PN-51010": READERS},
+        owners={"PN-51010": ("U0SC01", "U0EM01")},
     )
 
 
@@ -266,7 +272,7 @@ def test_page_shows_world_digests_forms_and_escapes_text(state: RoomState) -> No
     assert response.headers["content-type"].startswith("text/html")
     page = Page(response.text)
     assert not page.find("script")
-    for word in ("persona", "channel", "item"):
+    for word in ("persona", "channel", "item", "summary", "entity"):
         assert f"&lt;script&gt;{word}&lt;/script&gt;" in response.text
     text = page.root.text()
     for persona in state.world.personas:
@@ -277,6 +283,17 @@ def test_page_shows_world_digests_forms_and_escapes_text(state: RoomState) -> No
     for entity in state.world.entities:
         assert entity.id in text
         assert entity.type in text
+        if entity.id == "PN-51010":
+            entity_row = next(
+                n
+                for n in page.root.nodes()
+                if n.tag in {"tr", "li"}
+                and entity.id in n.text()
+                and entity.description in n.text()
+            )
+            for user_id in ("U0SC01", "U0EM01"):
+                name = next(p.name for p in state.world.personas if p.user_id == user_id)
+                assert user_id in entity_row.text() or name in entity_row.text()
     for gate in state.world.project.gates:
         assert gate.id in text
         assert gate.date.isoformat() in text
@@ -406,6 +423,8 @@ def test_edit_refresh_shows_new_digest_diff_wording_and_edit_list(
         "New room decision",
         "Removed room decision",
         "Moved room decision",
+        "New room reason",
+        "Now owned",
     ):
         assert value in page.root.text()
     nodes = page.root.nodes()
@@ -479,7 +498,15 @@ BAD_BOOLEANS = [
 
 
 @pytest.mark.parametrize(
-    "data", [*MISSING_FIELDS, *BAD_BOOLEANS, pytest.param({"kind": "unknown"}, id="unknown-kind")]
+    "data",
+    [
+        *MISSING_FIELDS,
+        *BAD_BOOLEANS,
+        pytest.param({"kind": "unknown"}, id="unknown-kind"),
+        pytest.param({**VALID_EDITS[7][0], "date": ""}, id="empty-date"),
+        pytest.param({**VALID_EDITS[7][0], "date": "not-a-date"}, id="malformed-date"),
+        pytest.param({**ROLE_FORM, "role": "not-a-role"}, id="invalid-role"),
+    ],
 )
 def test_bad_form_returns_400_with_reason_without_calling_room(
     state: RoomState, data: dict[str, str]
