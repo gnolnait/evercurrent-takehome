@@ -32,6 +32,22 @@ If Windows reports "An Application Control policy has blocked this file", Smart 
 Control has blocked the `digest.exe` launcher in the new venv. Run the same command
 through Python instead: `uv run python -m digest demo`.
 
+## Send the digests to Slack
+
+`digest post` builds the same three digests and sends them to Slack. It needs the
+`slack` extra (installed by `uv sync --all-extras`).
+
+- As direct messages from the app's bot: `uv run digest post --dm <member id>`. Put the
+  bot token in `.env` as `SLACK_BOT_TOKEN=xoxb-...`; the app needs the bot scopes
+  `chat:write` and `im:write`. All three readers' digests go to that one person, each
+  headed by its reader.
+- To one channel through an incoming webhook: `uv run digest post`, with
+  `SLACK_WEBHOOK_URL=https://hooks.slack.com/...` in `.env`.
+
+Add `--day N` for another world day. The command prints no token or URL, and it stops at
+the first message Slack refuses. The source links in the messages point to the synthetic
+workspace `kestrel-k2.slack.com`, which does not exist.
+
 ## What a reader sees, and why
 
 - Visibility fails closed: a line reaches a reader only when its thread is in a public

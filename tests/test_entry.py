@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,11 +12,15 @@ runner = CliRunner()
 
 
 def test_module_version_matches_console_app() -> None:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     module_result = subprocess.run(
         [sys.executable, "-m", "digest", "--version"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=env,
         check=False,
     )
     console_result = runner.invoke(app, ["--version"])
@@ -26,11 +31,15 @@ def test_module_version_matches_console_app() -> None:
 
 
 def test_module_help_lists_demo_command() -> None:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     result = subprocess.run(
         [sys.executable, "-m", "digest", "--help"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=env,
         check=False,
     )
 

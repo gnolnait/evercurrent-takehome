@@ -210,6 +210,64 @@ cassette exits 1 with the `CassetteMiss` message; an extract run with a failed t
 exits 1 naming the failed-thread count, before any digest is built. The golden-implied
 overlap target of SPEC A1 is M3 proper.
 
+B6.4 `digest post` (added 2026-10-12 so the demo can be seen in Slack): it builds the
+same three digests as `digest demo`, from the same day (`--day`, default 6), and posts one
+Slack message per reader, in reader order, to the incoming webhook in the environment
+variable `SLACK_WEBHOOK_URL` (also read from `.env`). It is the only command that sends
+anything over the network in replay mode, and it reads no model API key.
+- Message: Block Kit. A header block with the reader's name, role and date; then for each
+  non-empty section a section block with the bold section title, and one section block
+  per line holding the same text as the terminal line in Slack mrkdwn (the title in
+  bold, `[must see]` in bold, each source as `<permalink|source>`). Text from the model
+  and from Slack is escaped for mrkdwn (`&`, `<`, `>`), so it cannot form a link or a
+  mention. A section block's text stays under 3000 characters (cut with an ellipsis), and
+  a message holds at most 50 blocks: lines past the limit are left out and a last block
+  says how many. The plain-text `text` field holds the header line, for notifications.
+- It posts nothing until all three digests are built; a refusal or cassette miss exits 1
+  as `digest demo` does.
+- No `SLACK_WEBHOOK_URL`: exit 1 naming the variable. A post that Slack refuses (status
+  other than 200): exit 1 with the reader, the status and Slack's error code (the
+  body only when the hardening rule below allows it), and no further posts. No output, log line or error ever contains the webhook URL.
+- The source links point to the synthetic workspace `kestrel-k2.slack.com`, which does
+  not exist; the README says so.
+- Hardening (review round, 2026-10-12). Every mrkdwn text object sets `verbatim: true`,
+  so Slack does not turn a bare URL, `@here` or `#channel` in model text into a link or
+  a mention; the explicit `<permalink|source>` links still work. The URL must start
+  with `https://hooks.slack.com/` and hold no whitespace, else exit 1 naming the
+  variable, before any build.
+  `.env` is read as UTF-8 with or without a byte-order mark, or as UTF-16 when it starts
+  with a UTF-16 byte-order mark (the PowerShell 5.1 default); an unreadable file exits 1
+  naming `.env`. An unquoted value ends at ` #` (an inline comment), as python-dotenv
+  reads it. Any exception from a send exits 1 naming the reader and the exception type
+  only, never its message. A refused post prints Slack's response body only when it is a plain
+  error code (lower-case letters and underscores, such as `invalid_blocks`); any other
+  body is withheld, since a proxy page can echo the URL path A code that also
+  appears in the URL is withheld too. The client keeps the SDK's connection-error retry with its
+  logger off.
+
+B6.5 `digest post --dm USER_ID` (user ruling, 2026-10-12: the product delivers to each
+reader directly). It builds the same three messages as B6.4 and sends each as a direct
+message from the app's bot to the Slack user `USER_ID`, in reader order: it opens the DM
+with `conversations.open` and posts with `chat.postMessage` (scopes `chat:write`,
+`im:write`). The demo workspace has one real person, so all three readers' digests go to
+that user; each message's header names its reader. The bot token comes from
+`SLACK_BOT_TOKEN` (environment, then `.env`, read as in B6.4) and must start with
+`xoxb-`; `USER_ID` must match `[UW][A-Z0-9]+`. Either check fails with exit 1 before any
+build, naming the variable or the option and never the token. A Slack API error exits 1
+with the reader and Slack's error code only (for example `missing_scope`,
+`channel_not_found`); any other exception exits 1 with the reader and its type only. No
+output, log line or exception text holds the token. Every refusal, in B6.4 and here, is raised after the
+handler that caught the error, so no exception chained to it (`__context__` or
+`__cause__`) holds the token or the webhook URL. Live-run rules (envelope review): the code
+that turns a Slack error into text never raises, whatever the response holds; the DM
+client retries a rate-limited call after Slack's `Retry-After`; `post` prints one line
+before the first send naming how many digests it will send and where; a refusal after a
+partial post says how many digests were already sent and that a rerun sends all of them
+again; a missing token or URL names the directory whose `.env` was read; an
+`invalid_auth` or `not_authed` refusal says whether the token came from the environment
+or from `.env`. Without `--dm`, `post` uses the
+webhook of B6.4.
+
 ## Tests
 
 `tests/test_select.py`: B5.1 to B5.5 on a small synthetic world (one private channel,

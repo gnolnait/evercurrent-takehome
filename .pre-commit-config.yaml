@@ -68,15 +68,17 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+      # lint-imports and pytest run through the venv's Python, not their generated .exe
+      # launchers: Windows Smart App Control blocks those launchers (os error 4551).
       - id: lint-imports
         name: import-linter (import contracts)
-        entry: uv run lint-imports
+        entry: uv run python -c "import sys; from importlinter.cli import lint_imports_command; sys.exit(lint_imports_command())"
         language: system
         pass_filenames: false
         stages: [pre-push]
       - id: pytest
         name: pytest (replay mode)
-        entry: uv run pytest -q
+        entry: uv run python -m pytest -q
         language: system
         pass_filenames: false
         stages: [pre-push]
