@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import traceback
 from collections.abc import Callable, Sequence
 from datetime import datetime, time
@@ -710,7 +711,9 @@ def test_b11_rate_limit_waits_then_retries_the_same_operation_once(
     assert (report.posts, report.files) == (1, 1)
 
 
-def test_b11_six_rate_limits_stop_and_leave_an_incomplete_map(tmp_path: Path, world: World) -> None:
+def test_b11_six_rate_limits_stop_before_first_write_and_leave_no_map(
+    tmp_path: Path, world: World
+) -> None:
     waits: list[float] = []
     map_path = tmp_path / "seed.json"
     client = FakeSlackSeedClient(
@@ -732,7 +735,7 @@ def test_b11_six_rate_limits_stop_and_leave_an_incomplete_map(tmp_path: Path, wo
     assert caught.value is not None
     assert len(calls(client, "list_channels")) == 6
     assert waits == [3] * 5
-    assert SeedMap.model_validate_json(map_path.read_text(encoding="utf-8")).complete is False
+    assert not map_path.exists()
 
 
 def test_b11_exhausted_upload_retries_keep_the_acknowledged_post(
@@ -1647,6 +1650,7 @@ def test_a22_command_without_map_uses_team_default_and_retries_auth(
 ) -> None:
     client = FakeSlackSeedClient(world, failures={("auth_test", 1): RateLimited(0)})
     prepare_cli(monkeypatch, client)
+    shutil.copytree(ROOT / "data" / "world" / "kestrel", tmp_path / "data" / "world" / "kestrel")
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
