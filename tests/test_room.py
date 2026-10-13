@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from digest.cli import app
+from digest.daily.profile import _owned_set
 from digest.daily.render import line_parts, select_digest
 from digest.daily.select import Section, Selection
 from digest.driver import Change, LineView, ReaderDiff
@@ -33,9 +34,9 @@ from digest.world.schema import World
 
 WORLD_PATH = Path("data/world/kestrel/world.yaml")
 DAY = date(2026, 10, 19)
+PREVIOUS_DIGEST = date(2026, 10, 16)
 READERS = ("U0ME01", "U0SC01", "U0EM01")
 ABSENCES = ("absence:G-DVT1.emc", "absence:G-DVT1.thermal")
-T1 = "C0EXTCM:1791994800.010031#1791994800.010031#0"
 STALE_PACK = "C0EXTCM:1792164600.010061#1792164600.010061#0"
 ANODIZE = "C0EXTCM:1792068738.000800#1792068738.000800#1"
 DFM = "C0KPROG:1792423800.010077#1792423800.010077#1"
@@ -94,6 +95,31 @@ def item_ids(selection: Selection) -> set[str]:
 
 def test_empty_edits_return_equal_world(world: World) -> None:
     assert apply_world_edits(world, []) == world
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        SetMembership(kind="set_membership", user_id="U0ME01", channel_id="C0DVT1B", member=True),
+        SetPrivate(kind="set_private", channel_id="C0LEADS", private=True),
+        SetRole(kind="set_role", user_id="U0ME01", role="ME"),
+    ],
+    ids=["existing-member", "already-private", "same-role"],
+)
+def test_setting_existing_value_leaves_world_equal(world: World, edit: Edit) -> None:
+    once = apply_world_edits(world, [edit])
+
+    assert once == world
+    assert apply_world_edits(world, [edit, edit]) == once
+    assert apply_world_edits(once, [edit]) == once
+
+
+@pytest.mark.parametrize("edit", ALL_EDITS, ids=lambda edit: edit.kind)
+def test_repeated_edit_equals_one_edit(world: World, edit: Edit) -> None:
+    once = apply_world_edits(world, [edit])
+
+    assert apply_world_edits(world, [edit, edit]) == once
+    assert apply_world_edits(once, [edit]) == once
 
 
 def test_role_changes_only_persona_role(world: World) -> None:
@@ -284,7 +310,10 @@ def test_remove_persona_from_channel_they_posted_in(world: World) -> None:
 def test_build_base_records_day6_readers(day6_store: Path, world: World, priors: Priors) -> None:
     with Store.open(day6_store) as store:
         base = build_base(store, world, priors)
-        expected = tuple(select_digest(store, world, priors, uid, DAY) for uid in READERS)
+        expected = tuple(
+            select_digest(store, world, priors, uid, DAY, previous_digest=PREVIOUS_DIGEST)
+            for uid in READERS
+        )
 
     assert base == RoomBase(
         world=world,
@@ -300,7 +329,10 @@ def test_build_state_without_edits_matches_recorded(
     day6_store: Path, world: World, priors: Priors
 ) -> None:
     with Store.open(day6_store) as store:
-        recorded = tuple(select_digest(store, world, priors, uid, DAY) for uid in READERS)
+        recorded = tuple(
+            select_digest(store, world, priors, uid, DAY, previous_digest=PREVIOUS_DIGEST)
+            for uid in READERS
+        )
         base = RoomBase(
             world=world,
             priors=priors,
@@ -396,9 +428,6 @@ def test_sc_role_change_pins_whole_diff(day6_store: Path, world: World, priors: 
         )
 
     ask = "absence:ask:C0ENGEF:1791997800.010040#1791997800.010040#0"
-    bracket = "C0DVT1B:1792081200.010045#1792081200.010045#0"
-    lidar = "C0ENGME:1791911662.000400#1791911662.000400#0"
-    drawing = "C0PLMFD:1791908400.010010#1791908400.010010#0"
     mlcc = "C0SUPCH:1792079700.010041#1792079700.010041#0"
     expected = ReaderDiff(
         user_id="U0SC01",
@@ -468,78 +497,6 @@ def test_sc_role_change_pins_whole_diff(day6_store: Path, world: World, priors: 
                 fields=("reason",),
             ),
             Change(
-                item_id=bracket,
-                before=view(
-                    bracket,
-                    "PN-11034 moves to Rev C; 40 Rev B brackets on hold",
-                    "decisions",
-                    2,
-                    "importance=0.56 role_prior=1.0 personal_relevance=0.8",
-                ),
-                after=view(
-                    bracket,
-                    "PN-11034 moves to Rev C; 40 Rev B brackets on hold",
-                    "decisions",
-                    1,
-                    "importance=0.56 role_prior=0.6 personal_relevance=0.8",
-                ),
-                fields=("rank", "reason"),
-            ),
-            Change(
-                item_id=T1,
-                before=view(
-                    T1,
-                    "PN-51010 T1 gate date moved to 2026-10-21",
-                    "decisions",
-                    1,
-                    "importance=0.63 role_prior=0.9 personal_relevance=0.8",
-                ),
-                after=view(
-                    T1,
-                    "PN-51010 T1 gate date moved to 2026-10-21",
-                    "decisions",
-                    2,
-                    "importance=0.63 role_prior=1.0 personal_relevance=0.4",
-                ),
-                fields=("rank", "reason"),
-            ),
-            Change(
-                item_id=lidar,
-                before=view(
-                    lidar,
-                    "Raise LiDAR mount +8 mm to clear bumper fascia FOV clip",
-                    "decisions",
-                    4,
-                    "importance=0.63 role_prior=0.8 personal_relevance=0.4",
-                ),
-                after=view(
-                    lidar,
-                    "Raise LiDAR mount +8 mm to clear bumper fascia FOV clip",
-                    "decisions",
-                    3,
-                    "importance=0.63 role_prior=1.0 personal_relevance=0.4",
-                ),
-                fields=("rank", "reason"),
-            ),
-            Change(
-                item_id=drawing,
-                before=view(
-                    drawing,
-                    "PN-11020 Rev C released; Sunrise still holds Rev B drawings",
-                    "decisions",
-                    3,
-                    "importance=0.56 role_prior=0.6 personal_relevance=0.8",
-                ),
-                after=view(
-                    drawing,
-                    "PN-11020 Rev C released; Sunrise still holds Rev B drawings",
-                    "decisions",
-                    4,
-                    "importance=0.56 role_prior=0.7 personal_relevance=0.4",
-                ),
-                fields=("rank", "reason"),
-            ),
-            Change(
                 item_id=THERMAL,
                 before=view(
                     THERMAL,
@@ -583,15 +540,17 @@ def test_sc_role_change_pins_whole_diff(day6_store: Path, world: World, priors: 
     assert state.diffs[2] == empty_diff("U0EM01")
 
 
-def test_private_cm_hides_t1_only_from_em(day6_store: Path, world: World, priors: Priors) -> None:
+def test_private_cm_preserves_em_lines_and_increases_hidden(
+    day6_store: Path, world: World, priors: Priors
+) -> None:
     base = base_for(day6_store, world, priors)
     state = Room(base).apply(SetPrivate(kind="set_private", channel_id="C0EXTCM", private=True))
 
     assert tuple(s.hidden for s in base.recorded) == (0, 0, 0)
     assert tuple(s.hidden for s in state.selections) == (0, 0, 4)
     assert state.selections[:2] == base.recorded[:2]
-    assert item_ids(state.selections[2]) == item_ids(base.recorded[2]) - {T1}
-    assert tuple(line.item_id for line in state.diffs[2].removed) == (T1,)
+    assert state.selections[2].lines == base.recorded[2].lines
+    assert state.diffs[2] == empty_diff("U0EM01")
     assert state.diffs[:2] == (empty_diff("U0ME01"), empty_diff("U0SC01"))
 
 
@@ -609,7 +568,7 @@ def test_leaving_private_cm_changes_sc_lines(
     assert before.selections[1].hidden == 0
     assert state.selections[1].hidden == 4
     assert item_ids(state.selections[1]) == (
-        item_ids(before.selections[1]) - {ANODIZE, STALE_PACK, T1}
+        item_ids(before.selections[1]) - {ANODIZE, STALE_PACK}
     ) | {DFM}
     assert next(
         line for line in before.selections[1].lines if line.item.item_id == ANODIZE
@@ -746,6 +705,45 @@ def test_owners_follow_effective_ownership(day6_store: Path, world: World, prior
     state = room.apply(SetOwner(kind="set_owner", entity_id="PN-11051", role="EM"))
 
     assert state.owners["PN-11051"] == ("U0EM01",)
+
+
+def test_refused_edit_is_atomic_and_next_edit_succeeds(
+    day6_store: Path, world: World, priors: Priors
+) -> None:
+    room = Room(base_for(day6_store, world, priors))
+    room.apply(SetPrivate(kind="set_private", channel_id="C0EXTCM", private=True))
+    before = room.state()
+
+    with pytest.raises(ValueError, match="U-MISSING"):
+        room.apply(SetRole(kind="set_role", user_id="U-MISSING", role="EM"))
+
+    assert room.state() == before
+    edit = SetRole(kind="set_role", user_id="U0SC01", role="EM")
+    after = room.apply(edit)
+    assert after == room.state()
+    assert after.edits == (*before.edits, edit)
+    assert next(p for p in after.world.personas if p.user_id == "U0SC01").role == "EM"
+
+
+def test_owners_include_inherited_children(day6_store: Path, world: World, priors: Priors) -> None:
+    child = next(e for e in world.entities if e.id == "PN-42010")
+    assert child.parent == "PN-21020"
+    assert child.owner is None
+    assert all(child.id not in p.owned_entities for p in world.personas)
+    room = Room(base_for(day6_store, world, priors))
+    assert room.state().owners[child.id] == ("U0EE01",)
+
+    state = room.apply(SetOwner(kind="set_owner", entity_id=child.id, role="EM"))
+
+    expected = tuple(
+        sorted(
+            p.user_id
+            for p in state.world.personas
+            if p.role is not None and child.id in _owned_set(state.world, p, p.role)
+        )
+    )
+    assert expected == ("U0EE01", "U0EM01")
+    assert state.owners[child.id] == expected
 
 
 @pytest.mark.parametrize("directory", [False, True], ids=["missing", "directory"])
