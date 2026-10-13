@@ -253,6 +253,14 @@ def test_head_flag_selects_that_branch(repo, flag):
     assert rc == 2, "the review of feat was accepted for main's HEAD"
 
 
+def test_fork_head_flag_blocks_despite_a_local_review(repo):
+    """owner:branch names a remote branch; a local branch of that name proves nothing."""
+    _verdict(repo, _head(repo))
+    rc, err = _run("gh pr create --head alice:feat --fill", repo)
+    assert rc == 2
+    assert "names another owner's branch" in err
+
+
 def test_unresolvable_head_flag_blocks(repo):
     _verdict(repo, _head(repo))
     rc, err = _run("gh pr create --head no-such-branch", repo)
