@@ -142,6 +142,10 @@ channel_id, message_ts}], ask_message, absence}`
 - `tasks` links the item to checklist tasks. `effect` is evidence (progress on the task)
   or done (the task is complete). The model picks the task id from the checklist in the
   prompt, and code verifies that the id exists.
+- Target model (D26, designed 2026-10-13): absences leave the Item type and become a
+  derived `Absence` type; selection reads a per-reader `Candidate`; digest code reads a
+  `Workspace`, not the simulator's `World`. Today an absence is an Item with the
+  `absence` field below.
 - `absence` is set exactly when the type is absence: `{source, gate, task, asker,
   days_silent, buffer_consumed, buffer_days}`, with days in working days. `source` is
   checklist or ask in core; each stretch absence rule (section 5 step 5, c to g) adds

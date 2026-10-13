@@ -155,3 +155,20 @@ In order. Each item names its trigger. Measured numbers are from
     list, so the change re-renders the corpus. Trigger: the next re-render.
 14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
     instead of an instant interruption. Trigger: a real-time tier.
+
+## Structure (D26), after the 2026-10-14 interview
+
+In order. Each item is its own unit under `docs/process.md`.
+
+1. `Workspace` out of `World`; `World` composes it. Digest code reads only `Workspace`.
+   Trigger: live Slack ingest or delivery to a real workspace.
+2. Absence split: `ChecklistAbsence | AskAbsence`, an explicit ask id, and `ask_message` on
+   ask items. Trigger: before any exposure record exists.
+3. One day-pipeline module out of `daily/render.py`; a window value on `Selection`; the
+   `Candidate` projection with newest evidence computed in one place. Trigger: the next
+   change to selection.
+4. `ThreadRef` and `MessageRef` value objects in `digest.models`; the simulator's
+   `world.manifest.ThreadRef` is renamed. Trigger: the next change to the files that
+   build or parse thread ids.
+5. A Slack anti-corruption adapter that maps Slack payloads to `Event`. Trigger: live
+   ingest (D7).
