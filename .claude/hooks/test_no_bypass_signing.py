@@ -207,6 +207,7 @@ def test_bypass_words_as_powershell_arguments_fail_closed():
 def test_allows_long_options_that_hold_n_in_windows_shells():
     assert _verdict('powershell -ExecutionPolicy Bypass -NoProfile -Command "git status"') == "ALLOW"
     assert _verdict('cmd //c "git --no-pager log"') == "ALLOW"
+    assert _verdict('pwsh -Command "git status; Write-Output -NoEnumerate done"') == "ALLOW"
 
 
 def test_allows_git_option_after_powershell_command_flag():

@@ -125,6 +125,13 @@ def test_allows_foreign_commit_by_full_git_path(repos):
     assert _verdict(cmd, repos["project"]) == "ALLOW"
 
 
+def test_blocks_commit_on_main_after_redirection_inside_an_argument_list(repos):
+    """A redirection inside `echo`'s arguments does not start a new command, so
+    the words after it cannot switch the branch the commit lands on."""
+    cmd = "echo 2>&1 git.exe switch feature && git.exe commit -m update"
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
 @pytest.mark.parametrize("cmd", ["command -v git commit", "command -V git.exe commit"])
 def test_allows_command_lookup_on_main(cmd, repos):
     """`command -v` only looks a name up; it runs nothing."""
