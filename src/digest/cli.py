@@ -303,6 +303,17 @@ def run(
     typer.echo(digest)
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(8000, help="Port on 127.0.0.1."),
+) -> None:
+    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world."""
+    # Unit 9 imports digest.web inside this function: the web extra is optional, and a
+    # top-level import would break `digest demo` on a plain `uv sync`, as `post` avoids
+    # for slack-sdk.
+    raise typer.Exit(code=_not_yet("serve"))
+
+
 @app.command("eval")
 def eval_cmd(
     world: str | None = typer.Option(
