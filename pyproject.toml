@@ -99,7 +99,7 @@ name = "layers"
 type = "layers"
 layers = [
     "digest.cli",
-    "digest.eval",
+    "digest.eval | digest.driver",
     "digest.daily",
     "digest.corpus",
     "digest.replay | digest.extract | digest.absence",

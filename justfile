@@ -15,16 +15,18 @@ lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run ty check
-    uv run lint-imports
+    # Through Python: Windows Smart App Control blocks the generated .exe launcher.
+    uv run python -c "import sys; from importlinter.cli import lint_imports_command; sys.exit(lint_imports_command())"
 
 # Auto-fix lint and formatting
 fix:
     uv run ruff check --fix .
     uv run ruff format .
 
-# Run the test suite; args pass through (e.g. `just test -k ranking`)
+# Run the test suite; args pass through (e.g. `just test -k ranking`). Through Python:
+# Windows Smart App Control blocks the generated pytest.exe launcher.
 test *ARGS:
-    uv run pytest "$@"
+    uv run python -m pytest "$@"
 
 # Hook guard tests (Claude Code PreToolUse guards); run from the hooks dir so the
 # standalone shims import their siblings the way Claude Code invokes them

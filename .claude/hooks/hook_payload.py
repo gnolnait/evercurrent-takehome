@@ -72,8 +72,8 @@ def read_payload(subject, stream=None):
         _block(subject, "received a non-object hook payload")
 
     # `tool_name` must be a usable dispatch key. settings.json fires these hooks
-    # only for the Bash and mcp merge matchers, so the invocation is always a
-    # guarded one — if the guard cannot read the key it cannot tell what it is
+    # only for the Bash, PowerShell and mcp merge matchers, so the invocation is
+    # always a guarded one — if the guard cannot read the key it cannot tell what it is
     # guarding, which is the same protocol violation as an unparseable payload
     # and gets the same verdict. See _unusable_tool_name for why blank counts.
     tool = data.get("tool_name")
@@ -96,7 +96,7 @@ def read_command(subject, tool_input):
     Exits 2 when present and not a string — a truthy non-string reached
     `.strip()` / `.startswith()` and crashed into the rc fence. Kept separate
     from `read_payload` because the entry points read `command` at different
-    points: the merge guard only needs it on the Bash path, since its
+    points: the merge guard only needs it on the shell-tool path, since its
     `evaluate()` returns before reading it for an mcp tool.
     """
     cmd = tool_input.get("command")
