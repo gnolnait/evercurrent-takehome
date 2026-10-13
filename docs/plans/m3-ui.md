@@ -75,8 +75,8 @@ between digests; it does not make the extractor treat Hamid as the EM.
 | Reader role | `Persona.role` | `profile_for` (role and owned set), `select`, render | none |
 | Channel membership | `Persona.channels` | `can_see`, `select`, render | none |
 | Channel private flag | `Channel.private` | `can_see`, `select`, render | none |
-| Ownership | `Persona.owned_entities`, `Entity.owner` | `profile_for` owned set, `select`, render | none |
-| Gate date, buffer, task cadence, task owner role | `ProjectConfig.gates` | `detect_absences`, `select`, render | none |
+| Owner role of an entity | `Entity.owner`, and the entity leaves every `Persona.owned_entities` | `profile_for` owned set, `select`, render | none |
+| Gate date, task owner role | `ProjectConfig.gates` | `detect_absences`, `select`, render | none |
 | Priors (stretch) | `Priors` | `detect_absences`, `select`, render | none |
 | Recorded scenario (stretch) | scratch store event | `make_event`, extract, `select`, render | replayed from cassettes |
 | Free-text message (stretch) | scratch store event | `make_event`, extract, `select`, render | one or two; refused on a cassette miss unless the presenter approves recording |
@@ -120,21 +120,25 @@ Rules:
 - R4. Atomic publish: an edit builds a candidate state (world, store, selections) and
     replaces the published state only when every step succeeds. A refusal, an exception
   or (stretch) a cassette miss leaves the published state and the log unchanged.
-- R5. Each edit carries an operation id chosen by the browser; a repeated id (a double
-  click, a retried request) is applied once. Every edit sets an absolute value
+- R5. Each edit carries an operation id chosen by the browser; a repeated id with the
+  same edit (a double click, a retried request) returns the current state and appends
+  nothing; a repeated id with a different edit is refused. Every edit sets an absolute value
   ("private = true", "role = EM"), never a toggle, so two participants' edits applied in
   either order give the state the later one asked for.
-- R6 (stretch). Message edits keep unit 7's rule S2: each new message is later than every event in
-  the room store. Each `RunScenario` appends its messages and runs one extract before the
-  next edit, so the extraction requests depend only on the scenario and the base. The
-  offered scenarios touch distinct threads; the acceptance runs each alone and both in
-  each order with no cassette miss.
+- R6 (stretch). Scenarios are exclusive: a `RunScenario` rebuilds the room store from
+  the base store and that one scenario, replacing any earlier scenario, so unit 7's rule
+  S2 (each new message later than every stored event) always holds and the extraction
+  requests are exactly the recorded ones. Running both pinned scenarios in one room
+  would refuse the earlier-timed one, so the page offers one at a time.
 
 ## Sharing
 
-- Rooms. `POST /rooms` creates a room and redirects to `/r/<room_id>`, where `room_id`
-  is 128 random bits in URL-safe base64. The link is the access control: anyone with it
-  joins; the server lists no rooms.
+- Rooms. Only the presenter creates a room: the presenter page carries the presenter
+  token and posts to `POST /rooms`, which redirects to `/r/<room_id>`, where `room_id` is
+  128 random bits in URL-safe base64. The room link is the access control for
+  participants: anyone with it joins; the server lists no rooms. The per-room form token
+  applies to every POST under `/r/<room_id>`; it is not a presenter credential, since
+  every participant's page carries it.
 - Identity. A participant types a name once; it is kept in an HttpOnly, SameSite=Lax
   cookie scoped to the room and written into each edit. No accounts. Every form carries
   a per-room form token that the server checks on each POST.
@@ -195,7 +199,7 @@ without moving it; the session that owns unit 7 is told before the stubs land.
 class SetRole(Frozen):       kind: Literal["set_role"]; user_id: str; role: Role
 class SetMembership(Frozen): kind: Literal["set_membership"]; user_id: str; channel_id: str; member: bool
 class SetPrivate(Frozen):    kind: Literal["set_private"]; channel_id: str; private: bool
-class SetOwner(Frozen):      kind: Literal["set_owner"]; entity_id: str; user_id: str | None
+class SetOwner(Frozen):      kind: Literal["set_owner"]; entity_id: str; role: Role | None
 class SetGateDate(Frozen):   kind: Literal["set_gate_date"]; gate_id: str; date: dt.date
 class SetTaskOwner(Frozen):  kind: Literal["set_task_owner"]; task_id: str; role: Role
 class RunScenario(Frozen):   kind: Literal["run_scenario"]; name: str   # stretch; a file under data/world/kestrel/scripts/
@@ -221,20 +225,41 @@ class RoomState(Frozen):
     log: tuple[LogEntry, ...]
     stale: bool                      # true when message edits exist, so the eval report no longer describes the room
 
+class MessageView(Frozen):          # one stored message, for the world panel
+    channel_id: str
+    thread_ts: str
+    ts: str
+    author: str                      # persona name
+    text: str
+    permalink: str
+
+class RoomBase(Frozen):              # built once at start on the worker thread, never changed
+    world: World                     # the recorded world
+    priors: Priors
+    day: date
+    store_path: Path                 # the base store, replayed and extracted through `day`
+    messages: tuple[MessageView, ...]  # every stored message up to the end of `day`, by channel, thread, ts
+    golden: tuple[dict[str, object], ...]  # golden rows dated on or before `day`, as read from golden.jsonl
+
 def apply_world_edits(world: World, edits: Sequence[Edit]) -> World   # ValueError naming the edit on a refusal
 def build_state(base: RoomBase, log: Sequence[LogEntry]) -> RoomState
 class Room:                                # owns the log file, the lock and the caches
-    def append(self, author: str, edit: Edit) -> RoomState   # validates, appends, rebuilds
+        def append(self, author: str, op_id: str, edit: Edit) -> RoomState   # validates, appends, rebuilds
     def state(self) -> RoomState
 ```
 
-`SetOwner` with `user_id` sets `Persona.owned_entities` of that persona and removes the
-entity from every other persona's list; `None` removes it from all. `Entity.owner` (a
-role) is left unchanged in core; the owned set of SPEC v0.4.3 reads both.
+`SetOwner(entity_id, role)` sets `Entity.owner` to the role (or `None`) and removes the
+entity from every `Persona.owned_entities`, so the role is its only direct owner. The
+owned set (`_owned_set`, `src/digest/daily/profile.py:33-50`) also adds the children of
+an owned entity, so an entity whose `parent` or `subsystem` is owned stays owned by that
+parent's owner. The world panel shows each entity's effective owners, computed by
+`_owned_set` for every reader, so the page never claims a transfer the selection does
+not see.
 
 `digest/web/app.py`: `create_app(base: RoomBase, presenter_token: str) -> FastAPI`.
 
-Routes: `GET /` (create-room form), `POST /rooms`, `GET /r/{room_id}` (the room page),
+Routes: `GET /p/{presenter_token}` (the presenter page with the create-room form),
+`POST /rooms` (presenter token required), `GET /r/{room_id}` (the room page),
 `GET /r/{room_id}/version`, `GET /r/{room_id}/panel/{name}` (HTML fragments: `world`,
 `digests`, `diff`, `log`), `POST /r/{room_id}/edit` (one form per edit kind),
 `POST /r/{room_id}/name`.
@@ -263,17 +288,21 @@ gives the recorded state, and the diffs are empty.
 B8.5 Effects, pinned on day 6 (2026-10-19) with expectations derived by hand from
 `world.yaml` and plan B5.3 before any code:
 - Setting `U0SC01` to role `EM` changes the reader's role prior and owned set (entities
-  whose `owner` is `EM` join, those owned by `supply_chain` leave, `profile.py:33`) and
-  makes the G-DVT1 checklist absences must-see ("you run the gate", `select.py:190`).
+  whose `owner` is `EM` join, those owned by `supply_chain` leave, `profile.py:33`). The
+  G-DVT1 EMC and thermal checklist absences become must-see ("you run the gate",
+  `select.py:190`), the thermal review risk becomes must-see, and the stale drawing pack
+  risk leaves.
   The test pins the whole `ReaderDiff` for `U0SC01`, with its derivation written in the
   test commit.
 - Setting `#ext-sunrise-cm` (`C0EXTCM`) private: its members are `U0ME01`, `U0SC01`,
-  `U0PM01` and `U0CM01`, so `U0EM01` loses every line whose only visible evidence is in
-  that channel (the Sunrise stale drawing pack risk among them) and `hidden` rises;
-  `U0ME01` and `U0SC01` are unchanged.
-- Removing `U0ME01` from `#dvt1-build` changes nothing while the channel is public
-  (`can_see`, `profile.py:52`); after `#dvt1-build` is set private as well, `U0ME01`
-  loses the lines whose only evidence is there.
+  `U0PM01` and `U0CM01`. `U0EM01` loses the decision "PN-51010 T1 gate date moved to
+  2026-10-21" and `hidden` goes from 0 to 4; `U0ME01` and `U0SC01` are unchanged.
+- Then removing `U0SC01` from `#ext-sunrise-cm`: `U0SC01` loses the must-see ask
+  "Confirm anodize PO for DVT-1 brackets", the risk "PN-11020 chassis base built to stale
+  Rev B drawing pack" and the T1 decision, gains two ranked lines that the freed caps
+  admit, and `hidden` goes from 0 to 4.
+- Removing a persona from a public channel changes nothing (`can_see`,
+  `profile.py:52`).
 - Moving G-DVT1 from 2026-10-22 to 2026-10-29 (buffer 7 working days) puts day 6 before
   the buffer, so the G-DVT1 checklist absences leave every digest.
 
@@ -334,6 +363,7 @@ limits refuse with a reason.
 | P2 | `select_digest` takes the world separately from the store | read `src/digest/daily/render.py:53-100` | verified |
 | P3 | `detect_absences` reads gates from the world passed to it, not from the store | `render.py:99`; read `src/digest/absence.py:205` | verified for the call site; the function body is checked in the stubs commit |
 | P4 | Building the day-6 base store from cassettes takes under 20 seconds | `digest demo` from a fresh clone ran in 9 seconds on 2026-10-12 | verified |
+| P11 | The B8.5 effects | each computed on the day-6 store from the committed cassettes with `model_copy` worlds on 2026-10-12 | verified; the test pins them |
 | P5 | A room rebuild after a free edit (re-select and render three readers) takes under 200 ms | `build_digest` for the three readers on the day-6 store: 10 to 12 ms; `load_world` 61 ms (2026-10-12) | verified |
 | P8 | The room world can skip the `World` script checks without breaking selection | `select` and `profile_for` read personas, channels, entities and gates only; checked again by B8.1 | verified by reading, pinned by B8.1 |
 | P9 | Free edits never change an extraction request | the store is built from the recorded world only; B8.2 compares cassette keys | pinned by B8.2 |
