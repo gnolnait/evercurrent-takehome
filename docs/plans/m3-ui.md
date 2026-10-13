@@ -45,7 +45,7 @@ of unit 7 (the CM bracket blocker, the private leads message) as one-click butto
 unit 7 merges with its cassettes; the message panel with in-page anchors that the digest
 sources link to; sharing with interviewers' own browsers (participant cookies and names,
 1.5-second polling, a presenter link, edit attribution, a quick tunnel; designed in v0.6
-of this plan, commit 8a0490f); a layout for phone width; a day slider (core fixes day 6);
+of this plan, commit a4d430e); a layout for phone width; a day slider (core fixes day 6);
 priors editing.
 
 Out: free-text messages (refused unless recorded); editing message
@@ -134,14 +134,15 @@ Rules:
 ## Serving
 
 - One user, one process. `digest serve [--port 8000]` binds 127.0.0.1 only and prints the
-  URL. The page is a plain HTML form page with no script: each edit is a form POST that
-  redirects back to the page (post, redirect, get), so a browser refresh never repeats an
-  edit.
-- Threads. Every route is an `async def`, so all of them run on the event loop's one
-  thread, and the base store is opened on that thread at start: `Store.open` uses
-  `sqlite3.connect` with the default `check_same_thread` (`src/digest/store.py:99`), so a
-  connection must not cross threads. Edits are therefore applied one at a time. A rebuild
-  takes about 10 ms (P5), so the loop never waits long.
+  URL. The page is a plain HTML form page with no script. A valid edit or a reset
+  answers 303 to `/` (post, redirect, get), so a refresh never repeats it; a refused edit
+  answers 400 with the page, and a refresh only repeats the refusal.
+- Threads. No SQLite connection outlives one rebuild: `Room` keeps the store path and
+  opens the store inside each `apply` and `reset` call, on whatever thread runs it, then
+  closes it. `Store.open` uses `sqlite3.connect` with the default `check_same_thread`
+  (`src/digest/store.py:99`), so a connection must not cross threads, and FastAPI's test
+  client runs the app on another thread. Every route is an `async def`, so edits run one
+  at a time on the event loop. A rebuild takes about 10 ms (P5).
 - Model calls. `digest serve` reads no key and does not build `Settings`, as in
   `digest demo`.
 - Text. All text is rendered with Jinja autoescape.
@@ -211,8 +212,13 @@ class RoomState(Frozen):
 def apply_world_edits(world: World, edits: Sequence[Edit]) -> World  # ValueError naming the edit on an R3 refusal
 def build_state(base: RoomBase, store: Store, edits: Sequence[Edit]) -> RoomState
 def build_base(store: Store, world: World, priors: Priors) -> RoomBase  # store already replayed and extracted through day 6
-class Room:                          # owns the base store connection and the current state
-    def __init__(self, base: RoomBase, store: Store) -> None   # state() is build_state(base, store, ())
+class RoomLike(Protocol):            # what the web app needs; unit 9 tests use a fake
+    def apply(self, edit: Edit) -> RoomState: ...
+    def reset(self) -> RoomState: ...
+    def state(self) -> RoomState: ...
+
+class Room:                          # implements RoomLike; keeps the store path, never an open connection
+    def __init__(self, base: RoomBase) -> None   # state() is build_state(base, store, ()) on a store it opens and closes
     def apply(self, edit: Edit) -> RoomState   # validates, rebuilds; ValueError on a refusal, state unchanged
     def reset(self) -> RoomState
     def state(self) -> RoomState
@@ -225,10 +231,13 @@ owned entity, so an entity whose `parent` or `subsystem` is owned stays owned by
 parent's owner. `RoomState.owners` comes from `_owned_set` for every human persona, and
 the world panel shows it, so the page never claims a transfer the selection does not see.
 
-`digest/web/app.py`: `create_app(room: Room) -> FastAPI`. Routes: `GET /` (the page),
+`digest/web/app.py`: `create_app(room: RoomLike) -> FastAPI` and
+`server_config(app: FastAPI, port: int) -> uvicorn.Config` (host 127.0.0.1). Routes: `GET /` (the page),
 `POST /edit`, `POST /reset`. A valid edit and a reset answer 303 See Other to `/`; a
-refused edit answers 400 with the page and the refusal. `digest serve` opens the store,
-builds the base and the `Room`, and closes the store when the server stops.
+refused edit answers 400 with the page and the refusal. `digest serve` builds the
+day-6 store as `digest demo` does, then the base and the `Room`, and runs the server from
+`server_config`. The page's names and checklist tasks for `line_parts` come from the room
+world, so a task owner edit shows in the absence heading.
 
 `POST /edit` form fields (url-encoded): `kind` (the `Edit` kind) and, by kind:
 `set_role`: `user_id`, `role`; `set_membership`: `user_id`, `channel_id`, `member`;
@@ -295,8 +304,9 @@ B9.1 The page shows the world, digest and diff panels, the edit forms and the ed
 All persona, channel, entity and item text is escaped: a name containing `<script>`
 renders as text. No link on the page points at the Slack workspace.
 
-B9.2 A valid edit POST redirects to `/`, and the next `GET /` shows the new digests and
-diffs. A browser refresh after the redirect repeats nothing.
+B9.2 A valid edit POST answers 303 to `/`, and the next `GET /` shows the new digests and
+diffs. After an edit whose `last_effect` is all zero, the page says the edit changed no
+digest.
 
 B9.3 A refused edit shows its reason next to the edit forms and leaves the digests
 unchanged.
@@ -304,8 +314,11 @@ unchanged.
 B9.4 The digest panel's heading and summary of every line equal `line_parts` for that
 line, so the page and `digest run` use the same words.
 
-B9.5 `digest serve` binds 127.0.0.1 and reads no key: it starts and serves with no
-`OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` in the environment.
+B9.5 `server_config` sets host 127.0.0.1. `create_app` and `build_base` run with no
+`OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` in the environment and build no `Settings`.
+
+B9.6 `POST /reset` answers 303 to `/`, and the next `GET /` equals the first `GET /` of the
+same room.
 
 ## Acceptance
 
@@ -351,4 +364,4 @@ Defaults the user has not overruled (both reviewers and the advisor recommended 
 - Free-text messages: refused unless recorded; not in this plan.
 - Schedule: the diff stub PR and the UI stubs PR merged by 10:00 PT on 2026-10-13; units 8
   and 9 merged by 18:00 PT; rehearsal on the morning of 2026-10-14. Past 18:00 PT on
-  2026-10-13 with unit 9 not merged, the demo is `just demo` in a terminal.
+  2026-10-13 with units 8 and 9 not both merged, the demo is `just demo` in a terminal.
