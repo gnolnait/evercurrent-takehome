@@ -8,6 +8,11 @@ blockers, risks, asks, schedule, spec and BOM changes) with claims such as
 `(PN-31010, rev) = C`, finds the checklist tasks and asks that went silent, and then
 selects and renders a different digest for each reader.
 
+What runs today is the second half of the thesis and the per-reader selection: absences
+("Not happened"), must-see rules, role-aware ranking and a source for every line. The
+first half, a ledger of what each reader was last told, is designed but not built; see
+[Scope](#scope) for why.
+
 ## Run the demo
 
 No API key is needed. The demo replays recorded model calls (cassettes) for a synthetic
@@ -17,6 +22,23 @@ engineer, a supply chain engineer and an engineering manager.
 ```bash
 uv sync --all-extras --dev
 uv run digest demo
+```
+
+Part of the mechanical engineer's digest (summaries and sources trimmed):
+
+```text
+Daily digest for Nadia Brenner (ME) - 2026-10-19
+Since your digest of 2026-10-16
+
+Not happened
+- Not happened: Grace Okonkwo asked Ana Folau, no reply for 3 working days
+  EM Grace Okonkwo asks FW owner Ana Folau when TST-SAF-01 will be rerun on the DVT firmware ...
+  source: https://kestrel-k2.slack.com/archives/C0ENGEF/p1791997800010040
+
+Risks
+- PN-11020 chassis base built to stale Rev B drawing pack (PN-11020, V-SUNRISE, DOC-11020-CM, chassis) [must see]
+  FAI photos and CMM for PN-11020 show the Rev B hole pattern. Sunrise is building from a stale drawing pack. ...
+  source: https://kestrel-k2.slack.com/archives/C0EXTCM/p1792164600010061
 ```
 
 The run takes about 5 s on a laptop; a test holds it under 60 s. A digest shows the sections that have lines (Needs you,
