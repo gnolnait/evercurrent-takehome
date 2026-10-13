@@ -292,9 +292,12 @@ def test_stale_project_dir_falls_back_to_cwd(repo):
 
 
 def test_rc_fence_coerces_nonverdict_exit_to_block(tmp_path):
-    """The bash fence is the production fail-closed linchpin: it coerces any
-    non-{0,2} python exit (import/syntax error = 1, missing interpreter = 127)
-    to a block, because Claude Code treats every non-2 exit as non-blocking.
+    """The bash fence is the fail-closed linchpin whenever the project's
+    settings fence runs it (CLAUDE_HOOK_PYTHON not an interpreter path; with
+    one, the settings fence coerces, see test_guard_launch_fence.py): it
+    coerces any non-{0,2} python exit (import/syntax error = 1, missing
+    interpreter = 127) to a block, because Claude Code treats every non-2 exit
+    as non-blocking.
     Every other test drives python to 0/2, so this exercises the '*)' arm
     directly with a stub dispatcher that exits non-{0,2}."""
     import shutil

@@ -29,8 +29,10 @@ Allowlist (benign Bash shapes pass even with pending markers):
   chmod, touch, mkdir, mv, cp, rm, echo, printf  - file ops are not the gate point
 
 Verdict: a deny is printed as PreToolUse JSON (permissionDecision "deny") with
-exit 0. Malformed payloads fail closed through hook_payload (exit 2); the bash
-fence `prove-test-gate-actions` coerces any other non-{0,2} exit to a block.
+exit 0. Malformed payloads fail closed through hook_payload (exit 2); the
+launcher coerces any other non-{0,2} exit to a block: the project's
+settings.json fence when it runs this file directly (CLAUDE_HOOK_PYTHON set to
+an interpreter path), else the bash fence `prove-test-gate-actions`.
 
 Bypass: `export BYPASS_PROVE_TEST=1` BEFORE launching the session. Inline
 `BYPASS_X=1 cmd` does NOT reach hooks. Each bypassed (otherwise-denied) command

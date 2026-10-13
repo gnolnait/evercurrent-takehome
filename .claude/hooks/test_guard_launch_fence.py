@@ -18,7 +18,10 @@ The prove-test gate's command is the same fence around a different runner, so
 every behaviour test runs against both. Each fence has two branches: with
 `CLAUDE_HOOK_PYTHON` set to an interpreter path it runs the runner's python
 file with that interpreter directly, which skips the bash wrapper's launch
-cost; otherwise it runs the bash wrapper. Every test runs on both branches.
+cost; otherwise it runs the bash wrapper. The shared behaviour tests run on
+both branches; a few cases belong to one branch only (the exec bit to the
+wrapper; the interpreter value to the direct branch). The never-blocking
+track-edit launcher has the same two branches and its own test.
 
 These tests execute the command string exactly as Claude Code does (`/bin/sh
 -c`; Git Bash's `sh` on Windows), so they validate the artifact the consumer reads, not a copy of it.
@@ -34,9 +37,10 @@ from pathlib import Path
 
 import pytest
 
-from hooktest_support import IS_WINDOWS, sh_exe
+from hooktest_support import IS_WINDOWS, PYTHON, sh_exe
 
 SETTINGS = Path(__file__).parent.parent / "settings.json"
+PROJECT = Path(__file__).parents[2]
 
 
 def guard_commands() -> list[str]:
@@ -437,3 +441,59 @@ def test_without_its_script_the_direct_branch_runs_the_wrapper(
     Fence(fence.hook, fence.script, "wrapper").place(primary, "exit 0")
     result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize("fence", DIRECT, ids=_id)
+def test_with_both_runners_present_the_direct_branch_wins(
+    primary: Path, fence: Fence
+) -> None:
+    """A project holds both files. If the fence preferred the wrapper there,
+    every other case would still pass and the direct branch would never run."""
+    Fence(fence.hook, fence.script, "wrapper").place(primary, "exit 2")
+    fence.place(primary, "exit 0")
+    result = run_fence(fence.command(), primary, primary, extra_env=fence.env())
+    assert result.returncode == 0
+
+
+def track_command() -> str:
+    """The track-edit launcher from the PostToolUse edit-tools group."""
+    hooks = json.loads(SETTINGS.read_text())["hooks"]["PostToolUse"]
+    (command,) = {
+        h["command"]
+        for entry in hooks
+        if "Edit" in entry.get("matcher", "")
+        for h in entry["hooks"]
+        if "prove-test-track-edit" in h["command"]
+    }
+    return command
+
+
+@pytest.mark.parametrize("branch", ["wrapper", "direct"])
+def test_the_track_edit_launcher_writes_a_marker(tmp_path: Path, branch: str) -> None:
+    """Track-edit never blocks, so a launcher that silently stops running it
+    writes no marker, and the prove-test gate then passes unproven tests. Run
+    the project's real launcher and runner on a test-file edit and require
+    the marker the gate reads."""
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    test_file = repo / "tests" / "test_x.py"
+    test_file.write_text("def test_x():\n    assert True\n")
+    state = tmp_path / "state"
+    payload = json.dumps(
+        {
+            "session_id": "s1",
+            "cwd": str(repo),
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(test_file)},
+        }
+    )
+    env = {"PROVE_TEST_STATE_DIR": str(state)}
+    if branch == "direct":
+        env["CLAUDE_HOOK_PYTHON"] = PYTHON
+    result = run_fence(
+        track_command(), PROJECT, repo, payload=payload, extra_env=env
+    )
+    assert result.returncode == 0
+    assert list(state.glob("s1-*.json")), result.stderr

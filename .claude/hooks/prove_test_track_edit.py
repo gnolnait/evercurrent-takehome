@@ -11,8 +11,9 @@ Two-stage by design: edits are iterative; friction at each Edit is wrong.
 Friction at the *next non-trivial action* (commit, push, gh pr) is right.
 
 Never blocks the edit itself: every path exits 0, including a malformed
-payload (hook_payload's fail-closed exit is caught and discarded here; the
-bash fence `prove-test-track-edit` also forces exit 0).
+payload (hook_payload's fail-closed exit is caught and discarded here; its
+launcher, the settings.json command or the bash fence `prove-test-track-edit`,
+also forces exit 0).
 
 Bypass: BYPASS_PROVE_TEST=1 exported before the session launches (an inline
 `BYPASS_X=1 cmd` does NOT reach hooks). The bypass is enforced and logged in

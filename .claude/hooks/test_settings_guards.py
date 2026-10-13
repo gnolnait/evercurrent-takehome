@@ -32,7 +32,7 @@ SETTINGS = Path(__file__).parents[1] / "settings.json"
 #
 # With `CLAUDE_HOOK_PYTHON` set and `guard_runner.py` present, the fence runs
 # the python file with that interpreter itself, which skips the bash wrapper's
-# launch cost (about 80 ms per call on Windows). Both paths still come from
+# launch (a bash start and its interpreter lookup). Both paths still come from
 # `CLAUDE_PROJECT_DIR`, and both exits go through the same coercion. Without
 # the variable, or without the python file, the fence runs the wrapper. The
 # variable counts only when it is a path (it holds a `/` or `\`): a shell runs
