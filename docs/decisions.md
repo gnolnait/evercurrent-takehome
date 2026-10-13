@@ -513,6 +513,62 @@ reuses the authority model; nothing new enters the ledger.
 Would change it. A workspace that tickets nothing from chat: the metric reports n = 0
 and the golden labels carry the eval alone.
 
+## D26. Target domain model: three contexts, absences out of Item
+
+Status: designed, 2026-10-13. Built parts: stable item ids (PR #49) and the digest window
+(branch `digest-window`, not merged). Nothing below is built unless it says so.
+
+Decision.
+- Three domain contexts inside the one process, as the packages that exist today; no
+  package moves:
+  - Extraction (`extract/`) interprets messages, verifies quotes and produces items and
+    claims. It owns no rule about what is true later.
+  - Project knowledge (`project.py`, `absence.py`, and the ledger when built) owns the
+    accepted items, claims and their history, task state and absences.
+  - Digest (`daily/`) owns reader profiles, selection, rendering, delivery and exposure.
+  Ingestion and the simulator are adapters and test support. The store, the model
+  gateway and the settings are infrastructure. Domain code does not import the simulator.
+- `Item` stays the stored aggregate for extracted information. The `absence` item type
+  and the `absence` field leave it.
+- `Absence = ChecklistAbsence | AskAbsence`, derived at a cutoff and never stored. An
+  `AskAbsence` names its ask by item id. An ask item carries `ask_message`
+  (SPEC section 4), so detection does not infer the asking message from evidence authors.
+- Selection reads a `Candidate`: a projection for one reader and one cutoff, holding the
+  subject (`Item | Absence`), the evidence the reader may see, and the newest evidence.
+  Visibility runs before a candidate exists. `Selection` holds one window value (the
+  previous digest and the first-digest length).
+- `World` composes a `Workspace` (time zone, workspace URL, project, channels, personas,
+  entities) with the simulator's dates, scripted events and expected outcomes. Digest code
+  reads only `Workspace`.
+- `ThreadRef(channel_id, thread_ts)` and `MessageRef(channel_id, ts)` replace string thread
+  ids and loose (channel_id, ts) pairs.
+- Ledger and exposure, so this split is not redone:
+  - An item's claims stay the extractor's assertions with their message. The ledger
+    derives claim records with their own ids, keyed by (entity, attribute, param), with
+    asserted, observed and invalid times and a reference back to the item and the message.
+    Ledger edges (supersedes, contradicts) connect claim ids, not item ids.
+  - Exposure is append-only and written by Digest at delivery: reader, run, delivered
+    part, time, and the item ids and claim ids shown. An absence is exposed by its own key
+    (day, source, task or ask), never by an item id.
+  - Items are overwritten in place today, so exact exposure needs a kept item revision or
+    a delivery snapshot.
+
+Why. The code works around one type that carries three concepts:
+- `daily/select.py` finds an ask absence's ask by stripping an id prefix (`_cited_ask`).
+- `models.py` gives every item a nullable `AbsenceDetail`.
+- `absence.py` infers the asking message from evidence authors.
+- `daily/` imports `World` from `world.schema`, so live mode would build a fake world.
+Two independent design reviews (2026-10-12 and 2026-10-13) named the same split.
+
+Not chosen. Renaming `Item` to `Finding` (it touches the stored table and the tests for no
+change in behaviour); a package migration; a repository per type, an event bus or separate
+services; a graph database (D22 amendment).
+
+Order. The Structure section of `docs/later.md`.
+
+Would change it. A second process or team that owns one context: its boundary then becomes
+an API.
+
 ## Validation against EverCurrent's published experience
 
 Each decision above is checked against what EverCurrent has written publicly, so the
