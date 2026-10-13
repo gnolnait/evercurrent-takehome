@@ -78,8 +78,12 @@ thread_ts=<the event's Slack thread root ts>, filename=<world name>, content=<by
 The bytes are a placeholder: a one-page PDF that shows the file name and the line
 "Kestrel K2 test data" for a `.pdf` name, and a UTF-8 text file with the same line for any
 other name (the name is kept, for example `BLD-DVT1_build_log_2026-10-23.xlsx`). The map
-records the file's `permalink` from the response's `file` object. The live spike in
-"Before tests" confirms where the permalink sits; the adapter returns only that value.
+records the file's `permalink` from the response's `file` object; the adapter returns
+only that value. Live spike, 2026-10-13, slack_sdk in the project's `slack` extra: the
+response keys are `ok`, `file` and `files` (one entry); `file.permalink` is set at once
+(`https://<ws>.slack.com/files/<bot user>/<file id>/<lower-case name>`), while
+`file.shares` is empty and `file.filetype` is blank, because Slack processes the file
+after the response. So the seeder needs no `files.info` call.
 
 B7. **Edits and deletes: deferred.** The Kestrel corpus has none. An event with
 `edited: true` or `deleted: true` in the selection stops the run before any write and
