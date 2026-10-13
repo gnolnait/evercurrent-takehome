@@ -128,7 +128,7 @@ def select(
     lines: list[Line] = []
     for section, cap in SECTION_CAPS.items():
         lines += sorted(must_see[section], key=lambda line: line.item.item_id)
-        lines += sorted(ranked[section], key=_rank_key)[:cap]
+        lines += sorted(ranked[section], key=lambda line: _rank_key(line, newest_evidence))[:cap]
     # After the caps and the threshold: a shown ask absence line replaces the one ask its id names.
     absent_asks = {_cited_ask(line.item) for line in lines} - {None}
     lines = [
@@ -188,10 +188,17 @@ def _section_of(item: Item, profile: Profile) -> Section:
     return SECTIONS[item.type]
 
 
-def _rank_key(line: Line) -> tuple[float, int, str]:
-    """Score to six significant figures, highest first; then newest evidence; then item_id."""
-    newest = max(ts_micros(entry.message_ts) for entry in line.item.evidence)
-    return (-float(f"{line.score:.6g}"), -newest, line.item.item_id)
+def _rank_key(line: Line, newest_evidence: Mapping[str, int]) -> tuple[float, int, str]:
+    """Score to six significant figures, highest first; then newest evidence; then item_id.
+
+    Newest evidence comes from `newest_evidence`. When the id is not in the map, it is the
+    greatest `message_ts` of the item's evidence.
+    """
+    item = line.item
+    newest = newest_evidence.get(
+        item.item_id, max(ts_micros(entry.message_ts) for entry in item.evidence)
+    )
+    return (-float(f"{line.score:.6g}"), -newest, item.item_id)
 
 
 def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
