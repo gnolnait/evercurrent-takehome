@@ -367,6 +367,11 @@ def test_bare_relative_cd_blocks(repo):
     assert "changes directory or HEAD" in err
     rc, err = _run("cd ./sub && " + CREATE, repo)
     assert rc == 0, err
+    # A dot-name such as .hidden is still a CDPATH lookup.
+    (repo / ".hidden").mkdir()
+    rc, err = _run("cd .hidden && " + CREATE, repo)
+    assert rc == 2
+    assert "changes directory or HEAD" in err
 
 
 @pytest.mark.skipif(os.name != "nt", reason="MSYS drive paths exist only on Windows")
