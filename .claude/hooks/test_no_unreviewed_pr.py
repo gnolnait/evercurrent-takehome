@@ -331,6 +331,11 @@ def test_powershell_tool_creation_with_review_allows(repo):
     pytest.param('powershell -Command "gh pr create --fill"', id="powershell-command"),
     pytest.param("pwsh -c 'gh pr create --fill'", id="pwsh-c"),
     pytest.param("cmd /c gh pr create --fill", id="cmd-c"),
+    # Windows names are case-insensitive.
+    pytest.param('cmd /c "GH pr create --fill"', id="cmd-c-upper-case"),
+    pytest.param('pwsh -Command "gh api graphql --input mutation.json"', id="pwsh-graphql-file"),
+    # A creation found before an unreadable segment must not be dropped.
+    pytest.param('GH pr create --fill; cmd /c "echo pr create"', id="creation-then-unreadable"),
 ])
 def test_windows_forms_without_review_block(cmd, repo):
     rc, _err = _run(cmd, repo)
