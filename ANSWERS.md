@@ -1,35 +1,39 @@
 # Technical questions
 
-Draft v0.1, 2026-10-06. Each answer is stated in general terms first, then shown as it
-appears in this repo, so the code is the evidence for the claim.
+Draft v0.2, 2026-10-12. Each answer is stated in general terms first, then shown as it
+appears in this repo, so the code is the evidence for the claim. Each "In this repo"
+paragraph says what is built and what is designed.
 
 ## LLM behaviour: how do you handle LLMs losing context in long-running or multi-step workflows?
 
 Treat context as a cache, not as state. The state lives outside the model in typed
 records, and every model call is stateless and purpose-built.
 
-- Externalize state. The item store, the claim ledger and the per-user profile are the
-  memory. A model never has to remember what it extracted yesterday; it is handed the
+- Externalize state. The item store and the per-user profile are the memory, and a
+  claim ledger is designed to join them. A model never has to remember what it extracted yesterday; it is handed the
   existing items for the thread it is looking at.
 - Keep each call small and scoped. The extraction unit is a thread delta: new messages,
   the thread root, the items already known for that thread, and a glossary. Nothing
   else. Long threads are processed incrementally, not re-read whole.
 - Make stages idempotent and resumable. Each stage run is keyed by
-  (thread_id, last_ts, prompt_version, model) and recorded. A crash or a prompt change
-  re-runs exactly what is stale, and nothing is lost because nothing lived only in a
-  conversation.
+  (thread_id, last_ts, prompt_version, model) and recorded. A crash re-runs only the
+  unfinished runs, and nothing is lost because nothing lived only in a conversation. A
+  new prompt version starts from a fresh store, so results from two prompt versions
+  never mix.
 - When a conversation is unavoidable (an interactive agent), compact with explicit
   retention rules: preserve item ids, part number and revision, decisions, open
   questions and permalinks; drop tool output once it has been turned into a record.
   Use sub-agents with clean contexts that return condensed, structured summaries rather
   than one long agent accumulating everything.
-- Verify against the source of truth, not against memory. Every claim the digest makes
-  cites a message whose text is checked in code; the model's recollection is never
-  trusted on its own.
+- Verify against the source of truth, not against memory. Every digest line cites a
+  message, and code checks its quote against that message's text; the model's
+  recollection is never trusted on its own.
 
-In this repo: `src/digest/pipeline/` is a DAG of stage functions over SQLite tables;
-the `stage_runs` table is the checkpoint; the extraction prompt receives
-`existing_items` for the thread; there is no long-lived conversation anywhere.
+In this repo (built): `src/digest/extract/stage.py` runs extraction per thread delta and
+passes the thread's existing items, the glossary and the checklist tasks of gates on or
+after the day; the `stage_runs` table in `src/digest/schema.sql` is the checkpoint; there
+is no long-lived conversation anywhere. Designed, not built: the current ledger values in the extraction
+prompt (D5).
 
 ## Retrieval: how do you address cases where vector similarity returns many nearly identical results with small but critical differences?
 
@@ -38,7 +42,7 @@ structure.
 
 - Extract structure before you compare. "PN-31010 Rev B" and "PN-31010 Rev C" embed
   almost identically, and published results show embedding models largely fail to
-  separate texts that differ only in a number. So the pipeline first normalizes
+  separate texts that differ only in a number. So first normalize
   identifiers (part numbers, revisions, ECO ids, PO numbers, dates, quantities) with
   deterministic parsers.
 - Block, then diff. Candidate pairs come from shared entity keys, lexical hits on
@@ -55,10 +59,14 @@ structure.
 - At presentation time, apply diversity (MMR) but exempt items that differ in a
   discriminating field, so the digest never hides "Rev C" behind "Rev B".
 
-In this repo: `src/digest/link/` implements normalizers, blocking, field diff and the
-adjudicator; `tests/test_link.py` includes the "same part, different rev" case as a
-regression test; no vector database is used in v1 because this cascade meets the
-acceptance criteria without one.
+In this repo (built): `src/digest/extract/normalize.py` maps glossary aliases and splits a
+single-letter revision suffix, and `src/digest/extract/verify.py` normalizes revision and
+quantity forms and drops a claim whose entity does not resolve. Designed, not built: the
+linker (blocking, field diff and the adjudicator), ECO and PO id parsers, and checks of
+values against the cited text (SPEC section 5). The ledger and the linker are cut from the
+demo under the SPEC day-3 rule, as a conservative scope decision: the eval's claim
+precision is 0.537 (n = 41), but it uses stricter matching on golden threads only, so it
+does not establish whether keying precision meets 0.8. No vector database is used.
 
 ## Evaluation: how do you evaluate LLM-generated content and summaries?
 
@@ -88,8 +96,14 @@ this reader", and measure each with the cheapest method that is actually reliabl
   time-to-action) logged from day one with impressions so ranking changes can be
   evaluated offline later.
 
-In this repo: `digest eval` writes `reports/eval-<date>.md` with all of the above;
-citation validity is a release gate at 100%.
+In this repo (built): `digest eval` writes `reports/eval-<date>.md` with precision and
+recall per item type, claim precision and recall, citation validity, triage recall and
+the absence false-alarm rate, each with its n, and a list of metrics not run. Citation
+validity is a release gate at 100%. The current report gives citation validity 1.0
+(n = 73), claim precision 0.537 (n = 41), and 7 false among 23 detected absences
+(0.304). That last number is the share of detected absences that are false, not yet the
+SPEC A6 rate over silences that were not stalls. Designed, not run: the faithfulness judge,
+must-see recall and nDCG, the baselines and the online signals.
 
 ## System design: when would you use function calling versus MCP in production?
 
@@ -113,8 +127,10 @@ authorization.
   read-only by default; pin spec versions and validate tool results like any other
   untrusted input.
 
-In this repo: pipeline calls use the Anthropic SDK directly with schema-enforced
-output and no tools; an MCP server over the item store is listed in `docs/later.md`.
+In this repo (built): pipeline calls go through one wrapper, `src/digest/llm/client.py`,
+with schema-enforced output and no tools, and an import contract keeps the SDK inside
+`digest.llm`. Designed, not built: a stdio MCP server with nine read tools and one
+feedback tool (D20).
 
 ## System design: how would you handle Slack API failures?
 
@@ -137,9 +153,12 @@ so that every side effect is safe to repeat.
   first; dedupe inbound events on event id, since retries and multiple Socket Mode
   connections deliver duplicates; make feedback writes upserts.
 - Acknowledge fast, work later. Events and button clicks must be acknowledged within
-  three seconds or Slack retries; slow work (LLM calls, database) runs after the ack.
-- Assume live events will be missed. Socket Mode reconnects on its own; a periodic
-  reconciliation read of the last 26 hours fills gaps; backfill resumes from a stored
+  three seconds or Slack retries; slow work (LLM calls, extraction) runs after the ack.
+  Write the raw event to the store before the ack: by default Bolt acknowledges before
+  the listener runs, so a crash after the ack loses the event.
+- Assume live events will be missed. Socket Mode reconnects on its own; a
+  reconciliation read before each digest build fills gaps, and it also walks thread
+  replies, because channel history does not show a new reply to an old thread; backfill resumes from a stored
   per-channel watermark so a crash never restarts from zero.
 - Isolate and observe. One user's or channel's failure does not stop the batch; a
   degraded digest beats none; structured logs per call (method, error code, retries,
@@ -147,7 +166,7 @@ so that every side effect is safe to repeat.
   delivered nothing. Keep stored Slack data minimal and short-lived, and never train on
   it, per the API terms.
 
-In this repo: `src/digest/slack/client.py` wraps one `WebClient` with the rate-limit
-and server-error retry handlers installed, structured logging and a delivery ledger;
-`tests/test_slack_client.py` injects a fake retry handler to prove the 429 path
-without network.
+In this repo (built): ingest is an upsert on (channel_id, ts) in `src/digest/store.py`,
+so a repeated event is harmless, and stage runs resume after a crash. Designed, not
+built: the Slack client with the retry handlers, the delivery ledger and their tests
+(D7, D13).

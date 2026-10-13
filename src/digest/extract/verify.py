@@ -66,7 +66,7 @@ def verify(
     drops = dict.fromkeys(DROP_FIELDS, 0)
     # One entry per item id. A later output for the same id merges against the earlier result.
     items: dict[str, Item] = {}
-    for n, raw in enumerate(extraction.items):
+    for raw in extraction.items:
         evidence = _evidence(raw.evidence, citable, drops)
         if evidence is None:
             continue
@@ -76,7 +76,13 @@ def verify(
         old_claims: list[Claim] = []
         old_links: list[TaskLink] = []
         if raw.item_id is None:
-            item_id = f"{delta.thread_id}#{delta.last_ts}#{n}"
+            # A new id names the earliest cited message and the lowest free k. For an item with
+            # its anchor to itself it is stable against delta boundaries and output order. Items
+            # that share an anchor take k in the order they first appear.
+            anchor_ts = min((entry.message_ts for entry in evidence), key=ts_micros)
+            k = 0
+            while (item_id := f"{delta.thread_id}#{anchor_ts}#{k}") in existing or item_id in items:
+                k += 1
         else:
             item_id = raw.item_id
             old = items.get(item_id, existing[item_id])

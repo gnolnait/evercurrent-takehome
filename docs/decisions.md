@@ -30,8 +30,9 @@ default flips with one config value and the judge becomes Claude.
 - Extraction (bulk, nightly): Haiku-class. Cheap, fast, good enough for schema-filling
   when the schema is flat and the rationale field comes first.
 - Dedup adjudication, watch-prompt matching, low-confidence re-extraction: Sonnet-class.
-- Faithfulness judge: a different family (GPT) when a key is present, else Opus-class with
-  the known-bias caveat printed in the eval report.
+- Faithfulness judge: a family different from both the extractor and the corpus renderer
+  when a key is present (D12 amendment of 2026-10-12), else Opus-class with the
+  known-bias caveat printed in the eval report.
 Exact model ids and prices are read from the Anthropic docs at implementation time, not
 from memory, and recorded in `config/models.yaml`.
 
@@ -61,6 +62,12 @@ needed to hit the acceptance criteria. Adding a vector store would be the kind o
 resume-driven complexity a strong reviewer penalizes. Embeddings can be added behind the
 blocking step later (sqlite-vec or Voyage) without touching the schema.
 
+Amended 2026-10-12 (status): the built schema (`src/digest/schema.sql`) has five tables:
+meta, events, stage_runs, items and triage, with an FTS5 index over events only. Evidence,
+claims and task links are JSON columns of items. Threads, item sources, item links,
+project state, profiles, impressions and feedback are designed, not built. Cassettes are
+JSON files under `data/cassettes/`, with no index table.
+
 ## D5. Extraction unit and citation discipline
 
 Decision. The unit of work is the thread delta. The model receives the new messages, the
@@ -81,6 +88,12 @@ digest renders quoted and model text as plain text and links only constructed pe
 Amended 2026-10-12 (SPEC v0.4.3): evidence entries and task links carry `channel_id`
 beside `message_ts`, because a Slack `ts` is unique only within a channel and merged
 items cite more than one channel.
+
+Amended 2026-10-12 (status): two parts of the 2026-10-11 amendment are designed, not
+built. The code does not check a claim value, an owner or a due date against the cited
+text: `verify.py` resolves the entity and the owner through the glossary, checks that a
+claim cites a message the item holds, parses the due date, and normalizes the value form. The prompt carries no ledger values, because the ledger is cut (SPEC section
+9). The value check, with a repair step before a drop, is in `docs/later.md`.
 
 ## D6. Ranking: must-see lane plus ranked lane, explainable by construction
 
@@ -135,6 +148,17 @@ Slack's acceptance for Slack and on render for the other surfaces and replay; ea
 part carries the run id in message metadata so retries post only missing parts; revoked or
 invalid tokens stop retries and mark the install inactive; auth failures, and a run with
 scheduled recipients that delivered nothing, raise an admin alert.
+
+Amended 2026-10-12 (design): the raw event is in the store before Slack gets the ack. By
+default Bolt acknowledges an Events API request before the listener runs, so a crash
+after the ack loses the event, and Slack does not send it again. The app runs with
+`process_before_response=True`: the listener writes the raw event, Bolt then acknowledges,
+and slow work reads the event from the store. The reconciliation read runs before
+each digest build, not once a night, and reads `conversations.replies` for threads with
+recent activity, because `conversations.history` returns top-level messages only. A
+commercial app outside the Marketplace gets one history request per minute with 15
+messages, so a product deployment needs a Marketplace listing and the HTTP Events API;
+a Socket Mode app cannot be listed.
 
 ## D8. Web preview: server-rendered, no frontend build
 
@@ -194,6 +218,11 @@ extracted.
 Why. If the same family writes the chat and reads it back, extraction scores measure
 the generator's legibility, not the system. A researcher reviewer will look for this.
 
+Amended 2026-10-12: the judge's model family differs from both the extractor and the
+corpus renderer. A judge from the renderer's family grades text its own family wrote.
+`config/models.yaml` maps `judge` and `render` to the same model; the judge moves to a
+third family before its first run. This replaces the GPT-class judge in D2 and D15.
+
 ## D13. Testing the two external boundaries without network
 
 Decision. The Anthropic boundary is tested through the SDK-level cassette (D9), never
@@ -202,6 +231,10 @@ fail silently. The Slack boundary is tested by injecting fake retry handlers int
 slack_sdk's `retry_handlers` and with the bolt-python mock web API server pattern.
 `httpx2.alias_httpx()` is loaded as an early pytest plugin so any stray httpx import
 resolves to the same package.
+
+Amended 2026-10-12 (status): the `alias_httpx()` plugin is not loaded. No test patches
+httpx, and the forbidden import contract keeps `httpx2` inside `digest.llm`. The Slack
+boundary tests wait for the Slack client (D7), which is not built.
 
 ## D14. Naming
 
@@ -219,7 +252,8 @@ one config value:
   Anthropic key.
 - `openrouter`: one OpenAI-compatible chat-completions adapter with `response_format`
   of type `json_schema`, used for every development call: Claude for extraction and
-  adjudication, GPT-class for the corpus renderer and the different-family judge, and
+  adjudication, GPT-class for the corpus renderer, a third family for the judge (D12
+  amendment of 2026-10-12), and
   the Haiku-class triage classifier. OpenRouter's public catalogue lists the Claude
   and GPT models with `structured_outputs` support (checked 2026-10-08); the first
   call is a five-line spike at the start of M2.
@@ -349,8 +383,9 @@ definition. One read-only `query` tool over SQL, with a row cap and a timeout an
 schema published as a resource, is the escape hatch for questions the fixed tools do
 not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
-Enforced by import-linter (`uv run lint-imports` in CI): a layers contract (cli; replay;
-store, llm and world as siblings; project; models and settings) and a forbidden
+Enforced by import-linter (`uv run lint-imports` in CI): a layers contract in `pyproject.toml` (cli;
+eval; daily; corpus; replay, extract and absence as siblings; store, llm and world as
+siblings; project and priors; models and settings) and a forbidden
 contract keeping `anthropic` and `httpx2` inside `digest.llm`.
 
 Why. A REST API alone needs a tool definition per assistant host; per-host function
@@ -409,6 +444,16 @@ one lookup. Contradictions routed to a person stay honest states in the ledger.
 
 Would change it. More than two edge kinds, or queries that walk more than one hop:
 then the `relations` table in later.md.
+
+Amended 2026-10-12: the trigger is met on paper, because the owned-set rule and the
+blast radius walk more than one hop. When edges are built, they go in the `relations`
+table and one recursive query with a hop limit walks them; a graph database is not
+needed at this scale. Each edge records its source: a system of record (PLM, the
+tracker, the gate plan) or chat extraction. Only system-of-record edges at one hop
+reach the must-see lane. A chat-extracted edge, or a second hop, goes to the ranked
+lane until its precision is measured, because errors multiply per hop. This narrows the
+dependency rule of D6 and SPEC section 5 step 6. The v1 `depends_on` edges come from the
+world file, which stands in for a system of record, so the v1 rule does not change.
 
 ## D23. Evaluation gates
 

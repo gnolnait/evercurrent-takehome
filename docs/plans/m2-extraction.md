@@ -541,9 +541,11 @@ B1.5 `verify` turns an `Extraction` into `Item`s and counts what it drops, per f
   with no evidence entry fails schema validation before `verify` (`minItems: 1`).
   `permalink` is the cited event's `permalink`.
 - An `item_id` that is not a key of `existing` drops the item (`item_id.unknown`). A
-  null `item_id` makes a new item with id `f"{thread_id}#{last_ts}#{n}"`, `n` the
-  item's index in the output (unique because a store holds one extraction prompt
-  version, B1.6). An existing id keeps `item_id`; its `evidence` is the
+  null `item_id` makes a new item with id `f"{thread_id}#{anchor_ts}#{k}"`: `anchor_ts`
+  is the `message_ts` of its verified evidence entry with the lowest `ts_micros`, and `k`
+  is the lowest integer from 0 that is not a key of `existing` and not an id already
+  given in this extraction (amended 2026-10-12, `docs/plans/stable-item-ids.md`). An
+  existing id keeps `item_id`; its `evidence` is the
   old entries followed by the new ones for messages not already cited (output order
   kept, so `evidence[0]` stays the first message the item cited); a new entry for an
   already cited `message_ts` replaces the old one in place, because it was verified
@@ -1279,7 +1281,7 @@ the recordings; without it a missing cassette or an empty render would pass gree
 | Extraction match | Objective fields (claims, owner); type advisory | SPEC section 7 splits objective from advisory fields; a same-type item with the wrong revision is a miss, not a match. |
 | Ask reply detection | A reply is an event by the person asked after the ask message, not after `last_updated` | An update that folds the reply into the item as evidence moves `last_updated` past the reply. |
 | Revision suffix on an entity mention | Split off and discarded; the id is kept | A mention at a revision is not a claim about the current revision; revisions enter as `rev` claim values, and the stale-action audit that reads mentioned revisions is M3 stretch (D24). |
-| Extraction prompt version per store | One; a different version refuses the run | New item ids are `thread#last_ts#n`, so two versions in one store would overwrite each other's items; a fresh store is how a bump is run, as replay restarts for an earlier day. |
+| Extraction prompt version per store | One; a different version refuses the run | Extract deltas are keyed by prompt version, so a new version re-extracts every thread and receives the old version's items as existing; it would update or duplicate them and mix two versions in one item set. A fresh store is how a bump is run, as replay restarts for an earlier day. |
 | Which evidence entry is the ask message | The first entry whose author is not the person asked; B1.3 and B1.5 keep the asking message first | `first_seen` moves when an update cites an earlier message, such as an unrelated root; the first-cited message does not, and the author rule covers a model that cites the reply first. |
 | Task evidence | Progress or completion, not any mention | The world's `TaskTouch` carries that meaning and the fixture's roll-up (S3-BUFFER) and question (ASK-SAF) have no touch; a mention rule would make the EM's own status post silence the detector. The gate anchor above applies only to a task with no link yet. |
 | Task link provenance | Each task link names the message that shows the progress | The silence clock counts from that message, as the golden counts from the scripted day; counting from the item's `last_updated` would let merged chatter reset it. |
@@ -1356,7 +1358,7 @@ sees.
 
 | Unit | Point | Ruling |
 |---|---|---|
-| 1 | New item id index | `n` is zero-based. |
+| 1 | New item id index | `k` is the lowest integer from 0 not used by the thread's existing items or this extraction (amended 2026-10-12). |
 | 1 | `extract_failed` field | The error class is under `error_class`. |
 | 1 | Times in the stage *(code)* | The stage's `as_of` is also the triage `decided_at` and every stage run's `run_at`, so a replayed store is the same on every run. |
 | 1 | Claims and task links on an update | A claim or link may cite any merged evidence message that is in `citable` (root and changed rows); its authority is that message author's. |
