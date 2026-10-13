@@ -21,11 +21,13 @@ from digest.cli import app
 from digest.models import Event, Reaction
 from digest.replay import read_events
 from digest.seed import (
+    RESUME_LIMIT,
     AuthInfo,
     MappedFile,
     MappedMessage,
     Post,
     RateLimited,
+    SeedBlocked,
     SeedMap,
     SlackChannel,
     SlackWebSeedClient,
@@ -505,13 +507,14 @@ def test_b9_resume_skips_done_posts_and_a_complete_map(
         seed(world, planned, first, map_path, pace=0, sleep=lambda _: None, dry_run=False)
 
     assert caught.value is not None
+    capsys.readouterr()
     checkpoint = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
     assert list(checkpoint.messages) == [planned[0].key]
     assert_mapped_messages(checkpoint, first)
     assert checkpoint.complete is False
     resumed = FakeSlackSeedClient(world)
     report = seed(world, planned, resumed, map_path, pace=0, sleep=lambda _: None, dry_run=False)
-    output = capsys.readouterr().out.lower()
+    resumed_output = capsys.readouterr().out
     resumed_world_ts = [
         call["metadata"]["event_payload"]["ts"] for call in successful_calls(resumed, "post")
     ]
@@ -519,12 +522,14 @@ def test_b9_resume_skips_done_posts_and_a_complete_map(
         planned[1].key.split(":", 1)[1],
         planned[2].key.split(":", 1)[1],
     ]
-    assert output.strip()
+    assert RESUME_LIMIT in resumed_output
     assert report.posts == 2
     complete = FakeSlackSeedClient(world)
     rerun = seed(world, planned, complete, map_path, pace=0, sleep=lambda _: None, dry_run=False)
+    rerun_output = capsys.readouterr().out
     assert_no_writes(complete)
     assert rerun.posts == rerun.files == rerun.channels == 0
+    assert RESUME_LIMIT not in rerun_output
 
 
 def test_b9_resume_between_two_uploads_retries_only_the_missing_file(
@@ -566,6 +571,7 @@ def test_b9_resume_between_two_uploads_retries_only_the_missing_file(
     assert [call["filename"] for call in resumed_uploads] == ["second.pdf"]
     assert resumed_uploads[0]["thread_ts"] == saved_root_ts
     assert (report.posts, report.files, report.channels) == (0, 1, 1)
+    assert report.map_path == map_path
 
 
 @pytest.mark.parametrize(
@@ -777,6 +783,41 @@ def test_b10_map_identity_mismatch_stops_before_any_write(
 
     assert_no_writes(client)
     assert field in str(caught.value) or world.name in str(caught.value)
+
+
+@pytest.mark.parametrize("map_entry", ["channels", "messages"])
+def test_a19_channel_id_drift_raises_seed_blocked_before_any_write(
+    tmp_path: Path, world: World, map_entry: str
+) -> None:
+    planned = post()
+    if map_entry == "channels":
+        saved = SeedMap(
+            team_id="T-SEED",
+            workspace_url=WORKSPACE,
+            world=world.name,
+            channels={planned.world_channel: "S-OLD"},
+        )
+    else:
+        saved = SeedMap(
+            team_id="T-SEED",
+            workspace_url=WORKSPACE,
+            world=world.name,
+            messages={
+                planned.key: MappedMessage(
+                    channel="S-OLD",
+                    ts="1700000000.000001",
+                    thread_ts="1700000000.000001",
+                )
+            },
+        )
+    map_path = tmp_path / "seed.json"
+    write_map(map_path, saved)
+    client = FakeSlackSeedClient(world)
+
+    with pytest.raises(SeedBlocked, match="eng-mech"):
+        seed(world, [planned], client, map_path, pace=0, sleep=lambda _: None, dry_run=False)
+
+    assert_no_writes(client)
 
 
 class FakeWebClient:
@@ -1158,6 +1199,58 @@ def test_b14_selection_without_files_does_not_require_files_write(
     assert report.posts == 1
 
 
+@pytest.mark.parametrize("blocker", ["missing-scope", "missing-channel"])
+def test_a21_first_refusal_leaves_no_map_or_resume_warning(
+    tmp_path: Path,
+    world: World,
+    capsys: pytest.CaptureFixture[str],
+    blocker: str,
+) -> None:
+    map_path = tmp_path / "seed.json"
+    planned = [post()]
+    channels = slack_channels(world)
+    scopes = ALL_SCOPES
+    if blocker == "missing-scope":
+        scopes = ALL_SCOPES - {"chat:write.customize"}
+    else:
+        channels = [channel for channel in channels if channel.name != "eng-mech"]
+    blocked = FakeSlackSeedClient(world, channels=channels, scopes=scopes)
+
+    with pytest.raises(SeedBlocked):
+        seed(world, planned, blocked, map_path, pace=0, sleep=lambda _: None, dry_run=False)
+
+    capsys.readouterr()
+    assert not map_path.exists()
+    unblocked = FakeSlackSeedClient(world)
+    seed(world, planned, unblocked, map_path, pace=0, sleep=lambda _: None, dry_run=False)
+    output = capsys.readouterr().out
+    assert RESUME_LIMIT not in output
+
+
+def test_a22_default_map_retries_auth_and_reports_resolved_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
+) -> None:
+    waits: list[float] = []
+    client = FakeSlackSeedClient(world, failures={("auth_test", 1): RateLimited(3)})
+    monkeypatch.chdir(tmp_path)
+
+    report = seed(
+        world,
+        [post()],
+        client,
+        None,
+        pace=0,
+        sleep=waits.append,
+        dry_run=False,
+    )
+
+    expected = tmp_path / ".slack-seed" / "T-SEED-kestrel.json"
+    assert waits == [3]
+    assert len(calls(client, "auth_test")) == 2
+    assert expected.exists()
+    assert report.map_path.resolve() == expected.resolve()
+
+
 @pytest.mark.parametrize("until_day", [0, 11])
 def test_command_until_day_rejects_values_outside_the_world(
     tmp_path: Path,
@@ -1214,76 +1307,77 @@ def test_command_until_day_uses_world_timezone_and_later_run_adds_only_day_two(
     assert_mapped_messages(saved, client)
 
 
-def test_command_dry_run_reports_exact_counts_then_missing_channel(
+@pytest.mark.parametrize(
+    ("scenario", "exit_code", "expected_lines"),
+    [
+        (
+            "missing-channel",
+            1,
+            [*DAY_ONE_DRY_RUN_LINES, "missing channel: kestrel-program"],
+        ),
+        (
+            "missing-scope",
+            1,
+            [*DAY_ONE_DRY_RUN_LINES, "missing scope: files:write"],
+        ),
+        ("unblocked", 0, DAY_ONE_DRY_RUN_LINES),
+    ],
+    ids=["missing-channel", "missing-scope", "unblocked"],
+)
+def test_command_dry_run_reports_exact_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    scenario: str,
+    exit_code: int,
+    expected_lines: list[str],
+) -> None:
+    channels = slack_channels(world)
+    scopes = ALL_SCOPES
+    if scenario == "missing-channel":
+        channels = [channel for channel in channels if channel.name != "kestrel-program"]
+    if scenario == "missing-scope":
+        scopes = ALL_SCOPES - {"files:write"}
+    client = FakeSlackSeedClient(world, channels=channels, scopes=scopes)
+    prepare_cli(monkeypatch, client)
+
+    result = runner.invoke(
+        app,
+        [
+            "seed",
+            "--world",
+            "kestrel",
+            "--map",
+            str(tmp_path / "seed.json"),
+            "--until-day",
+            "1",
+            "--dry-run",
+            "--pace",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == exit_code, result.output
+    assert result.output.splitlines() == expected_lines
+    assert_no_writes(client)
+
+
+def test_a19_command_dry_run_reports_channel_id_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
-) -> None:
-    available = [channel for channel in slack_channels(world) if channel.name != "kestrel-program"]
-    client = FakeSlackSeedClient(world, channels=available)
-    prepare_cli(monkeypatch, client)
-
-    result = runner.invoke(
-        app,
-        [
-            "seed",
-            "--world",
-            "kestrel",
-            "--map",
-            str(tmp_path / "seed.json"),
-            "--until-day",
-            "1",
-            "--dry-run",
-            "--pace",
-            "0",
-        ],
-    )
-
-    assert result.exit_code == 1, result.output
-    assert_no_writes(client)
-    assert result.output.splitlines() == [
-        *DAY_ONE_DRY_RUN_LINES,
-        "missing channel: kestrel-program",
-    ]
-
-
-def test_command_dry_run_reports_exact_counts_then_missing_scope(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    world: World,
-) -> None:
-    client = FakeSlackSeedClient(world, scopes=ALL_SCOPES - {"files:write"})
-    prepare_cli(monkeypatch, client)
-
-    result = runner.invoke(
-        app,
-        [
-            "seed",
-            "--world",
-            "kestrel",
-            "--map",
-            str(tmp_path / "seed.json"),
-            "--until-day",
-            "1",
-            "--dry-run",
-            "--pace",
-            "0",
-        ],
-    )
-
-    assert result.exit_code == 1, result.output
-    assert result.output.splitlines() == [
-        *DAY_ONE_DRY_RUN_LINES,
-        "missing scope: files:write",
-    ]
-    assert_no_writes(client)
-
-
-def test_command_dry_run_unblocked_exits_zero_with_exact_count_lines(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    world: World,
 ) -> None:
     client = FakeSlackSeedClient(world)
     prepare_cli(monkeypatch, client)
+    map_path = tmp_path / "seed.json"
+    channel = next(channel for channel in world.channels if channel.name == "kestrel-program")
+    write_map(
+        map_path,
+        SeedMap(
+            team_id="T-SEED",
+            workspace_url=WORKSPACE,
+            world=world.name,
+            channels={channel.id: "S-OLD"},
+        ),
+    )
 
     result = runner.invoke(
         app,
@@ -1292,7 +1386,7 @@ def test_command_dry_run_unblocked_exits_zero_with_exact_count_lines(
             "--world",
             "kestrel",
             "--map",
-            str(tmp_path / "seed.json"),
+            str(map_path),
             "--until-day",
             "1",
             "--dry-run",
@@ -1301,8 +1395,11 @@ def test_command_dry_run_unblocked_exits_zero_with_exact_count_lines(
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    assert result.output.splitlines() == DAY_ONE_DRY_RUN_LINES
+    assert result.exit_code == 1, result.output
+    assert result.output.splitlines() == [
+        *DAY_ONE_DRY_RUN_LINES,
+        "channel id changed: kestrel-program",
+    ]
     assert_no_writes(client)
 
 
@@ -1477,3 +1574,87 @@ def test_b12_cli_never_leaks_token_in_output_logs_or_exception_chain(
     assert all(BOT_TOKEN not in record.getMessage() for record in caplog.records)
     assert BOT_TOKEN not in exception_chain
     assert "run" in result.output.lower() and "again" in result.output.lower()
+
+
+def test_a20_cli_redacts_value_error_from_post_everywhere(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeSlackSeedClient(
+        world,
+        failures={("post", 1): ValueError(f"post exposed {BOT_TOKEN}")},
+    )
+    prepare_cli(monkeypatch, client)
+    caplog.set_level(logging.DEBUG)
+
+    result = runner.invoke(
+        app,
+        [
+            "seed",
+            "--world",
+            "kestrel",
+            "--map",
+            str(tmp_path / "seed.json"),
+            "--until-day",
+            "1",
+            "--pace",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.exception is not None
+    exception_chain = "".join(traceback.format_exception(result.exception))
+    assert "ValueError" in result.output
+    assert "run the command again" in result.output
+    assert BOT_TOKEN not in result.output
+    assert BOT_TOKEN not in caplog.text
+    assert all(BOT_TOKEN not in record.getMessage() for record in caplog.records)
+    assert BOT_TOKEN not in exception_chain
+
+
+def test_a20_cli_prints_seed_blocked_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
+) -> None:
+    available = [channel for channel in slack_channels(world) if channel.name != "kestrel-program"]
+    client = FakeSlackSeedClient(world, channels=available)
+    prepare_cli(monkeypatch, client)
+
+    result = runner.invoke(
+        app,
+        [
+            "seed",
+            "--world",
+            "kestrel",
+            "--map",
+            str(tmp_path / "seed.json"),
+            "--until-day",
+            "1",
+            "--pace",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "kestrel-program" in result.output
+    assert not (tmp_path / "seed.json").exists()
+
+
+def test_a22_command_without_map_uses_team_default_and_retries_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
+) -> None:
+    client = FakeSlackSeedClient(world, failures={("auth_test", 1): RateLimited(0)})
+    prepare_cli(monkeypatch, client)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["seed", "--world", "kestrel", "--until-day", "1", "--pace", "0"],
+    )
+
+    expected = tmp_path / ".slack-seed" / "T-SEED-kestrel.json"
+    assert result.exit_code == 0, result.output
+    assert len(calls(client, "auth_test")) == 2
+    assert expected.exists()
