@@ -85,15 +85,25 @@ digest.
   message's `event_ts`.
 - W7. The header line names the previous digest's date, or says "First digest".
 - W8. `WindowPriors` defaults and validation.
-- W9. `slack_message` (`digest post`) holds the same window line as the terminal digest,
-  word for word, as the first block after the header: a `section` block with the line
-  as mrkdwn (escaped, `verbatim`), for both a previous digest and a first digest. It
-  counts toward the 50-block limit, so the limit keeps one block fewer for lines.
+- W9. `slack_message` (`digest post`) holds the same window line as the terminal digest:
+  - one function, `window_line(selection) -> str` in `daily/render.py`, builds the line;
+    `render_digest` and `slack_message` both call it, so the wording cannot drift;
+  - in Slack it is the first block after the header, a `section` block through the
+    existing `_section` helper (escaped mrkdwn, `verbatim`), for both a previous digest
+    and a first digest, and also on a day with no lines, before "Nothing new";
+  - the top-level `text` fallback (notifications, screen readers) is the header, a
+    newline, then the window line, each part escaped separately;
+  - the header and the window block are fixed blocks: the overflow check becomes
+    `2 + len(body) + len(footer) > MAX_BLOCKS` and the kept slice
+    `MAX_BLOCKS - 3 - len(footer)`; orphan-title removal and the footer stay.
 
 ## Acceptance
 
 - `tests/test_select.py`, `tests/test_priors.py` and `tests/test_daily_render.py` cover
-  W1 to W8; each new or changed test is RED-GREEN proven, and W1, W2, W3 and W5 fail on
+  W1 to W8, and `tests/test_slack_post.py` covers W9: a parity test compares the Slack
+  window block with line 2 of `render_digest` for both variants; the existing
+  assertions on block order, item index, the `text` fallback and the 50-block overflow
+  move by one block; each new or changed test is RED-GREEN proven, and W1, W2, W3 and W5 fail on
   today's code.
 - `uv run digest demo` runs offline. The PR reports, per reader, must-see, ranked and
   total lines for days 5, 6 and 7 before and after. Must-see counts must not change.
