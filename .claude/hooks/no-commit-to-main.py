@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hook_payload as payload  # noqa: E402  (post-path-insert)
 from no_commit_to_main_impl import evaluate_commit  # noqa: E402
+from shell_segments import SHELL_TOOLS, tool_command  # noqa: E402
 
 _SUBJECT = "the no-commit-to-main guard"
 
@@ -23,10 +24,10 @@ def main():
     # reason the shim exists is for the suite to drive the shipped behavior.
     data, tool, tin = payload.read_payload(_SUBJECT)
 
-    if tool != "Bash":
+    if tool not in SHELL_TOOLS:
         sys.exit(0)
 
-    cmd = payload.read_command(_SUBJECT, tin)
+    cmd = tool_command(tool, payload.read_command(_SUBJECT, tin))
     if not cmd.strip():
         sys.exit(0)
 

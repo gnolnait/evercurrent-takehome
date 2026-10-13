@@ -73,10 +73,10 @@ def worktree(repos):
     return path
 
 
-def _verdict(cmd, project, cwd=None, payload_cwd=None):
+def _verdict(cmd, project, cwd=None, payload_cwd=None, tool="Bash"):
     env = os.environ.copy()
     env["CLAUDE_PROJECT_DIR"] = str(project)
-    payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+    payload = {"tool_name": tool, "tool_input": {"command": cmd}}
     if payload_cwd is not None:
         payload["cwd"] = str(payload_cwd)
     p = subprocess.run(
@@ -105,6 +105,70 @@ def test_blocks_plain_project_commit_on_main(repos):
     assert _verdict("git commit -m update", repos["project"]) == "BLOCK"
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param("git.exe commit -m update", id="git-exe"),
+        pytest.param("GIT.EXE commit -m update", id="git-exe-upper-case"),
+        pytest.param("/usr/bin/git commit -m update", id="full-path"),
+        pytest.param('"/c/Program Files/Git/cmd/git.exe" commit -m update', id="windows-full-path"),
+        pytest.param("if true; then git.exe commit -m update; fi", id="after-then-keyword"),
+        pytest.param("2>&1 git.exe commit -m update", id="after-leading-redirection"),
+        pytest.param(">a >b git.exe commit -m update", id="after-chained-redirections"),
+        pytest.param("FOO=1 >out git.exe commit -m update", id="after-env-and-redirection"),
+    ],
+)
+def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_allows_foreign_commit_by_full_git_path(repos):
+    cmd = f'"/c/Program Files/Git/cmd/git.exe" -C {repos["sibling"]} commit -m update'
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+def test_blocks_commit_on_main_after_redirection_inside_an_argument_list(repos):
+    """A redirection inside `echo`'s arguments does not start a new command, so
+    the words after it cannot switch the branch the commit lands on."""
+    cmd = "echo 2>&1 git.exe switch feature && git.exe commit -m update"
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize("cmd", ["command -v git commit", "command -V git.exe commit"])
+def test_allows_command_lookup_on_main(cmd, repos):
+    """`command -v` only looks a name up; it runs nothing."""
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+def test_allows_git_exe_as_an_argument_on_main(repos):
+    """Only the command word is read as a program name, not each argument."""
+    cmd = "gh issue create --title git.exe --body commit"
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param('powershell -Command "git commit -m update"', id="powershell"),
+        pytest.param("pwsh -c 'git commit -m update'", id="pwsh"),
+        pytest.param('cmd //c "git commit -m update"', id="cmd"),
+        pytest.param('powershell -Command "GIT commit -m update"', id="powershell-upper-case-program"),
+    ],
+)
+def test_blocks_windows_shell_wrapped_commit_on_main(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_blocks_commit_on_main_from_powershell_tool(repos):
+    assert _verdict("git commit -m update", repos["project"], tool="PowerShell") == "BLOCK"
+
+
+def test_allows_foreign_commit_with_backslash_path_from_powershell_tool(repos):
+    sibling = str(repos["sibling"]).replace("/", "\\")
+    cmd = f"git -C {sibling} commit -m update"
+    assert _verdict(cmd, repos["project"], tool="PowerShell") == "ALLOW"
+
+
 def test_allows_plain_project_commit_on_feature_branch(repos):
     subprocess.run(
         ["git", "switch", "-c", "feature/hook-test"],
@@ -127,11 +191,12 @@ def test_allows_foreign_commit_after_project_read_only_git_segment(repos):
     assert _verdict(cmd, repos["project"]) == "ALLOW"
 
 
-def test_blocks_unresolvable_git_c_path_on_main(repos):
-    assert (
-        _verdict(f"git -C {repos['missing']} commit -m update", repos["project"])
-        == "BLOCK"
-    )
+def test_blocks_missing_git_c_path_inside_project_on_main(repos):
+    """A target that does not exist yet but lies inside the project repo is
+    the project checkout: fail closed."""
+    cmd = f"git -C {repos['project']}/new-dir commit -m update"
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
 
 
 def test_allows_foreign_commit_after_cd_to_sibling(repos):
@@ -278,12 +343,12 @@ def test_blocks_env_redirected_commit(repos):
 
 
 def test_unresolvable_variable_repo_path_fails_closed(repos):
-    """A shell variable's in-command value is unknowable here (the hook env
+    """A variable the command does not assign is unknowable here (the hook env
     may hold a stale value) — fail closed even though the real target may be
     a sibling."""
-    cmd = f'W={repos["sibling"]}; git -C "$W" commit -m update'
+    cmd = 'git -C "$W" commit -m update'
 
-    assert _verdict(cmd, repos["project"]) == "BLOCK"
+    assert _verdict(cmd, repos["project"], payload_cwd=repos["sibling"]) == "BLOCK"
 
 
 # --------------------------------------------------------------------------------------
@@ -680,6 +745,355 @@ def test_blocks_quote_assembled_commit_token(repos):
     assert _verdict("git c''ommit -m x", repos["project"]) == "BLOCK"
 
 
+# --------------------------------------------------------------------------------------
+# The repo a command enters decides the branch (false blocks 2026-10-12: the session
+# checkout was on main and the work ran in a linked worktree or a scratch repo, named
+# by `W=<path>; git -C $W` or `cd "$T"`).
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("W={wt}; git -C $W add -A && git -C $W commit -m x", id="git-C-var"),
+        pytest.param('W="{wt}"; git -C "$W" commit -m x', id="git-C-quoted-var"),
+        pytest.param("W={wt}; git -C ${{W}} commit -m x", id="braced-var"),
+        pytest.param('W={wt}; cd "$W" && git commit -m x', id="cd-var"),
+        pytest.param('S={parent}; T="$S/project-wt"; git -C "$T" commit -m x', id="var-from-var"),
+        pytest.param('export W={wt}; git -C "$W" commit -m x', id="export"),
+        # inside double quotes a ' is a plain character, so "$W" still expands
+        pytest.param(
+            'W={wt}; python -c "print(\'$W\')" && git -C "$W" commit -m x',
+            id="single-quote-inside-double-quotes",
+        ),
+        pytest.param("W={wt}; git -C \"$W\" commit -m 'source'", id="source-in-message"),
+    ],
+)
+def test_allows_commit_in_worktree_named_by_variable(template, repos, worktree):
+    cmd = template.format(wt=worktree, parent=worktree.parent)
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param('W={project}; git -C "$W" commit -m x', id="var-names-project"),
+        pytest.param(
+            'W={wt}; for W in {project}; do git -C "$W" commit -m x; done', id="for-rebinds"
+        ),
+        pytest.param(
+            'W={wt}; if true; then W={project}; fi; git -C "$W" commit -m x',
+            id="reassigned-in-branch",
+        ),
+        # bash scopes these assignments away, so "$W" is empty and git runs in the cwd
+        pytest.param('(true; W={wt}); git -C "$W" commit -m x', id="subshell-assignment"),
+        pytest.param('W={wt} | true; git -C "$W" commit -m x', id="pipeline-assignment"),
+        pytest.param('W={wt} git -C "$W" commit -m x', id="prefix-assignment"),
+        pytest.param('W={wt}; . ./vars.sh; git -C "$W" commit -m x', id="sourced-file"),
+        # bash skips the assignment, so "$W" is empty
+        pytest.param('false && W={wt}; git -C "$W" commit -m x', id="conditional-assignment"),
+        # export expands "$S" before it assigns S, so T is empty
+        pytest.param('export S={wt} T="$S"; git -C "$T" commit -m x', id="export-two-names"),
+        # '$W' is the literal text $W, so this cd fails
+        pytest.param("W={wt}; cd '$W'; git commit -m x", id="single-quoted"),
+        pytest.param(
+            'W={wt}; declare -n R=W; R={project}; git -C "$W" commit -m x', id="nameref"
+        ),
+        # bash skips the body, so "$W" is empty
+        pytest.param(
+            'if false; then :; W={wt}; fi; git -C "$W" commit -m x', id="skipped-if-body"
+        ),
+        pytest.param('W={wt}; W+=/../project; git -C "$W" commit -m x', id="append"),
+        # \$W is the literal text $W, so this cd fails
+        pytest.param("W={wt}; cd \\$W; git commit -m x", id="escaped-dollar"),
+        pytest.param('W={wt}; W[0]={project}; git -C "$W" commit -m x', id="array-element"),
+        # bash expands the unquoted pattern to the project
+        pytest.param("W={parent}/projec?; git -C $W commit -m x", id="glob"),
+        # bash ignores the whole comment line, so "$W" is empty
+        pytest.param('# note; W={wt}\ngit -C "$W" commit -m x', id="assignment-in-comment"),
+    ],
+)
+def test_blocks_project_commit_when_variable_is_not_a_known_literal(template, repos, worktree):
+    cmd = template.format(wt=worktree, project=repos["project"], parent=worktree.parent)
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_unresolved_cd_does_not_carry_a_switch_into_the_project(repos):
+    """`cd "$X"` goes to a place the parser cannot know, so a switch there
+    cannot unprotect the project: the later project commit is judged on main."""
+    cmd = f'cd "$X" && git checkout -b feat/x && git -C {repos["project"]} commit -m x'
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("cd {sibling} | cat; git commit -m x", id="pipe"),
+        pytest.param('W={sibling}; cd "$W" | cat; git commit -m x', id="pipe-var"),
+        pytest.param("cd {sibling} & git commit -m x", id="background"),
+    ],
+)
+def test_blocks_commit_after_cd_in_a_subshell(template, repos):
+    """A cd in a pipe or before `&` runs in a subshell; the commit after it runs in
+    the project."""
+    cmd = template.format(sibling=repos["sibling"])
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_allows_foreign_commit_after_a_background_command(repos):
+    """`&` puts only the command before it in the background; the cd after it runs
+    in this shell."""
+    cmd = f"true & cd {repos['sibling']} && git commit -m x"
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+def test_blocks_commit_in_a_moved_project_checkout(repos):
+    parent = repos["project"].parent
+    cmd = f"cd {parent} && mv project renamed && git -C renamed commit -m x"
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param(
+            "export GIT_DIR={project}/.git; cd {sibling} && git commit -m x", id="export"
+        ),
+        pytest.param("env GIT_DIR={project}/.git git -C {sibling} commit -m x", id="env"),
+    ],
+)
+def test_blocks_commit_redirected_by_git_dir_anywhere(template, repos):
+    cmd = template.format(project=repos["project"], sibling=repos["sibling"])
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_allows_foreign_commit_after_a_command_local_git_dir(repos):
+    """A GIT_DIR prefix applies to its own command only."""
+    cmd = (
+        f"GIT_DIR={repos['project']}/.git git status; "
+        f"git -C {repos['sibling']} commit -m x"
+    )
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize("flags", ["-s", "-sv", "--symbolic", "\\\n  -s"])
+def test_blocks_commit_through_a_new_link_to_the_project(flags, repos):
+    cmd = (
+        f"ln {flags} {repos['project']} {repos['missing']} && "
+        f"git -C {repos['missing']} commit -m x"
+    )
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param('B=main; git switch "$B" && git commit -m x', id="literal-value"),
+        pytest.param('git switch "$B" && git commit -m x', id="unknown-value"),
+    ],
+)
+def test_switch_to_variable_branch_does_not_unprotect(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param("V=$(printf commit); git $V -m x", id="unknown-value"),
+        pytest.param("V=commit; git $V -m x", id="literal-value"),
+    ],
+)
+def test_blocks_commit_by_variable_verb(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        # bash runs a command after `;` or `||` even when the cd failed, so it
+        # runs in the project
+        pytest.param("cd {missing}; git commit -m x", id="semicolon"),
+        pytest.param("cd {missing} && git init -q . || git commit -m x", id="or"),
+        # bash skips the cd when the test fails
+        pytest.param("test -f {sibling}/ready && cd {sibling}; git commit -m x", id="skipped-cd"),
+        pytest.param(
+            'W={sibling}; test -f "$W/ready" && cd "$W"; git commit -m x', id="skipped-cd-var"
+        ),
+    ],
+)
+def test_blocks_commit_after_a_cd_that_can_fail(template, repos):
+    cmd = template.format(missing=repos["missing"], sibling=repos["sibling"])
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        # case 3 of 2026-10-12
+        pytest.param(
+            'T={missing}; rm -rf "$T"; mkdir -p "$T" && cd "$T" && git init -q . && '
+            "printf x > a.json && git add -A && "
+            "git -c user.email=t@t -c user.name=t commit -qm x",
+            id="cd-into-new-scratch-repo",
+        ),
+        pytest.param(
+            "cd {parent} && git init -q -b main r && git -C r -c user.name=t "
+            "-c user.email=t@x commit -q --allow-empty -m one",
+            id="git-C-relative-new-repo",
+        ),
+        pytest.param(
+            'S={missing}; git init -q "$S" && git -C "$S" commit -q --allow-empty -m init',
+            id="git-C-var-new-repo",
+        ),
+    ],
+)
+def test_allows_commit_in_new_scratch_repo(template, repos):
+    cmd = template.format(missing=repos["missing"], parent=repos["missing"].parent)
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize("where", ["missing", "inside-sibling"])
+def test_blocks_commit_in_new_worktree_of_the_project(where, repos):
+    """`git worktree add` makes a missing path a project checkout, which may be
+    on main, even when the path sits inside another repo."""
+    path = repos["missing"] if where == "missing" else f"{repos['sibling']}/new"
+    cmd = f"git worktree add -f {path} main && git -C {path} commit -m x"
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+# --------------------------------------------------------------------------------------
+# A command the parser cannot read is refused on main only when a git write verb
+# appears in it (false blocks 2026-10-12: Python heredocs that named git in prose or
+# a path, next to a read-only `git diff --stat`).
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # case 1 of 2026-10-12
+        pytest.param(
+            "p = 'bin/commit_dev_state.py'\n"
+            "print('NOTHING FAILED (git refuses the rebase itself)')",
+            id="git-prose",
+        ),
+        # case 2 of 2026-10-12
+        pytest.param(
+            'p = ".claude/hooks/git_commit_events.py"\nprint(open(p).read().count("commit"))',
+            id="git-in-a-path",
+        ),
+        pytest.param(
+            'import subprocess\nsubprocess.run(["git", "-C", repo, "log", "--format=%H"])\n'
+            'print("commits")',
+            id="read-only-git-call",
+        ),
+        pytest.param(
+            'print("git apply the patch, gates, commit, push")', id="verbs-after-another-verb"
+        ),
+        pytest.param('run(["git", "checkout", "main"])', id="checkout-without-b"),
+        pytest.param('run(["git", "worktree", "list"])', id="worktree-list"),
+    ],
+)
+def test_allows_interpreter_heredoc_without_git_write_verb(body, repos, worktree):
+    cmd = f"cd {worktree} && python - <<'EOF'\n{body}\nEOF\ngit diff --stat"
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param('subprocess.run(["git", "commit", "-m", "x"])', id="list-argv"),
+        pytest.param("os.system('git -C . commit -m x')", id="string-command"),
+        pytest.param('subprocess.run([\n    "git",\n    "commit",\n])', id="argv-across-lines"),
+        pytest.param('subprocess.run(f"git -C {repo} commit -m x")', id="f-string"),
+        pytest.param(
+            'subprocess.run(["git", "-C", str(Path.cwd()), "commit", "-m", "x"])',
+            id="call-as-option-value",
+        ),
+        pytest.param('subprocess.run(["git", *opts, "commit", "-m", "x"])', id="splat"),
+        pytest.param('subprocess.run(["GIT.EXE", "commit"])', id="windows-name"),
+        pytest.param('subprocess.run(["git", "-c", "a=b", "push"])', id="push-after-option"),
+        pytest.param('subprocess.run(["git", "checkout", "-b", "x"])', id="checkout-b"),
+        pytest.param('subprocess.run(["git", "worktree", "add", "x"])', id="worktree-add"),
+        pytest.param(
+            'subprocess.run(["git", "status"]); subprocess.run(["git", "stash"])',
+            id="second-git-word",
+        ),
+    ],
+)
+def test_blocks_interpreter_heredoc_with_git_write_verb_on_main(body, repos):
+    cmd = f"python - <<'EOF'\n{body}\nEOF"
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param("bash -c 'git status; git commit -m x'", id="write-after-read"),
+        pytest.param(
+            "bash -c 'git -c user.name=\"A B C D\" commit -m x'", id="spaces-in-option-value"
+        ),
+        pytest.param("bash -c 'verb=commit; git \"$verb\" -m x'", id="variable-verb"),
+        pytest.param(
+            "bash -c 'git -c user.name=\"A log\" commit -m x'", id="read-verb-in-option-value"
+        ),
+        pytest.param(
+            "bash -c 'git -c user.name=\"A B C D E F G H I J\" commit -m x'",
+            id="long-option-value",
+        ),
+        pytest.param("sh -c 'g=git; \"$g\" commit -m x'", id="git-in-a-variable"),
+        pytest.param("bash -c 'git -C ${PWD} commit -m x'", id="braced-option-value"),
+        pytest.param(
+            "bash -c 'git --config-env user.name=NAME commit -m x'", id="config-env-option"
+        ),
+    ],
+)
+def test_blocks_shell_payload_with_git_write(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        # `log` is the subcommand; `push` is its search term
+        pytest.param("bash -c 'git -C . log --grep push'", id="search-term"),
+        pytest.param("bash -c 'git -c user.name=\"A Push\" status'", id="option-value"),
+        pytest.param("bash -c 'git -C . --version; echo commit'", id="next-command"),
+        pytest.param("bash -c 'git -c alias.save=\"commit\" status'", id="quoted-option-value"),
+    ],
+)
+def test_allows_shell_payload_with_write_verb_outside_the_subcommand(cmd, repos):
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+def test_allows_unparseable_quoting_without_git_write_verb(repos):
+    """bash reads `$'it\\'s'`, the tokenizer does not; with no git write verb in
+    the command there is nothing to refuse."""
+    cmd = "echo $'it\\'s the commit'; git status"
+
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+def test_blocks_unparseable_quoting_with_git_write_verb(repos):
+    cmd = "echo $'it\\'s'; g''it commit -m x"
+
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
 # --- guard-infrastructure failure must fail CLOSED ----------------------------
 @pytest.mark.parametrize(
     "stdin, message",
@@ -816,12 +1230,15 @@ def test_ambiguous_heredoc_benign_datasink_allows(repos):
 def test_ambiguous_heredoc_git_still_blocks(repos):
     V = "$" + "VAR"
     C = "com" + "mit"
-    # git token (plain and quote-assembled) and interpreter-fed bodies must
-    # still fail closed on a protected branch.
+    # A git write (plain and quote-assembled) and an interpreter-fed body that
+    # holds one must still fail closed on a protected branch. The unresolvable
+    # body is still text in the command, so `bash <<$VAR` with no git write in
+    # it has nothing to refuse.
     for cmd in ("git %s -m x <<%s" % (C, V),
                 "g''it %s -m x <<%s" % (C, V),
-                "bash <<%s" % V):
+                "bash <<%s\ngit %s -m x\n%s" % (V, C, V)):
         assert _verdict(cmd, repos["project"]) == "BLOCK", cmd
+    assert _verdict("bash <<%s\necho hi\n%s" % (V, V), repos["project"]) == "ALLOW"
 
 
 # --------------------------------------------------------------------------------------
@@ -859,15 +1276,16 @@ def test_blocks_cd_into_worktree_on_main(repos, worktree):
 @pytest.mark.parametrize(
     "shape",
     [
-        pytest.param('W={wt}; cd "$W" && git commit -m update', id="shell-variable"),
-        pytest.param("cd {missing} && git commit -m update", id="missing-dir"),
+        pytest.param('W=$(echo {wt}); cd "$W" && git commit -m update', id="shell-variable"),
+        pytest.param("cd {project}/new-dir && git commit -m update", id="missing-dir"),
     ],
 )
 def test_untrusted_cd_prefix_fails_closed(repos, worktree, shape):
-    """A cd target the hook cannot resolve (`$W` is unknowable here, `missing`
-    is not a repo) is not trusted: the commit stays attributed to the main
-    checkout on `main` even though the real target may be a feature worktree."""
-    cmd = shape.format(wt=worktree, missing=repos["missing"])
+    """A cd target the hook cannot place outside the project (`$W` holds a value
+    only bash knows, `new-dir` does not exist yet but sits in the project) is not
+    trusted: the commit stays attributed to the main checkout on `main` even
+    though the real target may be a feature worktree."""
+    cmd = shape.format(wt=worktree, project=repos["project"])
 
     assert _verdict(cmd, repos["project"]) == "BLOCK"
 
