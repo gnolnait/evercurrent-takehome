@@ -538,12 +538,15 @@ def say(
     prints the event's ts. Run `digest extract --db <scratch>` next.
 
     The command refuses a `--db` equal to the base store path, or one that resolves to the
-    same file. Without `--script`, the command uses an existing `--db` as it is.
+    same file. Without `--script`, the command uses an existing `--db` as it is. A failed
+    write refuses on one line. When the command made the scratch store, it removes that
+    store on any failure after the copy; it keeps a scratch store that already existed.
 
-    With `--script`, the command refuses a `--db` that already exists, makes it as a fresh
-    copy of the base store, then runs every line of the file in order, each as its own say with the same rules. It
-    appends to no script file. On any failure after the copy, it removes the scratch store.
-    It prints the ts values only after it stores every line.
+    With `--script`, the command refuses a `--db` that already exists, or a
+    `<db>.script.jsonl` that already exists, before the copy. It makes `--db` as a fresh
+    copy of the base store, then runs every line of the file in order, each as its own say
+    with the same rules. It appends to no script file. On any failure after the copy, it
+    removes the scratch store. It prints the ts values only after it stores every line.
     """
     settings = Settings()
     base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
@@ -573,14 +576,24 @@ def say(
         try:
             event, meta = _checked_say(checked, world, line)
         except ValueError as error:
-            _refuse(str(error))
+            _refuse(" ".join(str(error).split()))
         if fresh:
             if log_path.exists():  # after the rule checks, so a broken rule names its reason
                 _refuse(f"script log {log_path} already exists; remove it or give another --db")
-            with _copy_store(checked, db) as scratch:
-                scratch.upsert_events([event], meta=meta)
+            try:
+                with _copy_store(checked, db) as scratch:
+                    scratch.upsert_events([event], meta=meta)
+            except (OSError, sqlite3.Error) as error:
+                _remove_store(db)
+                _refuse(" ".join(str(error).split()))
+            except BaseException:
+                _remove_store(db)
+                raise
         else:
-            checked.upsert_events([event], meta=meta)
+            try:
+                checked.upsert_events([event], meta=meta)
+            except (OSError, sqlite3.Error) as error:  # keep a store this say did not make
+                _refuse(" ".join(str(error).split()))
     with log_path.open("a", encoding="utf-8", newline="\n") as log_file:
         log_file.write(line.model_dump_json() + "\n")
     typer.echo(event.ts)
@@ -606,7 +619,8 @@ def diff(
     each with its title and reason. Then it names the readers with no change. With no change
     for any reader, it prints "no change" and exits 0. The readers are sorted by user_id, in
     the text output and in `--json`. A refused store or an unknown user exits 1 with the
-    reason, as `digest run` does.
+    reason, as `digest run` does. The command opens both stores read-only and never writes
+    them.
     """
     settings = Settings()
     try:
@@ -615,20 +629,20 @@ def diff(
         _refuse(f"--as-of must be YYYY-MM-DD, got {as_of!r}")
     base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
     for path in (base, db):
-        if not path.is_file():  # Store.open would create an empty store file
+        if not path.is_file():  # a clearer reason than the error of a read-only open
             _refuse(f"no store at {path}; run digest replay first")
-    with _open_store_readonly(base) as before_store, _open_store(db) as after_store:
+    with _open_store_readonly(base) as before_store, _open_store_readonly(db) as after_store:
         name = _stored(after_store, "world")
         base_name = _stored(before_store, "world")
         if base_name != name:
             _refuse(f"store {base} holds world {base_name!r}, but store {db} holds {name!r}")
         world = _store_world(after_store)
         try:
-            priors = load_priors()
+            priors = load_priors(DEFAULT_PRIORS_PATH)
         except ValidationError as error:
-            _refuse(_first_error(error))
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {_first_error(error)}")
         except (OSError, ValueError, yaml.YAMLError) as error:
-            _refuse(" ".join(str(error).split()))
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {' '.join(str(error).split())}")
         if user is None:
             readers = sorted(p.user_id for p in world.personas if p.kind != "bot")
         else:
@@ -984,12 +998,16 @@ def _extract_days(
 def _say_script(script: Path, db: Path, base: Path) -> None:
     """Run every line of a script file as its own say into a new scratch store at `db`.
 
-    Refuse a `db` that exists. Split the file into lines on "\\n" only, so a text that holds
-    U+0085, U+2028 or U+2029 replays. On any failure after the copy, remove the new scratch
-    store, so a failure writes nothing. Print the ts values only after every line is stored.
+    Refuse a `db` that exists, or a `<db>.script.jsonl` that exists. Split the file into
+    lines on "\\n" only, so a text that holds U+0085, U+2028 or U+2029 replays. On any
+    failure after the copy, remove the new scratch store, so a failure writes nothing. Print
+    the ts values only after every line is stored.
     """
     if db.exists():
         _refuse(f"--db {db} already exists; --script runs into a new scratch store only")
+    log_path = Path(f"{db}.script.jsonl")
+    if log_path.exists():
+        _refuse(f"script log {log_path} already exists; remove it or give another --db")
     try:
         raw_lines = [raw.removesuffix("\r") for raw in script.read_bytes().decode().split("\n")]
     except (OSError, UnicodeDecodeError) as error:

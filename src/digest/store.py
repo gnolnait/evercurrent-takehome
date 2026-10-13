@@ -136,11 +136,11 @@ class Store:
     def copy_to(self, path: Path) -> Store:
         """Copy this store to a new file at `path` and open the copy.
 
-        The copy uses the SQLite online backup API from a read-only connection to this
-        store, so rows still in the write-ahead log are copied too. This store is not
-        changed. Raise FileExistsError when `path` exists, and ValueError for an in-memory store.
-        When the backup fails, remove the file at `path` (with its `-wal` and `-shm` files)
-        and raise the error.
+        The copy uses the SQLite online backup API from this store's own connection, so
+        rows still in the write-ahead log are copied too. A backup only reads its source,
+        so this store is not changed. Raise FileExistsError when `path` exists, and
+        ValueError for an in-memory store. When the backup or the open of the copy fails,
+        remove the file at `path` (with its `-wal` and `-shm` files) and raise the error.
         """
         if self.path == ":memory:":
             raise ValueError("cannot copy an in-memory store")
@@ -148,21 +148,18 @@ class Store:
             raise FileExistsError(f"cannot copy store {self.path} to {path}: {path} exists")
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            source = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
+            target = sqlite3.connect(path)
             try:
-                target = sqlite3.connect(path)
-                try:
-                    source.backup(target)
-                finally:
-                    target.close()
+                self._db.backup(target)
             finally:
-                source.close()
+                target.close()
+            copy = type(self).open(path)
         except BaseException:
             for suffix in ("", "-wal", "-shm"):
                 Path(f"{path}{suffix}").unlink(missing_ok=True)
             raise
         log.info("store_copied", extra={"source": str(self.path), "path": str(path)})
-        return type(self).open(path)
+        return copy
 
     def close(self) -> None:
         self._db.close()
