@@ -29,7 +29,7 @@ base path, or resolving to the same file, is refused.
 Review rulings (unit 7 code review, 2026-10-12):
 - The base store is opened read-only (`Store.open_readonly`, a `mode=ro` connection with
   no schema script and no write); a file that is not a store of the current schema is
-  refused with its reason. `copy_to` reads from that connection.
+  refused with its reason. `copy_to` backs up from the store's own connection.
 - `copy_to` removes the target file when the backup fails, so no half-made scratch
   store is left behind.
 - A `say` that creates the scratch store refuses when `<db>.script.jsonl` already exists,
@@ -37,10 +37,25 @@ Review rulings (unit 7 code review, 2026-10-12):
 - `--script` removes the scratch store (with its `-wal` and `-shm` files) on any
   failure after the copy, not only on a refused line, and prints the event ts values
   only after every line is stored.
-- A script file is split into lines on `
-` only, so a `--text` holding U+0085, U+2028
+- A script file is split into lines on `\n` only, so a `--text` holding U+0085, U+2028
   or U+2029 replays.
 - Every refusal is one line; a validation error is reduced to its first message.
+
+Review rulings, round 2 (fix round review, 2026-10-12):
+- `--script` also refuses when `<db>.script.jsonl` already exists, naming that file, as a
+  single `say` that creates the scratch store does.
+- `diff` opens both stores read-only, so it never writes either store, also when `--db`
+  and `--base-db` name the same file.
+- `copy_to` removes the target and its `-wal` and `-shm` files on any failure, including
+  a failure to open the finished copy.
+- A single `say` that creates the scratch store removes it (with its `-wal` and `-shm`
+  files) on any failure after the copy, and refuses on one line.
+- A rule refusal (a `ValueError` from the rule checks) is one line in a single `say` too:
+  its whitespace is folded, as in `--script`.
+- A priors refusal in `diff` names the priors file, as `digest run` does.
+- Recorded, not fixed: the script log is appended after the event commits, so a log
+  write failure leaves an event with no log line; a cleanup that raises replaces the
+  refusal with its own error.
 
 ## `digest say`
 
