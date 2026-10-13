@@ -535,11 +535,13 @@ def _emit(cmd, default):
     for tok in tokens:
         if tok and not tok.strip("();<>|&"):  # pure-operator token -> boundary
             new_dir = process_segment(segment, effdir, piped, lead)
-            # A redirection starts the next command only when nothing but an fd
-            # number stands before it (`2>&1 git ...`, `> f git ...`). In `echo
-            # 2>&1 a b`, the words after the target are still echo's arguments.
+            # A redirection starts the next command only when no command word
+            # stands before it: only an earlier redirection target, env
+            # assignments and an fd number (`2>&1 git`, `>a >b git`, `X=1 >f
+            # git`). In `echo 2>&1 a b`, the words after it are echo's arguments.
+            before = [t for t in segment[lead:] if not is_env_assignment(t)]
             lead = 1 if set(tok) & set("<>") and "(" not in tok else 0
-            if segment and not (len(segment) == 1 and segment[0].isdigit()):
+            if before and not (len(before) == 1 and before[0].isdigit()):
                 lead = 0
             if new_dir is not None:
                 effdir = new_dir
