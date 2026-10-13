@@ -102,6 +102,7 @@ BLOCK = [
     pytest.param("if ! gh pr merge 5; then :; fi", id="if-bang-keyword"),
     pytest.param("if sudo gh pr merge 5; then :; fi", id="if-then-wrapper"),
     pytest.param("coproc gh pr merge 5", id="coproc-keyword"),
+    pytest.param("time -p gh pr merge 5", id="time-posix-keyword"),
     pytest.param("(echo hi) && (gh pr merge)", id="second-subshell"),
     pytest.param(
         "curl -X PUT https://api.github.com/repos/o/r/pulls/9/merge | cat",
