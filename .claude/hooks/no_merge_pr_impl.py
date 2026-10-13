@@ -139,6 +139,9 @@ def command_word_and_tokens(seg):
     while toks:
         t = toks[0]
         base = t.rsplit("/", 1)[-1]
+        # `time -p` (POSIX output format) still runs the word after -p.
+        if base == "time" and toks[1:2] == ["-p"]:
+            toks.pop(1)
         if base in WRAPPERS or ENV_ASSIGN.match(t):
             toks.pop(0)
             continue

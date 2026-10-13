@@ -1,5 +1,5 @@
 {
-  "kit_commit": "170054b081bdeb152072046592b7d925f932118f",
+  "kit_commit": "016bbf58937411cabfcc70f7715f5015e8ea8436",
   "exclude": [],
   "files": {
     ".claude/commands/review-local.md": "5c94e4808afaade84d82f16e86317ccfe84151962e45419dee12ffe336c9d2a6",
@@ -19,7 +19,7 @@
     ".claude/hooks/no-merge-pr.py": "6f3855238766dbdebcffdefef64f06cb094d4ec7f496941e41f9daab678642d8",
     ".claude/hooks/no_bypass_signing_impl.py": "0172f45748086c0263cabc2a49cb0a544ea707db15ed0fe840fc5091afa40bc3",
     ".claude/hooks/no_commit_to_main_impl.py": "17e08034abed7a6fcb92d24281d365a4b934342076011e666eb0b964348d4907",
-    ".claude/hooks/no_merge_pr_impl.py": "70db4a9f333e97aa3b3c1fe1c56674b91364e655728398a7c6759f06d36550f3",
+    ".claude/hooks/no_merge_pr_impl.py": "94aa9ce9f35ad2a3aa8b7241e6237fdd95369d2ca3facc1bb7233b77ed222405",
     ".claude/hooks/prove-test-gate-actions": "9d356fbf9c7c89377d1a6bde0440fa6bf34168ab1be6952b599188b7c9840786",
     ".claude/hooks/prove-test-track-edit": "c3c828aaf5bca0fca71da67df3ba83a2a0ef90261e10302b72a92c79e1d457e0",
     ".claude/hooks/prove_test_gate_actions.py": "490b79371f28f6007018d355d385a91d15b80fd3c63b72b7796ff50ab9eada1d",
@@ -31,7 +31,7 @@
     ".claude/hooks/test_guard_runner.py": "1caa9315fd529dbfeb238e2f68a7663f3a24bcf99145b4160634126931ccb378",
     ".claude/hooks/test_no_bypass_signing.py": "b6263bac38bf857a1e0d75e6087a34e1c0d0ce5841a1dfa493e312f11ff473aa",
     ".claude/hooks/test_no_commit_to_main.py": "511f2d963dd2c554bed1e9b401560574f147ada3cef34d607dfe602c9e1c0db2",
-    ".claude/hooks/test_no_merge_pr.py": "26e118e303cead83e65bfe1db543a7108037d721b15ec6e56d9a463cf6333413",
+    ".claude/hooks/test_no_merge_pr.py": "4d5f8d9db77d7971314f481d54b662977aad94394b59e8a5b619ea34ebdc961a",
     ".claude/hooks/test_prove_test_gate_actions.py": "b8588a2acb122a8e7c691d24c86b2b24812bdd0af16c0a4fbba8a8ba673bf940",
     ".claude/hooks/test_prove_test_track_edit.py": "279904c737a54477edb2ca5796dcd807a4c27ce931efff11707526cff9bb24d2",
     ".claude/hooks/test_settings_guards.py": "bd57cf9a7e66be14b174127913cdca96fd0a53d8e01937eb24f025befe8c9929",
