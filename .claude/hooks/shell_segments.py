@@ -62,7 +62,33 @@ contexts - legacy `$[ ... ]` and parameter-expansion subscripts (`${a[i<<2]}`) -
 is not modeled, because the `]` delimiter collides with array-subscript `]` and
 tracking it leaks a new fail-open per rule. A `<<` there is still misread as a
 heredoc opener.
+
+The same holds for WHAT a command word names. `command_name` reads `gh.exe`, `GH`
+and a full Windows path as `gh`; all three guards call it.
+
+The guards do NOT parse the text that `powershell`, `pwsh` or `cmd` runs. Those
+shells quote, escape, comment and chain commands by rules unlike POSIX shell
+(`'` is plain text in cmd, a backtick joins lines in PowerShell, `call` runs a
+command), so a POSIX parse misses real commands. `windows_shell_text` gives each
+guard the whole text, and the guard blocks when the text names what it guards
+against: a merge, a bypass flag, or a git write verb on a protected branch. Text
+that only prints those words blocks too. That is the safe direction.
 """
+
+import re
+
+# Tools whose `command` is shell text that the guards must read.
+SHELL_TOOLS = frozenset(
+    {
+        "Bash",
+        "PowerShell",
+    }
+)
+
+# Windows shells that run their argument text as a command.
+WINDOWS_SHELLS = frozenset({"powershell", "pwsh", "cmd"})
+
+_PATH_SEP = re.compile(r"[/\\]")
 
 _HEREDOC_BARE_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./!:@%+,=~-"
@@ -598,3 +624,88 @@ def split_segments(cmd):
         i += 1
     flush()
     return segs
+
+
+def tool_command(tool, cmd):
+    """Return a shell tool's command in the POSIX form the guards parse."""
+    return _powershell_text(cmd) if tool == "PowerShell" else cmd
+
+
+def _powershell_text(text):
+    """Return PowerShell text in the POSIX form the guards parse.
+
+    A backslash is a path separator in PowerShell, so it becomes a slash and
+    `C:\\x\\gh.exe` stays a path to `gh.exe`. A backtick is the escape
+    character: at a line end it joins the two lines, and before any other
+    character it keeps that character.
+    """
+    text = re.sub(r"`\r?\n", " ", text)
+    return text.replace("`", "").replace("\\", "/")
+
+
+def command_name(word):
+    """Return the program a command word runs: the last path part, in lower
+    case, without `.exe`. Windows runs `GIT.EXE`, `git.exe` and a full path to
+    it as `git`."""
+    name = _PATH_SEP.split(word)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name
+
+
+def windows_shell_text(name, args):
+    """Return the text that the Windows shell `name` (`powershell`, `pwsh` or
+    `cmd`) gets in `args` after its own leading flags, for a guard to search.
+    The case is kept: a guard lowers it where case does not matter. Return None
+    for an encoded PowerShell command, which cannot be read.
+
+    A flag starts with `-`, `--` or `/`. PowerShell's own options and their
+    values end at `-Command` or at the first other word. Any of those options
+    that is a prefix of `-EncodedCommand`, or `-ec`, names an encoded command;
+    after `-Command`, git's `-E` is git's. cmd also runs a command glued to its switch
+    (`/cgh pr merge`, or `/c"gh pr merge & x"`), so that command is split off
+    first.
+    """
+    i = 0
+    if name == "cmd":
+        split = []
+        for arg in args:
+            glued = re.fullmatch(r"(/+[ck])([^/].*)", arg, re.I | re.S)
+            split += [glued.group(1), glued.group(2)] if glued else [arg]
+        args = split
+        while i < len(args) and args[i][:1] == "/":
+            i += 1
+        return " ".join(args[i:])
+    # PowerShell: skip its own options and their values up to the command.
+    while i < len(args) and args[i][:1] in ("-", "/"):
+        flag = args[i].lower().lstrip("-/")
+        if flag and ("command".startswith(flag) or flag.startswith("command")):
+            i += 1
+            break
+        if flag == "ec" or (flag and "encodedcommand".startswith(flag)):
+            return None
+        takes_value = flag in _PS_VALUE_ALIASES or (
+            len(flag) >= 3 and any(n.startswith(flag) for n in _PS_VALUE_FLAGS)
+        )
+        i += 2 if takes_value else 1
+    return " ".join(args[i:])
+
+
+# PowerShell options that take a value, so their value is not the command. A
+# flag matches a name by any prefix of three or more letters, or by an alias.
+# An unknown flag's value stays in the searched text, which only widens it.
+_PS_VALUE_FLAGS = (
+    "configurationfile",
+    "configurationname",
+    "custompipename",
+    "executionpolicy",
+    "file",
+    "inputformat",
+    "outputformat",
+    "psconsolefile",
+    "settingsfile",
+    "version",
+    "windowstyle",
+    "workingdirectory",
+)
+_PS_VALUE_ALIASES = frozenset({"ep", "ex", "f", "if", "of", "o", "v", "w", "wd"})

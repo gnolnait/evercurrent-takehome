@@ -155,6 +155,77 @@ def test_blocks_eval_wrapped_bypass():
     assert _verdict("eval 'git commit --no-verify -m x'") == "BLOCK"
 
 
+def test_blocks_git_exe_name():
+    """Git Bash runs `git.exe`, any case, and a full path to it as `git`."""
+    assert _verdict("git.exe commit --no-verify -m x") == "BLOCK"
+    assert _verdict("GIT.EXE commit --no-verify -m x") == "BLOCK"
+    assert _verdict('"/c/Program Files/Git/cmd/git.exe" commit -n -m x') == "BLOCK"
+
+
+def test_allows_git_exe_clean_commit():
+    assert _verdict("git.exe commit -m x") == "ALLOW"
+
+
+def test_blocks_windows_shell_wrapped_bypass():
+    """powershell, pwsh and cmd run their argument text as a command."""
+    assert _verdict('powershell -NoProfile -Command "git commit --no-verify -m x"') == "BLOCK"
+    assert _verdict("pwsh -c 'git commit --no-verify -m x'") == "BLOCK"
+    assert _verdict('cmd //c "git commit -n -m x"') == "BLOCK"
+    assert _verdict("cmd.exe /c git commit --no-verify -m x") == "BLOCK"
+    assert _verdict("powershell -Command git commit --no-verify -m x") == "BLOCK"
+    assert _verdict("powershell git commit --no-verify -m x") == "BLOCK"
+
+
+def test_blocks_windows_shell_wrapped_bypass_by_backslash_path():
+    """A backslash in the inner command is a path separator, not an escape."""
+    assert _verdict('cmd /c "C:\\Git\\cmd\\git.exe commit --no-verify -m x"') == "BLOCK"
+    assert _verdict('cmd //c "C:\\Program Files\\Git\\cmd\\git.exe" commit --no-verify -m x') == "BLOCK"
+
+
+def test_blocks_windows_shell_syntax_forms():
+    """The guard does not parse cmd or PowerShell text, so their own syntax
+    (a command glued to /c, a backtick line end, `call`, an apostrophe) cannot
+    hide git and a bypass flag."""
+    assert _verdict("cmd //cgit commit --no-verify -m x") == "BLOCK"
+    assert _verdict("powershell -Command 'git `\n  commit --no-verify -m x'") == "BLOCK"
+    assert _verdict('cmd /c "call git.exe commit --no-verify -m x"') == "BLOCK"
+    assert _verdict('cmd /c "echo It\'s done & git commit --no-verify -m x"') == "BLOCK"
+    assert _verdict('cmd //c"git commit --no-verify -m x & echo done"') == "BLOCK"
+    assert _verdict('pwsh -Command "git commit -an -m x"') == "BLOCK"
+    assert _verdict("pwsh -Command 'git commit -m fix -n; Write-Output done'") == "BLOCK"
+    assert _verdict('powershell -Command "git commit \'-n\' -m fix"') == "BLOCK"
+    assert _verdict('pwsh -Command "git commit -anmfix"') == "BLOCK"
+
+
+def test_bypass_words_as_powershell_arguments_fail_closed():
+    """The text is not parsed, so bypass words that are only printed block too,
+    and so does any short git option cluster that holds `n`."""
+    assert _verdict("powershell Write-Output git commit --no-verify") == "BLOCK"
+    assert _verdict('cmd //c "git log -n 5"') == "BLOCK"
+
+
+def test_allows_long_options_that_hold_n_in_windows_shells():
+    assert _verdict('powershell -ExecutionPolicy Bypass -NoProfile -Command "git status"') == "ALLOW"
+    assert _verdict('cmd //c "git --no-pager log"') == "ALLOW"
+    assert _verdict('pwsh -Command "git status; Write-Output -NoEnumerate done"') == "ALLOW"
+
+
+def test_allows_git_option_after_powershell_command_flag():
+    """After -Command the text is the command, so git's -E is not -EncodedCommand."""
+    assert _verdict("powershell -Command git log -E --grep fix -1 --oneline") == "ALLOW"
+
+
+def test_blocks_encoded_powershell_command():
+    """An encoded command cannot be read, so it fails closed."""
+    assert _verdict("powershell -EncodedCommand ZwBpAHQA") == "BLOCK"
+
+
+def test_allows_windows_shell_wrapped_clean_commit():
+    assert _verdict('powershell -Command "git commit -m x"') == "ALLOW"
+    assert _verdict('powershell -NoProfile -nop -Command "git status"') == "ALLOW"
+    assert _verdict('cmd //c "git status"') == "ALLOW"
+
+
 def test_blocks_no_gpg_sign_abbreviation():
     """git accepts unambiguous long-option prefixes: --no-gpg-sig, --no-verif."""
     assert _verdict("git commit --no-gpg-sig -m x") == "BLOCK"
@@ -505,20 +576,19 @@ _SEAM_COMMANDS = [
 ]
 
 
-def test_seam_wrapper_verdict_matches_parser_direct():
+@pytest.mark.parametrize("cmd", _SEAM_COMMANDS)
+def test_seam_wrapper_verdict_matches_parser_direct(cmd):
     """The wrapper must never reach a verdict the parser wouldn't: for every
     command already exercised in this suite, the full pipeline (stdin JSON ->
     wrapper -> parser) agrees with the parser invoked directly. Mechanically
     forbids reintroducing a bash-side fast-allow that diverges from the parser.
+    One case per command, so xdist spreads the process launches.
     """
-    def parser_direct(cmd):
-        rc = subprocess.run(
-            [PYTHON, str(CLI_SHIM), cmd], capture_output=True, text=True
-        ).returncode
-        return "BLOCK" if rc == 2 else "ALLOW" if rc == 0 else "ERROR(%d)" % rc
-
-    for cmd in _SEAM_COMMANDS:
-        assert _verdict(cmd) == parser_direct(cmd), cmd
+    rc = subprocess.run(
+        [PYTHON, str(CLI_SHIM), cmd], capture_output=True, text=True
+    ).returncode
+    parser_direct = "BLOCK" if rc == 2 else "ALLOW" if rc == 0 else "ERROR(%d)" % rc
+    assert _verdict(cmd) == parser_direct, cmd
 
 
 def test_blocked_message_content_on_stderr():

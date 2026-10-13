@@ -142,6 +142,10 @@ channel_id, message_ts}], ask_message, absence}`
 - `tasks` links the item to checklist tasks. `effect` is evidence (progress on the task)
   or done (the task is complete). The model picks the task id from the checklist in the
   prompt, and code verifies that the id exists.
+- Target model (D26, designed 2026-10-13): absences leave the Item type and become a
+  derived `Absence` type; selection reads a per-reader `Candidate`; digest code reads a
+  `Workspace`, not the simulator's `World`. Today an absence is an Item with the
+  `absence` field below.
 - `absence` is set exactly when the type is absence: `{source, gate, task, asker,
   days_silent, buffer_consumed, buffer_days}`, with days in working days. `source` is
   checklist or ask in core; each stretch absence rule (section 5 step 5, c to g) adds
@@ -341,7 +345,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    term in `config/priors.yaml`, so no single input takes a score to zero. Must-see rules
    run over all open items. A ranked-lane candidate is an item whose newest evidence
    falls in the digest window (step 9), or, whatever the age of its evidence, an open
-   blocker, unanswered ask, absence, stale belief, open contradiction, item with a
+   blocker, unanswered ask (in v1, the ask absence of step 5 once the reply cadence
+   passes; an ask made of the reader is must-see), absence, stale belief, open
+   contradiction, item with a
    `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
    been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an

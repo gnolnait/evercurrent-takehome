@@ -12,28 +12,43 @@ Why Python, and which interpreter:
     tokenize each command segment with shlex and dispatch on the COMMAND WORD:
     only a real merge-capable tool (gh / curl / ...) with merge-shaped args is
     blocked; jj / git / echo / cat carrying merge prose in their args are not.
+    The exception is the text of a Windows shell (`powershell -Command "..."`),
+    which is searched, not parsed, so merge prose there does block.
   - The bash fences resolve the interpreter (CLAUDE_HOOK_PYTHON, else python3,
-    else python, skipping the Windows Store alias stub). This module is
-    stdlib-only, so any Python 3.10+ works.
+    else python, python first under Git Bash, skipping the Windows Store
+    alias stub). This module is stdlib-only, so any Python 3.10+ works.
 
 Vectors blocked:
-  1. MCP tool   - any `mcp__<server>__*merge_pull_request*` tool
+  1. MCP tool   - any `mcp__<server>__*merge_pull_request*` or `*auto_merge*` tool
   2. gh CLI     - `gh pr merge ...`
   3. REST API   - PUT .../pulls/<n>/merge via gh / curl / wget / httpie
   4. GraphQL    - mergePullRequest / enablePullRequestAutoMerge / enqueuePullRequest
                   mutations, only when sent through an actual GitHub API call
                   (enqueue = add to merge queue = deferred merge)
 
-Also recurses into `eval "..."` and `bash -c "..."` so a merge wrapped in a
-shell string is still caught.
+Also recurses into `eval "..."` and `bash -c "..."`, so a merge wrapped in a
+shell string is still caught. The text that `powershell`, `pwsh` or `cmd` runs
+is not parsed (see shell_segments): it blocks when it names `merge` together
+with gh or a GitHub API path, or a merge mutation, and an encoded PowerShell
+command always blocks. The command word is read through `command_name`, so
+`gh.exe` and a full path to it count as `gh`. The PowerShell tool's command is
+read the same way as a Bash command.
 
 Not blocked (intentional): `git merge` / `git push`; and a merge phrase that is
-merely an argument to a non-merge command. There is no bypass.
+merely an argument to a non-merge command, outside a Windows shell. There is no
+bypass.
 """
 import re
 import shlex
 
-from shell_segments import split_segments
+from shell_segments import (
+    SHELL_TOOLS,
+    WINDOWS_SHELLS,
+    command_name,
+    split_segments,
+    tool_command,
+    windows_shell_text,
+)
 
 HTTP_TOOLS = {"curl", "wget", "http", "https", "xh", "httpie"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
@@ -49,7 +64,10 @@ NUMERIC_ARG = re.compile(r"^\d+(\.\d+)?[smhd]?$")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 MERGE_PATH = re.compile(r"pulls/[^/\s]+/merge")
 GQL_MUT = re.compile(r"mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest")
-MCP_MERGE = re.compile(r"merge_pull_request", re.I)
+MCP_MERGE = re.compile(r"merge_pull_request|auto_merge", re.I)
+# In Windows shell text: a GitHub client or API path, and the merge mutations.
+GITHUB_WORD = re.compile(r"\bgh\b|api\.github\.com|/graphql|pulls/")
+GQL_MUT_LOWER = re.compile(GQL_MUT.pattern.lower())
 
 
 class _Block(Exception):
@@ -133,10 +151,7 @@ def command_word_and_tokens(seg):
         break
     if not toks:
         return "", []
-    cmdword = _strip_expansion_prefix(toks[0]).rsplit("/", 1)[-1]
-    if cmdword.startswith("\\"):
-        cmdword = cmdword[1:]
-    return cmdword, toks
+    return command_name(_strip_expansion_prefix(toks[0])), toks
 
 
 def check_bash(cmd, depth=0):
@@ -157,6 +172,16 @@ def check_bash(cmd, depth=0):
                 idx = rest.index("-c")
                 if idx + 1 < len(rest):
                     check_bash(rest[idx + 1], depth + 1)
+            continue
+        if cmdword in WINDOWS_SHELLS:
+            text = windows_shell_text(cmdword, rest)
+            if text is None:
+                block("encoded PowerShell command (cannot be read)", seg)
+            text = text.lower()
+            if GQL_MUT_LOWER.search(text):
+                block("merge mutation in a Windows shell command (not parsed)", seg)
+            if "merge" in text and GITHUB_WORD.search(text):
+                block("merge words in a Windows shell command (not parsed)", seg)
             continue
 
         # gh pr merge (pr and merge as consecutive tokens, robust to global flags)
@@ -188,9 +213,9 @@ def evaluate(tool: str, tool_input: dict) -> tuple[bool, str]:
                 block("MCP pull-request merge tool", tool)
             return False, ""
 
-        if tool != "Bash":
+        if tool not in SHELL_TOOLS:
             return False, ""
-        cmd = tool_input.get("command", "") or ""
+        cmd = tool_command(tool, tool_input.get("command", "") or "")
         if cmd.strip():
             check_bash(cmd)
     except _Block as blocked:

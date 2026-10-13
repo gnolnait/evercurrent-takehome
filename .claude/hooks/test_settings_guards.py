@@ -168,3 +168,33 @@ def test_no_edit_tool_registration():
         "hook cannot distinguish authoring from repair, so it blocks repairs "
         "too; that judgement belongs to review." % (offenders,)
     )
+
+
+def test_powershell_group_runs_the_runner_and_the_gate():
+    """The PowerShell tool runs git and gh like Bash does. A group whose matcher
+    is exactly "PowerShell" carries the runner and the prove-test gate, so a
+    change to the Bash group cannot silently drop it."""
+    cfg = json.loads(SETTINGS.read_text())
+    commands = [
+        h.get("command", "")
+        for g in cfg["hooks"]["PreToolUse"]
+        if g.get("matcher") == "PowerShell"
+        for h in g.get("hooks", [])
+    ]
+    assert RUNNER in commands, "guard_runner not registered for the PowerShell tool"
+    assert any("prove-test-gate-actions" in c for c in commands), (
+        "prove-test-gate-actions not registered for the PowerShell tool"
+    )
+
+
+def test_mcp_matcher_covers_auto_merge():
+    """Turning on auto-merge is a deferred merge, so the desktop app's
+    `set_auto_merge` tool must reach the runner."""
+    cfg = json.loads(SETTINGS.read_text())
+    groups = [
+        g
+        for g in cfg["hooks"]["PreToolUse"]
+        if re.fullmatch(g.get("matcher", ""), "mcp__ccd_pr__set_auto_merge")
+    ]
+    commands = [h.get("command", "") for g in groups for h in g.get("hooks", [])]
+    assert RUNNER in commands, "no matcher sends mcp__ccd_pr__set_auto_merge to guard_runner"

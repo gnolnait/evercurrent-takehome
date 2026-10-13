@@ -4,7 +4,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from digest.priors import load_priors
+import digest.priors as priors_module
+from digest.priors import DailyPriors, load_priors
 
 
 @pytest.mark.parametrize("ratio", [0.5, 3, 10])
@@ -130,3 +131,62 @@ def test_load_priors_accepts_role_weight_of_one(tmp_path: Path) -> None:
     priors = load_priors(path)
 
     assert priors.daily.role_priors["ME"]["decision"] == 1
+
+
+@pytest.mark.parametrize("source", ["model", "daily", "bundled"])
+def test_window_priors_defaults(source: str) -> None:
+    if source == "model":
+        window = priors_module.WindowPriors()
+    elif source == "daily":
+        window = DailyPriors().window
+    else:
+        window = load_priors(
+            Path(__file__).resolve().parents[1] / "config/priors.yaml"
+        ).daily.window
+
+    assert window.first_working_days == 5
+    assert window.max_working_days == 10
+
+
+@pytest.mark.parametrize(("first", "maximum"), [(1, 1), (3, 7), (10, 10)])
+def test_window_priors_load_configured_values(tmp_path: Path, first: int, maximum: int) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "triage": {"miss_cost_ratio": 10},
+                "absence": {"ask_reply_cadence_days": 2},
+                "daily": {"window": {"first_working_days": first, "max_working_days": maximum}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    window = load_priors(path).daily.window
+
+    assert window.first_working_days == first
+    assert window.max_working_days == maximum
+
+
+@pytest.mark.parametrize(
+    ("first", "maximum", "field"),
+    [
+        (0, 10, "first_working_days"),
+        (-1, 10, "first_working_days"),
+        (1, 0, "max_working_days"),
+        (1, -1, "max_working_days"),
+    ],
+)
+def test_window_priors_reject_values_below_one(first: int, maximum: int, field: str) -> None:
+    with pytest.raises(ValidationError) as raised:
+        priors_module.WindowPriors(first_working_days=first, max_working_days=maximum)
+
+    assert any(
+        error["loc"] == (field,) and error["type"] == "greater_than_equal"
+        for error in raised.value.errors()
+    )
+
+
+def test_window_priors_reject_first_above_maximum() -> None:
+    with pytest.raises(ValidationError):
+        priors_module.WindowPriors(first_working_days=11, max_working_days=10)

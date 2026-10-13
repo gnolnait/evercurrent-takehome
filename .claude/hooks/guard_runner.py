@@ -25,6 +25,7 @@ import hook_payload as payload  # noqa: E402  (post-path-insert)
 import no_bypass_signing_impl as signing  # noqa: E402
 import no_merge_pr_impl as merge  # noqa: E402
 import no_commit_to_main_impl as commit  # noqa: E402
+import shell_segments as segments  # noqa: E402
 
 
 def _hook_cwd(data):
@@ -49,10 +50,10 @@ def main():
             sys.exit(2)
         sys.exit(0)
 
-    if tool != "Bash":
+    if tool not in segments.SHELL_TOOLS:
         sys.exit(0)
 
-    cmd = payload.read_command("guard_runner", tin)
+    cmd = segments.tool_command(tool, payload.read_command("guard_runner", tin))
     if not cmd.strip():
         sys.exit(0)
 
