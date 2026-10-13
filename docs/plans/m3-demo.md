@@ -225,8 +225,8 @@ anything over the network in replay mode, and it reads no model API key.
 - It posts nothing until all three digests are built; a refusal or cassette miss exits 1
   as `digest demo` does.
 - No `SLACK_WEBHOOK_URL`: exit 1 naming the variable. A post that Slack refuses (status
-  other than 200): exit 1 with the reader, the status and Slack's response body, and no
-  further posts. No output, log line or error ever contains the webhook URL.
+  other than 200): exit 1 with the reader, the status and Slack's error code (the
+  body only when the hardening rule below allows it), and no further posts. No output, log line or error ever contains the webhook URL.
 - The source links point to the synthetic workspace `kestrel-k2.slack.com`, which does
   not exist; the README says so.
 - Hardening (review round, 2026-10-12). Every mrkdwn text object sets `verbatim: true`,
