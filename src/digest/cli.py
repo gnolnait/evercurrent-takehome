@@ -54,6 +54,7 @@ _WEBHOOK_PREFIX = "https://hooks.slack.com/"
 _BOT_TOKEN_PREFIX = "xoxb-"
 _SLACK_ERROR_CODE = re.compile(r"[a-z_]+")  # a body such as invalid_blocks
 _SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]+")
+_AUTH_ERRORS = frozenset({"invalid_auth", "not_authed"})
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -107,12 +108,15 @@ def post(
     must start with https://hooks.slack.com/ and hold no whitespace, else the command
     exits 1 before it builds a digest. It builds the three digests as `digest demo` does
     and posts nothing until all three are built. It posts one message per reader, in
-    reader order. It stops at the first message that Slack refuses or that fails to send.
-    A send failure shows the reader and the exception type only. A refusal shows the
-    reader, the status and the response body. It shows the body only when the body is a
-    Slack error code (lower-case letters and underscores) that is not part of the URL,
-    else it says the body is withheld. The command never constructs the settings object,
-    so it reads no API key. No output contains the webhook URL.
+    reader order. Before the first send, it prints one line with the number of digests
+    and the destination. It stops at the first message that Slack refuses or that fails
+    to send. A send failure shows the reader and the exception type only. A refusal shows
+    the reader, the status and the response body. It shows the body only when the body is
+    a Slack error code (lower-case letters and underscores) that is not part of the URL,
+    else it says the body is withheld. A refusal after a partial post also says how many
+    digests were already sent and that a rerun sends all of them again. A missing URL
+    names the `.env` file in the working directory. The command never constructs the
+    settings object, so it reads no API key. No output contains the webhook URL.
 
     With `--dm USER_ID`, the command does not use the webhook. It sends each digest as a
     direct message from the app's bot to the Slack user `USER_ID` (see `_post_dm`).
@@ -122,14 +126,16 @@ def post(
         return
     url = _webhook_url()
     if url is None:
-        _refuse("SLACK_WEBHOOK_URL is not set in the environment or in .env")
+        _refuse(_not_set("SLACK_WEBHOOK_URL"))
     if not url.startswith(_WEBHOOK_PREFIX) or any(char.isspace() for char in url):
         _refuse(f"SLACK_WEBHOOK_URL must start with {_WEBHOOK_PREFIX} and hold no whitespace")
     loaded, selections = _demo_selections(day)
     messages = [slack_message(loaded, selection) for selection in selections]
     client = _webhook_client(url)
-    for selection, message in zip(selections, messages, strict=True):
+    typer.echo(f"sending {len(messages)} digests to the webhook")
+    for sent, (selection, message) in enumerate(zip(selections, messages, strict=True)):
         reader = selection.profile.name
+        rerun = _rerun_note(sent, len(messages))
         # A refusal raised in an except block would chain the caught exception, so each
         # handler stores the reason and the refusal comes after the try statement.
         failure: str | None = None
@@ -137,7 +143,7 @@ def post(
             response = client.send(text=message["text"], blocks=message["blocks"])
         # The message of an exception can hold the URL, so the refusal shows the type only.
         except Exception as error:
-            failure = f"cannot post the digest for {reader}: {type(error).__name__}"
+            failure = f"cannot post the digest for {reader}: {type(error).__name__}{rerun}"
         if failure is not None:
             _refuse(failure)
         if response.status_code != 200:
@@ -150,7 +156,8 @@ def post(
                 else "body withheld (not a Slack error code)"
             )
             _refuse(
-                f"Slack refused the digest for {reader}: status {response.status_code}, {shown}"
+                f"Slack refused the digest for {reader}: "
+                f"status {response.status_code}, {shown}{rerun}"
             )
         typer.echo(f"posted the digest for {reader}")
 
@@ -163,44 +170,61 @@ def _post_dm(day: int, user_id: str) -> None:
     1 before it builds a digest. It builds the three digests as `digest demo` does and sends
     nothing until all three are built. It opens the DM once with `conversations.open`. It
     posts one message per reader with `chat.postMessage`, in reader order. It stops at the
-    first failure. A Slack API error shows the reader and Slack's error code only, and only
-    when the code is lower-case letters and underscores. Any other exception shows the
-    reader and the exception type only. No output contains the token.
+    first failure. Before it opens the DM, it prints one line with the number of digests
+    and the destination. A Slack API error shows the reader and the text of
+    `_slack_failure`. An `invalid_auth` or `not_authed` error also says whether the token
+    came from the environment or from `.env` (see `_env_source`). A refusal after a
+    partial post also says how many digests were already sent and that a rerun sends all
+    of them again. A missing token names the `.env` file in the working directory. No
+    output contains the token.
     """
     if not _SLACK_USER_ID.fullmatch(user_id):
         _refuse("--dm must be a Slack user id: U or W, then upper-case letters and digits")
     token = _env_value("SLACK_BOT_TOKEN")
     if token is None:
-        _refuse("SLACK_BOT_TOKEN is not set in the environment or in .env")
+        _refuse(_not_set("SLACK_BOT_TOKEN"))
+    source = _env_source("SLACK_BOT_TOKEN")
     if not token.startswith(_BOT_TOKEN_PREFIX):
         _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
     loaded, selections = _demo_selections(day)
     messages = [slack_message(loaded, selection) for selection in selections]
     client = _slack_web_client(token)
+    typer.echo(f"sending {len(messages)} digests by DM to {user_id}")
     # The message of an exception can hold the token, so a refusal shows _slack_failure only.
     # Each refusal comes after its try statement, so no exception chains to it.
     failure: str | None = None
     try:
         channel = client.conversations_open(users=user_id)["channel"]["id"]
     except Exception as error:
-        failure = f"cannot open the DM with {user_id}: {_slack_failure(error)}"
+        failure = f"cannot open the DM with {user_id}: {_dm_failure(error, source)}"
     if failure is not None:
         _refuse(failure)
-    for selection, message in zip(selections, messages, strict=True):
+    for sent, (selection, message) in enumerate(zip(selections, messages, strict=True)):
         reader = selection.profile.name
+        rerun = _rerun_note(sent, len(messages))
         try:
             client.chat_postMessage(channel=channel, text=message["text"], blocks=message["blocks"])
         except Exception as error:
-            failure = f"cannot post the digest for {reader}: {_slack_failure(error)}"
+            failure = f"cannot post the digest for {reader}: {_dm_failure(error, source)}{rerun}"
         if failure is not None:
             _refuse(failure)
         typer.echo(f"posted the digest for {reader}")
 
 
-def _slack_failure(error: Exception) -> str:
-    """Slack's error code of a Slack API error, else the exception type.
+def _dm_failure(error: Exception, source: str) -> str:
+    """The text of `_slack_failure`. An auth error also names the source of the token."""
+    failure = _slack_failure(error)
+    if failure in _AUTH_ERRORS:
+        return f"{failure} (token from {source})"
+    return failure
 
-    The function shows the code only when it is lower-case letters and underscores.
+
+def _slack_failure(error: Exception) -> str:
+    """Slack's error code of a Slack API error, else the exception type. It never raises.
+
+    The function reads the code with the `get` method of the response. It shows the code
+    only when it is lower-case letters and underscores. A response without a callable
+    `get`, a lookup that raises, or a lookup that gives nothing gives the exception type only.
     """
     # slack-sdk is in the optional `slack` extra. _slack_web_client refuses before this
     # point when the extra is not installed.
@@ -208,10 +232,32 @@ def _slack_failure(error: Exception) -> str:
 
     if not isinstance(error, SlackApiError):
         return type(error).__name__
-    code = error.response.get("error")
+    # The response of a real error is a SlackResponse. It has `get`, but it is not a
+    # Mapping. The lookup error can hold the token, so the function shows the type only.
+    try:
+        lookup = getattr(error.response, "get", None)
+        code = lookup("error") if callable(lookup) else None
+    except Exception:
+        code = None
+    if code is None:
+        return type(error).__name__
     if isinstance(code, str) and _SLACK_ERROR_CODE.fullmatch(code):
         return code
     return "SlackApiError, error code withheld (not a Slack error code)"
+
+
+def _rerun_note(sent: int, total: int) -> str:
+    """The note for a refusal after `sent` of `total` digests. It is empty when `sent` is 0."""
+    if sent == 0:
+        return ""
+    if sent == 1:
+        return f"; 1 digest was already sent, and a rerun sends all {total} again"
+    return f"; {sent} digests were already sent, and a rerun sends all {total} again"
+
+
+def _not_set(key: str) -> str:
+    """The refusal for a missing `key`. It names the `.env` file in the working directory."""
+    return f"{key} is not set in the environment or in {Path.cwd() / '.env'}"
 
 
 @app.command()
@@ -611,7 +657,7 @@ def _env_value(key: str) -> str | None:
     file that does not decode exits 1 and names `.env`. The parser skips lines without
     `=` and accepts an `export ` prefix. It removes one pair of matching quotes. An
     unquoted value ends at ` #`, which starts an inline comment. The last line for the
-    key wins. An empty value is no value.
+    key wins. An empty value is no value. `_env_source` names the source of the value.
     """
     value = os.environ.get(key)
     if value:
@@ -646,6 +692,14 @@ def _env_value(key: str) -> str | None:
     return value or None
 
 
+def _env_source(key: str) -> str:
+    """Where `_env_value` reads `key`: "environment" when the variable is not empty, else ".env".
+
+    The function reads the environment only. It does not read `.env`.
+    """
+    return "environment" if os.environ.get(key) else ".env"
+
+
 def _webhook_client(url: str) -> WebhookClient:
     """A Slack webhook client that writes no log line, so no log line holds the URL."""
     # slack-sdk is in the optional `slack` extra. A top-level import would stop every
@@ -667,12 +721,17 @@ def _webhook_client(url: str) -> WebhookClient:
 
 
 def _slack_web_client(token: str) -> WebClient:
-    """A Slack Web API client that writes no log line, so no log line holds the token."""
+    """A Slack Web API client that writes no log line, so no log line holds the token.
+
+    The client retries a connection error once (the SDK default). It retries a
+    rate-limited call once, after the time in Slack's `Retry-After` header.
+    """
     # slack-sdk is in the optional `slack` extra. A top-level import would stop every
     # command when the extra is not installed.
     # The refusal comes after the try statement, so no exception chains to it.
     try:
         from slack_sdk import WebClient
+        from slack_sdk.http_retry import RateLimitErrorRetryHandler, default_retry_handlers
     except ImportError:
         installed = False
     else:
@@ -683,7 +742,8 @@ def _slack_web_client(token: str) -> WebClient:
     # logger drops all of them.
     quiet = logging.getLogger("digest.slack_web")
     quiet.disabled = True
-    return WebClient(token=token, logger=quiet)
+    handlers = [*default_retry_handlers(), RateLimitErrorRetryHandler()]
+    return WebClient(token=token, logger=quiet, retry_handlers=handlers)
 
 
 def _extract_days(
