@@ -115,6 +115,15 @@ class Store:
         log.debug("store_opened", extra={"path": str(path)})
         return cls(connection, path)
 
+    def copy_to(self, path: Path) -> Store:
+        """Copy this store to a new file at `path` and open the copy.
+
+        The copy uses the SQLite online backup API from a read-only connection to this
+        store, so rows still in the write-ahead log are copied too. This store is not
+        changed.
+        """
+        raise NotImplementedError
+
     def close(self) -> None:
         self._db.close()
 

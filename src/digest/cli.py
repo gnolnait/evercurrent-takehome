@@ -479,6 +479,75 @@ def replay(
     typer.echo(report.model_dump_json())
 
 
+@app.command()
+def say(
+    as_: str | None = typer.Option(
+        None, "--as", help="Persona id of the sender; not a bot. Not with --script."
+    ),
+    channel: str | None = typer.Option(
+        None, "--channel", help="Channel name; the persona must be a member. Not with --script."
+    ),
+    at: str | None = typer.Option(
+        None,
+        "--at",
+        help="World time, YYYY-MM-DDTHH:MM[:SS] in the world's time zone, on the store's day "
+        "and later than every event in the store. Not with --script.",
+    ),
+    text: str | None = typer.Option(None, "--text", help="Message text. Not with --script."),
+    thread: str | None = typer.Option(
+        None, "--thread", help="Ts of a top-level message in the channel to reply to."
+    ),
+    script: Path | None = typer.Option(
+        None,
+        "--script",
+        help="Script file: run each JSON line as its own say into a fresh scratch copy.",
+    ),
+    db: Path = typer.Option(
+        ..., "--db", help="Scratch store path; made as a copy of the base store on first use."
+    ),
+    base_db: Path | None = typer.Option(
+        None,
+        "--base-db",
+        help="Base store path, never written; default DIGEST_DB, then data/<world>.sqlite.",
+    ),
+) -> None:
+    """Add a message as a persona at a world time, into a scratch copy of the store.
+
+    The command never writes the base store. It refuses a message that breaks a rule with
+    exit 1 and a one-line reason, and then writes nothing. It writes the event, sets the
+    meta key `extract_until` to the day before the store's day when that key is not
+    already earlier, appends the arguments as one JSON line to `<db>.script.jsonl` and
+    prints the event's ts. Run `digest extract --db <scratch>` next.
+
+    With `--script`, the command runs every line of the file in order, each as its own
+    say with the same rules, into a fresh scratch copy. It appends to no script file.
+    """
+    raise NotImplementedError
+
+
+@app.command()
+def diff(
+    as_of: str = typer.Option(..., "--as-of", help="Digest date, YYYY-MM-DD."),
+    db: Path = typer.Option(..., "--db", help="Store B, the store after the change."),
+    base_db: Path | None = typer.Option(
+        None,
+        "--base-db",
+        help="Store A, the store before the change; default DIGEST_DB, then data/<world>.sqlite.",
+    ),
+    user: str | None = typer.Option(
+        None, "--user", help="Compare only this user id; default every non-bot persona."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print a JSON array of the reader diffs."),
+) -> None:
+    """Show which readers' digests differ between two stores on a date, and why.
+
+    For each reader with a change, the command lists the added, removed and changed lines,
+    each with its title and reason. Then it names the readers with no change. With no change
+    for any reader, it prints "no change" and exits 0.
+    """
+    raise NotImplementedError
+
+
 world_app = typer.Typer(help="Inspect a scripted world.", no_args_is_help=True)
 app.add_typer(world_app, name="world")
 

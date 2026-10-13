@@ -1,11 +1,20 @@
-"""The what-if driver (docs/plans/m3-driver.md): compare two selections of one reader."""
+"""The what-if driver (docs/plans/m3-driver.md).
+
+It builds a message as a persona (`make_event`), holds the script line of `digest say`,
+and compares two selections of one reader (`diff_selections`). The module makes no model
+calls, reads no wall-clock time and writes nothing to a store.
+"""
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Literal, get_args
 
+from pydantic import ConfigDict, Field
+
 from digest.daily.select import SECTION_CAPS, Section, Selection
-from digest.models import Frozen
+from digest.models import TS_PATTERN, Event, Frozen
+from digest.world.schema import World
 
 DiffField = Literal["section", "lane", "rank", "title", "reason"]
 
@@ -113,3 +122,44 @@ def _order(view: LineView) -> tuple[int, int, int, str]:
         view.rank or 0,
         view.item_id,
     )
+
+
+class StoreView(Frozen):
+    """The store facts that `make_event` reads, and no others."""
+
+    day: date  # the world-zone date of meta `until`
+    latest_event_ts: str | None = Field(pattern=TS_PATTERN)  # None for a store with no event
+
+
+def make_event(
+    world: World,
+    store_view: StoreView,
+    persona_id: str,
+    channel_name: str,
+    at: datetime,
+    text: str,
+    thread: str | None,
+) -> Event:
+    """Build the event of one `say` line. Refuse a message that breaks rule S1 or S2.
+
+    `at` is a naive datetime, read in the world's time zone. `thread` is the `ts` of the
+    top-level message to reply to, or None for a new top-level message. The function does
+    not check that `thread` exists (rule S3); the command does.
+    Raise ValueError with a one-line reason for a refused message.
+    """
+    raise NotImplementedError
+
+
+class ScriptLine(Frozen):
+    """The arguments of one `say`, as one JSON line of a script file.
+
+    The JSON keys are the option names, so the persona id has the key "as".
+    """
+
+    model_config = ConfigDict(validate_by_name=True, serialize_by_alias=True)
+
+    as_: str = Field(alias="as")  # persona id
+    channel: str  # channel name
+    at: str  # the `--at` text, YYYY-MM-DDTHH:MM[:SS] in the world's time zone
+    text: str
+    thread: str | None = Field(default=None, pattern=TS_PATTERN)
