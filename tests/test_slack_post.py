@@ -777,9 +777,10 @@ def test_cli_post_sends_three_readers_in_order_and_exits_zero(
     assert result.exit_code == 0, result.output
     assert client.calls == [slack_message(world, selected) for selected in selections]
     assert [call["text"] for call in client.calls] == [
-        "Daily digest for Nadia Brenner (ME) - 2026-10-16",
-        "Daily digest for Hamid Rostami (supply_chain) - 2026-10-16",
-        "Daily digest for Grace Okonkwo (EM) - 2026-10-16",
+        "Daily digest for Nadia Brenner (ME) - 2026-10-16\nSince your digest of 2026-10-15",
+        "Daily digest for Hamid Rostami (supply_chain) - 2026-10-16\n"
+        "Since your digest of 2026-10-15",
+        "Daily digest for Grace Okonkwo (EM) - 2026-10-16\nSince your digest of 2026-10-15",
     ]
     assert WEBHOOK_URL not in result.output
     assert all(WEBHOOK_URL not in str(vars(record)) for record in caplog.records)
