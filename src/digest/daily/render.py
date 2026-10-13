@@ -33,12 +33,8 @@ def render_digest(world: World, selection: Selection) -> str:
     names = {persona.user_id: persona.name for persona in world.personas}
     tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
     profile = selection.profile
-    if selection.previous_digest is None:
-        window = f"First digest: the last {selection.first_working_days} working days"
-    else:
-        window = f"Since your digest of {selection.previous_digest.isoformat()}"
     header = f"Daily digest for {profile.name} ({profile.role}) - {selection.day.isoformat()}"
-    blocks = [f"{header}\n{window}"]
+    blocks = [f"{header}\n{window_line(selection)}"]
     for section, title in SECTION_TITLES.items():
         lines = [line for line in selection.lines if line.section == section]
         if lines:
@@ -49,6 +45,13 @@ def render_digest(world: World, selection: Selection) -> str:
         noun = "item" if selection.hidden == 1 else "items"
         blocks.append(f"{selection.hidden} {noun} hidden by the visibility filter.")
     return "\n\n".join(blocks)
+
+
+def window_line(selection: Selection) -> str:
+    """The line under the header that names the digest window."""
+    if selection.previous_digest is None:
+        return f"First digest: the last {selection.first_working_days} working days"
+    return f"Since your digest of {selection.previous_digest.isoformat()}"
 
 
 def build_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> str:
