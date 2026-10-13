@@ -218,7 +218,8 @@ class RoomLike(Protocol):            # what the web app needs; unit 9 tests use 
     def state(self) -> RoomState: ...
 
 class Room:                          # implements RoomLike; keeps the store path, never an open connection
-    def __init__(self, base: RoomBase) -> None   # state() is build_state(base, store, ()) on a store it opens and closes
+        def __init__(self, base: RoomBase) -> None   # ValueError when base.store_path is not an existing file;
+                                                 # state() is build_state(base, store, ()) on a store it opens and closes
     def apply(self, edit: Edit) -> RoomState   # validates, rebuilds; ValueError on a refusal, state unchanged
     def reset(self) -> RoomState
     def state(self) -> RoomState
@@ -235,8 +236,10 @@ the world panel shows it, so the page never claims a transfer the selection does
 `server_config(app: FastAPI, port: int) -> uvicorn.Config` (host 127.0.0.1). Routes: `GET /` (the page),
 `POST /edit`, `POST /reset`. A valid edit and a reset answer 303 See Other to `/`; a
 refused edit answers 400 with the page and the refusal. `digest serve` builds the
-day-6 store as `digest demo` does, then the base and the `Room`, and runs the server from
-`server_config`. The page's names and checklist tasks for `line_parts` come from the room
+day-6 store as `digest demo` does, but in a temporary directory that it keeps until the
+server stops (`digest demo` deletes its directory when it returns, `src/digest/cli.py`
+`demo`), then builds the base and the `Room` and runs the server from `server_config`
+inside that directory's lifetime. The page's names and checklist tasks for `line_parts` come from the room
 world, so a task owner edit shows in the absence heading.
 
 `POST /edit` form fields (url-encoded): `kind` (the `Edit` kind) and, by kind:
@@ -244,7 +247,9 @@ world, so a task owner edit shows in the absence heading.
 `set_private`: `channel_id`, `private`; `set_owner`: `entity_id`, `role` (the empty
 string means `None`); `set_gate_date`: `gate_id`, `date` (YYYY-MM-DD); `set_task_owner`:
 `task_id`, `role`. A boolean field is a select with the values `true` and `false`, never
-a checkbox, so it is always sent; a missing or other value is refused. Form parsing
+a checkbox, so it is always sent. The app reads the form with `request.form()` and checks
+each field itself before it builds the `Edit`: a missing field, a boolean other than
+exactly `true` or `false`, or an unknown kind answers 400 with the reason, never 422. Form parsing
 needs `python-multipart`, which the stubs commit adds to the `web` extra.
 
 ## Behaviours
@@ -255,7 +260,8 @@ kind changes exactly its field, except that `SetOwner` also removes the entity f
 the edit and the id. Removing a persona from a channel they posted in is accepted.
 
 B8.2 The recorded world and the base store are never changed: after any sequence of
-edits, the base store file is byte-identical to before, `load_world` of the world file
+edits, with every connection closed, the base store file and any `-wal` file beside it are
+byte-identical to before, `load_world` of the world file
 equals the recorded world, and no edit builds a model request.
 
 B8.3 Determinism: two `Room`s given the same edits give equal `RoomState` values.
@@ -348,6 +354,7 @@ same room.
 | P4 | Building the day-6 base store from cassettes takes under 20 seconds | `digest demo` from a fresh clone: 9 seconds, 2026-10-12 | verified |
 | P5 | A rebuild after an edit takes under 200 ms | three `build_digest` calls on the day-6 store: 10 to 12 ms; `load_world` 61 ms | verified |
 | P7 | Core needs no unit 7 code beyond `diff_selections` | the cut list | verified |
+| P12 | Opening and closing an existing store leaves its file unchanged, so `Room` may open it per rebuild | `Store.open` and `close` on a copy of the day-6 store: same sha256 before and after, 2026-10-13 | verified |
 | P11 | Unit 7's `diff_selections` merges before unit 8 needs it | the unit 7 session ships it alone on branch `m3-diff`, ahead of `say` and `diff`, 2026-10-13 | TBD: the schedule's first dependency |
 | P8 | The room world can skip the `World` script checks | `model_copy` worlds ran through `select_digest` with no error, 2026-10-12 | verified, pinned by B8.1 |
 | P9 | A gate moved past its buffer drops its checklist absences | `src/digest/absence.py:41-43` | verified |
