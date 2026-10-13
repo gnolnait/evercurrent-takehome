@@ -116,6 +116,13 @@ CREATES = [
                  id="rest-branch-named-graphql"),
     pytest.param("curl -X POST https://api.github.com/repos/o/r/pulls -d '{}'",
                  id="rest-curl"),
+    pytest.param("curl https://api.github.com/repos/o/r/pulls -d '{}'",
+                 id="rest-curl-data-no-method"),
+    pytest.param("http POST https://api.github.com/repos/o/r/pulls title=t",
+                 id="rest-httpie-post"),
+    # Nested past the read depth: the raw-text check must still see it.
+    pytest.param("eval eval eval eval eval curl https://api.github.com/graphql -d@request.json",
+                 id="graphql-nested-too-deep"),
 ]
 
 
@@ -235,11 +242,12 @@ def test_linked_worktree_reads_the_main_checkout(repo, tmp_path):
     assert [e["head"] for e in _log(repo)] == [sha]
 
 
-def test_head_flag_selects_that_branch(repo):
+@pytest.mark.parametrize("flag", ["--head feat", "--head=feat", "-H feat", "-Hfeat"])
+def test_head_flag_selects_that_branch(repo, flag):
     feat = _head(repo)
     _git(repo, "checkout", "-q", "main")
     _verdict(repo, feat)
-    rc, err = _run("gh pr create --head feat --fill", repo)
+    rc, err = _run("gh pr create %s --fill" % flag, repo)
     assert rc == 0, err
     rc, _err = _run("gh pr create --fill", repo)
     assert rc == 2, "the review of feat was accepted for main's HEAD"
@@ -431,6 +439,13 @@ def test_block_message_paths_use_one_separator(repo):
     assert rc == 2
     root = _git(repo, "rev-parse", "--show-toplevel")
     assert '-o "%s/.review/%s/codex.md"' % (root, _head(repo)) in err, err
+
+
+def test_block_message_asks_codex_to_quote_the_sha(repo):
+    """-o keeps only Codex's last message, so the brief must ask for the SHA."""
+    rc, err = _run(CREATE, repo)
+    assert rc == 2
+    assert "Reviewed-HEAD: %s" % _head(repo) in err, err
 
 
 def test_outside_a_repository_blocks(tmp_path):

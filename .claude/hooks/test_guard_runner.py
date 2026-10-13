@@ -92,7 +92,7 @@ MATRIX = [
 
 @pytest.mark.parametrize("cmd,expected", MATRIX)
 def test_runner_matches_standalone(cmd, expected, repo):
-    """One runner spawn == the three standalone guards for the same payload
+    """One runner spawn == the standalone guards for the same payload
     (on a feature branch, so a 2 comes from signing/merge, not the commit
     guard)."""
     env = _env(repo)
