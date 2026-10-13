@@ -6,7 +6,7 @@ import re
 import shlex
 import sys
 
-from shell_segments import WINDOWS_SHELLS, command_name
+from shell_segments import WINDOWS_SHELLS, command_name, windows_shell_text
 
 # Bash's literal close marker for any delimiter outside these forms — an embedded
 # backslash-escape, an unquoted `$`/backtick that extends the word, a mid-word line
@@ -338,7 +338,8 @@ def tokenize(text):
     shlex with punctuation_chars keeps quoted strings whole (a ';' or '&&'
     inside a commit message no longer splits the command — the 2026-07-06
     false-block) and emits operator runs (&&, ;, |, parens, ...) as their own
-    tokens, which mark segment boundaries. Newlines also separate commands, so
+    tokens, which mark segment boundaries (`_emit` keeps a redirection inside its
+    command). Newlines also separate commands, so
     map them to ';' first — inside a quoted token that substitution can't
     affect segmentation, and the token's content is never interpreted anyway.
     Comment handling is disabled: shlex's '#' rule differs from the shell's
@@ -489,14 +490,10 @@ def names_git_write(text, depth=0):
 UNKNOWN_DIR = object()
 
 
-def process_segment(toks, effdir, piped=(), lead=0):
+def process_segment(toks, effdir, piped=()):
     """Handle one simple command; return the new effective dir (cd), UNKNOWN_DIR
-    for a cd to a path that cannot be resolved, or None.
-
-    `lead` is 1 when the segment starts with a redirection target (`2>&1 git
-    ...` splits at `>&`, so this segment starts with `1`); the command word
-    comes after it.
-    """
+    for a cd to a path that cannot be resolved, or None. `_emit` has already
+    removed the redirections it knows (`2>&1`, `>out`; see `_REDIRECTIONS`)."""
     if not toks:
         return None
     if toks[0] == "cd" and len(toks) >= 2 and not toks[1].startswith("-"):
@@ -506,7 +503,7 @@ def process_segment(toks, effdir, piped=(), lead=0):
     # GIT_DIR / GIT_WORK_TREE redirect the repo somewhere this parser cannot attribute,
     # so a commit under them is ambiguous: set in this command (`GIT_DIR=.. git`,
     # `env GIT_DIR=.. git`), or for the commands after it (git_dir_redirected).
-    head, redirected = min(lead, len(toks)), git_dir_redirected
+    head, redirected = 0, git_dir_redirected
     if any(_sets_git_dir(t) for t in toks):
         redirected = True
     while head < len(toks) and is_env_assignment(toks[head]):
@@ -555,6 +552,9 @@ def process_segment(toks, effdir, piped=(), lead=0):
         payload = " ".join(rest)
         if not any(re.match(r"-\w*c$", t) for t in rest):
             payload += " " + stdin_code
+        if hb in WINDOWS_SHELLS and windows_shell_text(hb, rest) is None:
+            print("__AMBIGUOUS__")  # an encoded PowerShell command cannot be read
+            return None
         if names_git_write(payload):
             print("__AMBIGUOUS__")
         return None
@@ -603,8 +603,10 @@ def process_segment(toks, effdir, piped=(), lead=0):
                 print("__AMBIGUOUS__")
             else:
                 print("commit\t" + (gdir or ""))
-        elif verb in ("checkout", "switch"):
-            # A `--` pathspec separator anywhere means file-restore mode, where HEAD
+        elif verb in ("checkout", "switch") and i == h:
+            # Only a git that runs as the command can move HEAD: in `echo git switch
+            # x` the words are printed, and reading them as a switch would let the
+            # next commit through. A `--` pathspec separator anywhere means file-restore mode, where HEAD
             # does not move. The event carries the repo dir the switch targets, so a
             # switch in a sibling checkout cannot unprotect this repo's branch state.
             target, filemode = "", False
@@ -684,11 +686,20 @@ def _forks(op):
     return "|" in op or ("&" in op and not any(c in op for c in "<>"))
 
 
+# Redirection operators as tokenize() emits them (`2>` comes out as `2` and `>`).
+# Heredoc openers are gone by then (extract_heredocs), and `<<` in arithmetic
+# (`(( 1 << 2 ))`) is not in the set.
+_REDIRECTIONS = frozenset((">", ">>", "<", "<>", "<<<", ">&", "<&", "&>", "&>>", ">|"))
+
+
+def _is_redirection(tok):
+    return tok in _REDIRECTIONS
+
+
 def _runs_after_failure(op):
     """True for an operator after which the next command runs even when the one
     before it failed (`;`, `||`, `&`). `&&`, a pipe (`a && b | c` runs the pipe
-    only when a succeeded), grouping and redirections (which this parser also
-    splits on) are not such operators."""
+    only when a succeeded) and grouping are not such operators."""
     op = op.strip("()")
     return ";" in op or "||" in op or op == "&"
 
@@ -785,8 +796,23 @@ def _emit(cmd, default):
     segment = []
     prev_op = None
     piped = []  # heredoc bodies flowing into the next segment's stdin via '|'
-    lead = 0  # 1 when the current segment starts with a redirection target
+    redirect_target = False  # the next word is the target of a redirection
     for tok in tokens:
+        if redirect_target and tok.strip("();<>|&"):
+            redirect_target = False
+            continue
+        redirect_target = False
+        if _is_redirection(tok):
+            # bash applies a redirection wherever it stands, so it does not end the
+            # command: `git 2>/dev/null commit` is one git commit, `2>&1 git commit`
+            # starts with git, and in `echo 2>&1 a b` the words are echo's. Drop the
+            # operator, its target and a number right before it. The tokens do not
+            # keep spacing, so `switch -c 2 >f` loses its argument 2 as well; that
+            # can only block more.
+            if segment and segment[-1].isdigit():
+                segment.pop()
+            redirect_target = True
+            continue
         if tok and not tok.strip("();<>|&"):  # pure-operator token -> boundary
             before, prev_op = prev_op, tok
             if leading:
@@ -794,15 +820,7 @@ def _emit(cmd, default):
             leading = leading and (not segment or _is_assignment(segment)) and (
                 tok == "&&" or not tok.strip(";")
             )
-            new_dir = process_segment(segment, effdir, piped, lead)
-            # A redirection starts the next command only when no command word
-            # stands before it: only an earlier redirection target, env
-            # assignments and an fd number (`2>&1 git`, `>a >b git`, `X=1 >f
-            # git`). In `echo 2>&1 a b`, the words after it are echo's arguments.
-            words_before = [t for t in segment[lead:] if not is_env_assignment(t)]
-            lead = 1 if set(tok) & set("<>") and "(" not in tok else 0
-            if words_before and not (len(words_before) == 1 and words_before[0].isdigit()):
-                lead = 0
+            new_dir = process_segment(segment, effdir, piped)
             if _forks(tok) or (before and "|" in before.replace("||", "")):
                 new_dir = None  # a cd in a pipe or before `&` runs in a subshell
             if new_dir is UNKNOWN_DIR:
@@ -835,7 +853,7 @@ def _emit(cmd, default):
         segment.append(tok)
     if leading:
         _bind_vars(segment, None, trusted)
-    new_dir = process_segment(segment, effdir, piped, lead)
+    new_dir = process_segment(segment, effdir, piped)
 
 
 def emit_events(cmd: str, default_dir: str) -> str:

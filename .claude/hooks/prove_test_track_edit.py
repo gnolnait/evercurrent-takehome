@@ -3,7 +3,7 @@
 
 When the agent edits a test file, write a pending marker at
 ~/.claude/state/prove-test-pending/<session>-<file-sha>.json. The marker is
-consumed by `prove_test_gate_actions` (PreToolUse on Bash): the next
+consumed by `prove_test_gate_actions` (PreToolUse on Bash and PowerShell): the next
 non-trivial action is blocked until a matching `.test-proof/<sha>.json` (or
 `.skip.json`) exists at the repo root.
 

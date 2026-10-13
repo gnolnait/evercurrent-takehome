@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# guard_runner - single-spawn PreToolUse dispatch for the three git guards
-# (no-bypass-signing, no-merge-pr, no-commit-to-main). Replaces three
-# bash-wrapper + python-parser spawns with ONE python process.
+# guard_runner - single-spawn PreToolUse dispatch for the git and PR guards
+# (no-bypass-signing, no-merge-pr, no-commit-to-main, no-unreviewed-pr). It
+# replaced one bash-wrapper + python-parser spawn per guard with ONE python
+# process.
 #
 # This wrapper is a pure fail-closed rc FENCE and nothing else: it runs the
 # python dispatcher as a CHILD and coerces any non-verdict exit to a block.

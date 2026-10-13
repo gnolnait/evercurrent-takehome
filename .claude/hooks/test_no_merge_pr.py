@@ -95,6 +95,14 @@ BLOCK = [
     pytest.param("echo `gh pr merge 5`", id="command-subst-backtick"),
     pytest.param("{ gh pr merge 5; }", id="brace-group"),
     pytest.param("for x in 1; do gh pr merge $x; done", id="for-do-loop"),
+    pytest.param("if gh pr merge 5; then echo done; fi", id="if-keyword"),
+    pytest.param("while gh pr merge 5; do :; done", id="while-keyword"),
+    pytest.param("until gh pr merge 5; do :; done", id="until-keyword"),
+    pytest.param("if false; then :; elif gh pr merge 5; then :; fi", id="elif-keyword"),
+    pytest.param("if ! gh pr merge 5; then :; fi", id="if-bang-keyword"),
+    pytest.param("if sudo gh pr merge 5; then :; fi", id="if-then-wrapper"),
+    pytest.param("coproc gh pr merge 5", id="coproc-keyword"),
+    pytest.param("time -p gh pr merge 5", id="time-posix-keyword"),
     pytest.param("(echo hi) && (gh pr merge)", id="second-subshell"),
     pytest.param(
         "curl -X PUT https://api.github.com/repos/o/r/pulls/9/merge | cat",
@@ -229,6 +237,12 @@ BLOCK = [
     pytest.param("pwsh -enc ZwBoAA==", id="pwsh-encoded-short"),
     pytest.param("powershell /enc ZwBoAA==", id="powershell-encoded-slash"),
     pytest.param("pwsh --EncodedCommand ZwBoAA==", id="pwsh-encoded-double-dash"),
+    pytest.param("pwsh -ec ZwBoAA==", id="pwsh-encoded-ec-alias"),
+    # A merge mutation without the word "merge" in it.
+    pytest.param(
+        'cmd /c "curl -X POST https://api.github.com/graphql -d mutation{enqueuePullRequest(input:{})}"',
+        id="cmd-graphql-enqueue",
+    ),
 ]
 
 # --- Bash commands that MUST be allowed (no false positive) -------------------
