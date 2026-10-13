@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 from typer.testing import CliRunner
 
 import digest.cli as cli
@@ -268,6 +269,11 @@ class FakeSlackWebClient:
             raise error
 
 
+class RaisingGetResponse:
+    def get(self, key: str) -> str:
+        raise RuntimeError(f"response lookup exposed {BOT_TOKEN}")
+
+
 def successful_extract(store: Store, *args: object, **kwargs: object) -> ExtractReport:
     end = args[4]
     assert isinstance(end, datetime)
@@ -493,6 +499,183 @@ def test_cli_post_dm_reports_arbitrary_post_exception_without_leaking_token(
     for sensitive in (BOT_TOKEN, "bot-secret-value"):
         assert sensitive not in result.output
         assert sensitive not in exception_chain
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        [BOT_TOKEN],
+        BOT_TOKEN,
+        None,
+        RaisingGetResponse(),
+    ],
+    ids=["list", "string", "none", "raising-get"],
+)
+def test_slack_failure_handles_any_response_without_leaking_token(response: Any) -> None:
+    error = SlackApiError(f"post failed with {BOT_TOKEN}", response)
+
+    failure = cli._slack_failure(error)
+
+    assert len(failure) <= 80
+    assert "\n" not in failure
+    assert BOT_TOKEN not in failure
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        [BOT_TOKEN],
+        BOT_TOKEN,
+        None,
+        RaisingGetResponse(),
+    ],
+    ids=["list", "string", "none", "raising-get"],
+)
+def test_cli_post_dm_malformed_slack_response_has_safe_refusal_and_exception_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    response: Any,
+) -> None:
+    error = SlackApiError(f"post failed with {BOT_TOKEN}", response)
+    client = FakeSlackWebClient({1: error})
+    prepare_dm(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "cannot post the digest for Nadia Brenner: SlackApiError" in result.output
+    assert len(result.output) <= 300
+    exception_chain = "".join(traceback.format_exception(result.exception))
+    assert BOT_TOKEN not in result.output
+    assert BOT_TOKEN not in exception_chain
+
+
+def test_slack_web_client_retries_rate_limits() -> None:
+    client = cli._slack_web_client(BOT_TOKEN)
+
+    assert any(isinstance(handler, RateLimitErrorRetryHandler) for handler in client.retry_handlers)
+
+
+@pytest.mark.parametrize(
+    ("use_dm", "destination"),
+    [(True, "DM"), (False, "webhook")],
+    ids=["dm", "webhook"],
+)
+def test_cli_post_announces_count_and_destination_before_first_send_without_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    use_dm: bool,
+    destination: str,
+) -> None:
+    events: list[str] = []
+
+    class TrackingWebhookClient(FakeWebhookClient):
+        def send(self, *, text: str, blocks: list[dict[str, Any]]) -> FakeResponse:
+            events.append("send")
+            return super().send(text=text, blocks=blocks)
+
+    class TrackingSlackWebClient(FakeSlackWebClient):
+        def chat_postMessage(
+            self,
+            *,
+            channel: str,
+            text: str,
+            blocks: list[dict[str, Any]],
+        ) -> None:
+            events.append("send")
+            super().chat_postMessage(channel=channel, text=text, blocks=blocks)
+
+    original_echo = cli.typer.echo
+
+    def record_echo(message: object = None, **kwargs: Any) -> None:
+        events.append(str(message))
+        original_echo(message, **kwargs)
+
+    monkeypatch.setattr(cli.typer, "echo", record_echo)
+    if use_dm:
+        prepare_dm(tmp_path, monkeypatch, TrackingSlackWebClient())
+        arguments = ["post", "--dm", "U012ABC"]
+    else:
+        prepare_post(tmp_path, monkeypatch, TrackingWebhookClient())
+        arguments = ["post"]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 0, result.output
+    announcement = events[0]
+    assert announcement != "send"
+    assert re.search(r"\b3\b", announcement)
+    assert destination in announcement
+    assert WEBHOOK_URL not in announcement
+    assert BOT_TOKEN not in announcement
+
+
+def test_cli_post_dm_partial_failure_explains_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = SlackApiError("second post failed", {"error": "channel_not_found"})
+    client = FakeSlackWebClient({2: error})
+    prepare_dm(tmp_path, monkeypatch, client)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "1 digest was already sent" in result.output
+    assert "rerun sends all 3 again" in result.output
+
+
+@pytest.mark.parametrize(
+    ("arguments", "variable"),
+    [
+        (["post", "--dm", "U012ABC"], "SLACK_BOT_TOKEN"),
+        (["post"], "SLACK_WEBHOOK_URL"),
+    ],
+    ids=["dm", "webhook"],
+)
+def test_cli_post_missing_credential_names_dotenv_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    variable: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(variable, raising=False)
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1, result.output
+    assert variable in result.output
+    assert str(tmp_path) in result.output
+
+
+@pytest.mark.parametrize("source", ["environment", ".env"])
+def test_cli_post_dm_invalid_auth_names_token_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    profile: Profile,
+    source: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    if source == "environment":
+        monkeypatch.setenv("SLACK_BOT_TOKEN", BOT_TOKEN)
+    else:
+        (tmp_path / ".env").write_text(
+            f"SLACK_BOT_TOKEN={BOT_TOKEN}\n",
+            encoding="utf-8",
+        )
+    selected = selection(profile, line(item()))
+    monkeypatch.setattr(cli, "_demo_selections", lambda day: (world, [selected] * 3))
+    error = SlackApiError("authentication failed", {"error": "invalid_auth"})
+    monkeypatch.setattr(cli, "_slack_web_client", lambda token: FakeSlackWebClient({1: error}))
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC"])
+
+    assert result.exit_code == 1, result.output
+    assert "invalid_auth" in result.output
+    assert f"token from {source}" in result.output
+    assert BOT_TOKEN not in result.output
 
 
 def test_cli_post_sends_three_readers_in_order_and_exits_zero(
