@@ -1,25 +1,28 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import traceback
 from collections.abc import Callable, Sequence
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
+import slack_sdk
 from slack_sdk.errors import SlackApiError, SlackRequestError
 from slack_sdk.web.slack_response import SlackResponse
 from typer.testing import CliRunner
 
 import digest.cli as cli
 from digest.cli import app
-from digest.models import Event
+from digest.models import Event, Reaction
 from digest.replay import read_events
 from digest.seed import (
-    FILE_SCOPE,
-    REQUIRED_SCOPES,
     AuthInfo,
+    MappedFile,
     MappedMessage,
     Post,
     RateLimited,
@@ -38,9 +41,22 @@ WORLD_PATH = ROOT / "data" / "world" / "kestrel" / "world.yaml"
 EVENTS_PATH = ROOT / "data" / "world" / "kestrel" / "events.jsonl"
 WORKSPACE = "https://seed-test.slack.com"
 BOT_TOKEN = "xox" + "b-" + "seed-test-secret"
-ALL_SCOPES = REQUIRED_SCOPES | {FILE_SCOPE}
+ALL_SCOPES = frozenset(
+    {
+        "chat:write",
+        "chat:write.customize",
+        "channels:read",
+        "channels:join",
+        "groups:read",
+        "files:write",
+    }
+)
 WRITE_METHODS = {"join", "post", "upload"}
 runner = CliRunner()
+DAY_ONE_DRY_RUN_LINES = [
+    "kestrel-program: 5 posts, 0 files",
+    "plm-feed: 5 posts, 1 files",
+]
 
 
 @pytest.fixture
@@ -54,7 +70,7 @@ def corpus(world: World) -> list[Event]:
 
 
 class FakeSlackSeedClient:
-    """Record every attempt and optionally raise at a global call number."""
+    """Record attempts and optionally fail a named operation attempt."""
 
     def __init__(
         self,
@@ -62,22 +78,29 @@ class FakeSlackSeedClient:
         *,
         channels: Sequence[SlackChannel] | None = None,
         scopes: frozenset[str] = ALL_SCOPES,
-        failures: dict[int, Exception] | None = None,
+        failures: dict[tuple[str, int], Exception] | None = None,
         timeline: list[tuple[str, object]] | None = None,
         team_id: str = "T-SEED",
+        before_call: Callable[[str, int], None] | None = None,
     ) -> None:
         self.auth = AuthInfo(team_id=team_id, url=WORKSPACE, scopes=scopes)
         self.channels = list(channels) if channels is not None else slack_channels(world)
         self.failures = failures or {}
         self.calls: list[dict[str, Any]] = []
         self.timeline = timeline
+        self.before_call = before_call
+        self.attempts: dict[str, int] = {}
 
     def _record(self, method: str, **values: object) -> dict[str, Any]:
+        attempt = self.attempts.get(method, 0) + 1
+        self.attempts[method] = attempt
+        if self.before_call is not None:
+            self.before_call(method, attempt)
         call = {"method": method, **values}
         self.calls.append(call)
         if self.timeline is not None:
             self.timeline.append(("call", method))
-        error = self.failures.get(len(self.calls))
+        error = self.failures.get((method, attempt))
         if error is not None:
             raise error
         return call
@@ -150,8 +173,24 @@ def successful_calls(client: FakeSlackSeedClient, method: str) -> list[dict[str,
     return [call for call in calls(client, method) if "result" in call]
 
 
+def rewritten_text(source: Event, world: World) -> str:
+    names = {persona.user_id: persona.name for persona in world.personas}
+    return re.sub(
+        r"<@([^>]+)>", lambda match: f"@{names.get(match.group(1), 'unknown')}", source.text
+    )
+
+
 def assert_no_writes(client: FakeSlackSeedClient) -> None:
     assert not any(call["method"] in WRITE_METHODS for call in client.calls)
+
+
+def assert_mapped_messages(saved: SeedMap, client: FakeSlackSeedClient) -> None:
+    for call in successful_calls(client, "post"):
+        payload = call["metadata"]["event_payload"]
+        mapped = saved.messages[f"{payload['channel']}:{payload['ts']}"]
+        assert mapped.channel == call["channel_id"]
+        assert mapped.ts == call["result"]
+        assert mapped.thread_ts == (call["thread_ts"] or call["result"])
 
 
 def recording_sleep(timeline: list[tuple[str, object]]) -> Callable[[float], None]:
@@ -187,6 +226,11 @@ def event(
         edited=edited,
         deleted=deleted,
     )
+
+
+def timestamp_at(world: World, day: int, at: time) -> str:
+    local = datetime.combine(world.date_of(day), at, tzinfo=ZoneInfo(world.timezone))
+    return f"{local.timestamp():.6f}"
 
 
 def post(
@@ -275,6 +319,7 @@ def test_b2_b3_b5_kestrel_posts_in_world_order_with_threads_personas_and_metadat
 
     ordered = sorted(enumerate(corpus), key=lambda pair: (pair[1].ts, pair[0]))
     post_calls = successful_calls(client, "post")
+    upload_calls = successful_calls(client, "upload")
     personas = {persona.user_id: persona for persona in world.personas}
     emoji = {
         "ME": ":gear:",
@@ -286,6 +331,7 @@ def test_b2_b3_b5_kestrel_posts_in_world_order_with_threads_personas_and_metadat
         None: ":robot_face:",
     }
     slack_roots: dict[str, str] = {}
+    slack_ids = {channel.id: f"S-{channel.id}" for channel in world.channels}
     assert len(planned) == len(post_calls) == 132
     assert [item.key for item in planned] == [
         f"{source.channel_id}:{source.ts}" for _, source in ordered
@@ -294,6 +340,10 @@ def test_b2_b3_b5_kestrel_posts_in_world_order_with_threads_personas_and_metadat
         persona = personas[source.user_id]
         root_key = f"{source.channel_id}:{source.thread_ts}"
         expected_thread = None if source.ts == source.thread_ts else slack_roots[root_key]
+        expected_text = rewritten_text(source, world)
+        assert call["channel_id"] == slack_ids[source.channel_id]
+        assert call["text"] == expected_text
+        assert "<@" not in call["text"]
         assert call["thread_ts"] == expected_thread
         assert call["username"] == persona.name
         assert call["icon_emoji"] == emoji[persona.role]
@@ -308,11 +358,28 @@ def test_b2_b3_b5_kestrel_posts_in_world_order_with_threads_personas_and_metadat
         }
         if source.ts == source.thread_ts:
             slack_roots[root_key] = call["result"]
+    expected_uploads = [
+        (slack_ids[source.channel_id], filename)
+        for _, source in ordered
+        for filename in source.files
+    ]
+    assert len(upload_calls) == len(expected_uploads) == 5
+    for call, (channel_id, filename) in zip(upload_calls, expected_uploads, strict=True):
+        assert call["channel_id"] == channel_id
+        assert call["filename"] == filename
+        assert call["content"] == placeholder_file(filename)
     assert report.posts == 132
     assert report.files == 5
     assert report.channels == 8
     assert report.reactions_not_seeded == 72
     assert report.complete is True
+    saved = SeedMap.model_validate_json((tmp_path / "seed.json").read_text(encoding="utf-8"))
+    for call, (_, source) in zip(post_calls, ordered, strict=True):
+        mapped = saved.messages[f"{source.channel_id}:{source.ts}"]
+        root_key = f"{source.channel_id}:{source.thread_ts}"
+        assert mapped.channel == call["channel_id"]
+        assert mapped.ts == call["result"]
+        assert mapped.thread_ts == slack_roots[root_key]
 
 
 def test_b4_mentions_use_persona_names_and_unknown_for_an_unknown_id(world: World) -> None:
@@ -324,6 +391,31 @@ def test_b4_mentions_use_persona_names_and_unknown_for_an_unknown_id(world: Worl
     assert "<@" not in planned[0].text
 
 
+def test_b2_plan_sorts_by_timestamp_and_keeps_input_order_for_ties(world: World) -> None:
+    late = event(channel="C0ENGME", ts="1791819002.100000", text="late")
+    tied_first = event(channel="C0ENGEF", ts="1791819001.100000", text="tied first")
+    tied_second = event(channel="C0ENGME", ts="1791819001.100000", text="tied second")
+    early = event(channel="C0SCM", ts="1791819000.100000", text="early")
+
+    planned = plan_seed(world, [late, tied_first, tied_second, early], None)
+
+    assert [item.text for item in planned] == ["early", "tied first", "tied second", "late"]
+
+
+def test_a10_until_day_uses_world_timezone_boundary_and_extends_exact_keys(world: World) -> None:
+    before = event(channel="C0ENGME", ts=timestamp_at(world, 1, time(23, 30)), text="day one")
+    after = event(channel="C0ENGEF", ts=timestamp_at(world, 2, time(0, 30)), text="day two")
+
+    first = plan_seed(world, [after, before], until_day=1)
+    second = plan_seed(world, [after, before], until_day=2)
+
+    before_key = f"{before.channel_id}:{before.ts}"
+    after_key = f"{after.channel_id}:{after.ts}"
+    assert [item.key for item in first] == [before_key]
+    assert [item.key for item in second] == [before_key, after_key]
+    assert {item.key for item in second} - {item.key for item in first} == {after_key}
+
+
 @pytest.mark.parametrize("field", ["edited", "deleted"])
 def test_b7_edit_or_delete_is_refused_with_the_world_message_key(field: str, world: World) -> None:
     source = event(edited=field == "edited", deleted=field == "deleted")
@@ -333,8 +425,20 @@ def test_b7_edit_or_delete_is_refused_with_the_world_message_key(field: str, wor
         plan_seed(world, [source], None)
 
 
+def test_b7_edit_outside_selected_days_does_not_stop_the_run(world: World) -> None:
+    selected = event(ts=timestamp_at(world, 1, time(12)), text="selected")
+    later_edit = event(ts=timestamp_at(world, 2, time(12)), text="later", edited=True)
+
+    planned = plan_seed(world, [later_edit, selected], until_day=1)
+
+    assert [item.key for item in planned] == [f"{selected.channel_id}:{selected.ts}"]
+
+
 def test_b6_files_follow_the_post_use_the_root_and_are_saved(tmp_path: Path, world: World) -> None:
-    source = event(files=("PN-11020_FAI_photos.pdf", "BLD-DVT1_build_log_2026-10-23.xlsx"))
+    source = event(
+        text="Send <@U0ME01> these files",
+        files=("PN-11020_FAI_photos.pdf", "BLD-DVT1_build_log_2026-10-23.xlsx"),
+    )
     client = FakeSlackSeedClient(world)
     map_path = tmp_path / "seed.json"
 
@@ -350,19 +454,32 @@ def test_b6_files_follow_the_post_use_the_root_and_are_saved(tmp_path: Path, wor
 
     assert [call["method"] for call in client.calls[-3:]] == ["post", "upload", "upload"]
     posted_ts = successful_calls(client, "post")[0]["result"]
+    posted = successful_calls(client, "post")[0]
     uploads = successful_calls(client, "upload")
+    assert posted["channel_id"] == "S-C0ENGME"
+    assert posted["text"] == rewritten_text(source, world)
+    assert "<@" not in posted["text"]
+    assert [call["channel_id"] for call in uploads] == ["S-C0ENGME", "S-C0ENGME"]
     assert [call["filename"] for call in uploads] == list(source.files)
     assert [call["thread_ts"] for call in uploads] == [posted_ts, posted_ts]
+    assert [call["content"] for call in uploads] == [
+        placeholder_file(name) for name in source.files
+    ]
     saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
+    mapped_message = saved.messages[f"{source.channel_id}:{source.ts}"]
+    assert mapped_message.channel == posted["channel_id"]
+    assert mapped_message.ts == posted_ts
+    assert mapped_message.thread_ts == posted_ts
     mapped = [
         saved.files[f"{source.channel_id}:{source.ts}/{name}"].permalink for name in source.files
     ]
     assert mapped == [f"{WORKSPACE}/files/{name}" for name in source.files]
     pdf = placeholder_file(source.files[0])
-    assert pdf.startswith(b"%PDF")
+    assert pdf.startswith(b"%PDF-")
+    assert pdf.rstrip().endswith(b"%%EOF")
     assert source.files[0].encode() in pdf
     assert b"Kestrel K2 test data" in pdf
-    assert placeholder_file(source.files[1]) == b"Kestrel K2 test data\n"
+    assert "Kestrel K2 test data" in placeholder_file(source.files[1]).decode("utf-8")
 
 
 def test_b9_resume_skips_done_posts_and_a_complete_map(
@@ -371,13 +488,26 @@ def test_b9_resume_skips_done_posts_and_a_complete_map(
     planned = [post(key=f"C0ENGME:179181900{i}.100000") for i in range(3)]
     map_path = tmp_path / "seed.json"
     stopped = RuntimeError("stop after the first post")
-    first = FakeSlackSeedClient(world, failures={4: stopped})
 
-    with pytest.raises(RuntimeError, match="first post"):
+    def check_checkpoint(method: str, attempt: int) -> None:
+        if (method, attempt) == ("post", 2):
+            saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
+            assert set(saved.messages) == {planned[0].key}
+            assert planned[1].key not in saved.messages
+
+    first = FakeSlackSeedClient(
+        world,
+        failures={("post", 2): stopped},
+        before_call=check_checkpoint,
+    )
+
+    with pytest.raises(Exception) as caught:
         seed(world, planned, first, map_path, pace=0, sleep=lambda _: None, dry_run=False)
 
+    assert caught.value is not None
     checkpoint = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
     assert list(checkpoint.messages) == [planned[0].key]
+    assert_mapped_messages(checkpoint, first)
     assert checkpoint.complete is False
     resumed = FakeSlackSeedClient(world)
     report = seed(world, planned, resumed, map_path, pace=0, sleep=lambda _: None, dry_run=False)
@@ -389,7 +519,7 @@ def test_b9_resume_skips_done_posts_and_a_complete_map(
         planned[1].key.split(":", 1)[1],
         planned[2].key.split(":", 1)[1],
     ]
-    assert "accepted" in output and "repeat" in output
+    assert output.strip()
     assert report.posts == 2
     complete = FakeSlackSeedClient(world)
     rerun = seed(world, planned, complete, map_path, pace=0, sleep=lambda _: None, dry_run=False)
@@ -402,15 +532,39 @@ def test_b9_resume_between_two_uploads_retries_only_the_missing_file(
 ) -> None:
     planned = [post(files=("first.pdf", "second.pdf"))]
     map_path = tmp_path / "seed.json"
-    first = FakeSlackSeedClient(world, failures={5: RuntimeError("second upload stopped")})
 
-    with pytest.raises(RuntimeError, match="second upload"):
+    def check_checkpoint(method: str, attempt: int) -> None:
+        if method != "upload":
+            return
+        saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
+        first_key = f"{planned[0].key}/first.pdf"
+        second_key = f"{planned[0].key}/second.pdf"
+        assert planned[0].key in saved.messages
+        if attempt == 1:
+            assert first_key not in saved.files
+        if attempt == 2:
+            assert first_key in saved.files
+            assert second_key not in saved.files
+
+    first = FakeSlackSeedClient(
+        world,
+        failures={("upload", 2): RuntimeError("second upload stopped")},
+        before_call=check_checkpoint,
+    )
+
+    with pytest.raises(Exception) as caught:
         seed(world, planned, first, map_path, pace=0, sleep=lambda _: None, dry_run=False)
 
+    assert caught.value is not None
+    first_checkpoint = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
+    assert_mapped_messages(first_checkpoint, first)
+    saved_root_ts = first_checkpoint.messages[planned[0].key].thread_ts
     resumed = FakeSlackSeedClient(world)
     report = seed(world, planned, resumed, map_path, pace=0, sleep=lambda _: None, dry_run=False)
     assert successful_calls(resumed, "post") == []
-    assert [call["filename"] for call in successful_calls(resumed, "upload")] == ["second.pdf"]
+    resumed_uploads = successful_calls(resumed, "upload")
+    assert [call["filename"] for call in resumed_uploads] == ["second.pdf"]
+    assert resumed_uploads[0]["thread_ts"] == saved_root_ts
     assert (report.posts, report.files, report.channels) == (0, 1, 1)
 
 
@@ -434,7 +588,8 @@ def test_b1_channel_problem_stops_before_a_write_and_names_the_problem(
     replacement: SlackChannel | None,
     message: str,
 ) -> None:
-    selected = event(channel=channel_id)
+    selected = event(channel=channel_id, ts="1791819001.100000")
+    available_first = event(channel="C0ENGEF", ts="1791819000.100000", text="available first")
     world_name = next(channel.name for channel in world.channels if channel.id == channel_id)
     available = [channel for channel in slack_channels(world) if channel.name != world_name]
     if replacement is not None:
@@ -444,7 +599,7 @@ def test_b1_channel_problem_stops_before_a_write_and_names_the_problem(
     with pytest.raises(Exception, match=re.escape(message)) as caught:
         seed(
             world,
-            plan_seed(world, [selected], None),
+            plan_seed(world, [available_first, selected], None),
             client,
             tmp_path / "seed.json",
             pace=0,
@@ -483,17 +638,25 @@ class PagingWebClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def conversations_list(self, **kwargs: Any) -> dict[str, Any]:
+    def conversations_list(self, **kwargs: Any) -> SlackResponse:
         self.calls.append(kwargs)
         if len(self.calls) == 1:
-            return {
-                "channels": [{"id": "C1", "name": "one", "is_private": False, "is_member": True}],
-                "response_metadata": {"next_cursor": "page-2"},
+            return slack_response(
+                data={
+                    "ok": True,
+                    "channels": [
+                        {"id": "C1", "name": "one", "is_private": False, "is_member": True}
+                    ],
+                    "response_metadata": {"next_cursor": "page-2"},
+                }
+            )
+        return slack_response(
+            data={
+                "ok": True,
+                "channels": [{"id": "C2", "name": "two", "is_private": True, "is_member": False}],
+                "response_metadata": {"next_cursor": ""},
             }
-        return {
-            "channels": [{"id": "C2", "name": "two", "is_private": True, "is_member": False}],
-            "response_metadata": {"next_cursor": ""},
-        }
+        )
 
 
 def test_b1_adapter_lists_public_and_private_channels_until_cursor_is_empty() -> None:
@@ -513,14 +676,14 @@ def test_b1_adapter_lists_public_and_private_channels_until_cursor_is_empty() ->
 
 
 @pytest.mark.parametrize(
-    ("target", "failure_call"),
-    [("list_channels", 2), ("post", 3), ("upload", 4)],
+    "target",
+    ["list_channels", "post", "upload"],
 )
 def test_b11_rate_limit_waits_then_retries_the_same_operation_once(
-    tmp_path: Path, world: World, target: str, failure_call: int
+    tmp_path: Path, world: World, target: str
 ) -> None:
     waits: list[float] = []
-    client = FakeSlackSeedClient(world, failures={failure_call: RateLimited(3)})
+    client = FakeSlackSeedClient(world, failures={(target, 1): RateLimited(3)})
 
     report = seed(
         world,
@@ -533,7 +696,11 @@ def test_b11_rate_limit_waits_then_retries_the_same_operation_once(
     )
 
     assert waits == [3]
-    assert len(calls(client, target)) == 2
+    attempts = calls(client, target)
+    assert len(attempts) == 2
+    assert {key: value for key, value in attempts[0].items() if key != "result"} == {
+        key: value for key, value in attempts[1].items() if key != "result"
+    }
     assert (report.posts, report.files) == (1, 1)
 
 
@@ -542,10 +709,10 @@ def test_b11_six_rate_limits_stop_and_leave_an_incomplete_map(tmp_path: Path, wo
     map_path = tmp_path / "seed.json"
     client = FakeSlackSeedClient(
         world,
-        failures={number: RateLimited(3) for number in range(2, 8)},
+        failures={("list_channels", attempt): RateLimited(3) for attempt in range(1, 7)},
     )
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(Exception) as caught:
         seed(
             world,
             [post()],
@@ -556,9 +723,32 @@ def test_b11_six_rate_limits_stop_and_leave_an_incomplete_map(tmp_path: Path, wo
             dry_run=False,
         )
 
+    assert caught.value is not None
     assert len(calls(client, "list_channels")) == 6
     assert waits == [3] * 5
     assert SeedMap.model_validate_json(map_path.read_text(encoding="utf-8")).complete is False
+
+
+def test_b11_exhausted_upload_retries_keep_the_acknowledged_post(
+    tmp_path: Path, world: World
+) -> None:
+    map_path = tmp_path / "seed.json"
+    planned = post(files=("one.pdf",))
+    client = FakeSlackSeedClient(
+        world,
+        failures={("upload", attempt): RateLimited(3) for attempt in range(1, 7)},
+    )
+
+    with pytest.raises(Exception) as caught:
+        seed(world, [planned], client, map_path, pace=0, sleep=lambda _: None, dry_run=False)
+
+    assert caught.value is not None
+    saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
+    posted = successful_calls(client, "post")[0]
+    assert saved.messages[planned.key].channel == posted["channel_id"]
+    assert saved.messages[planned.key].ts == posted["result"]
+    assert saved.messages[planned.key].thread_ts == posted["result"]
+    assert saved.files == {}
 
 
 @pytest.mark.parametrize(("field", "wrong"), [("team_id", "T-OTHER"), ("world", "other")])
@@ -582,10 +772,11 @@ def test_b10_map_identity_mismatch_stops_before_any_write(
     )
     client = FakeSlackSeedClient(world)
 
-    with pytest.raises(Exception, match=re.escape(wrong)):
+    with pytest.raises(Exception) as caught:
         seed(world, [post()], client, map_path, pace=0, sleep=lambda _: None, dry_run=False)
 
     assert_no_writes(client)
+    assert field in str(caught.value) or world.name in str(caught.value)
 
 
 class FakeWebClient:
@@ -603,29 +794,66 @@ class FakeWebClient:
             headers={"x-oauth-scopes": ",".join(sorted(ALL_SCOPES))},
         )
 
-    def conversations_list(self, **kwargs: Any) -> dict[str, Any]:
+    def conversations_list(self, **kwargs: Any) -> SlackResponse:
         self.calls.append({"method": "conversations_list", **kwargs})
-        return {
-            "channels": [
-                {"id": "S-C0ENGME", "name": "eng-mech", "is_private": False, "is_member": True}
-            ],
-            "response_metadata": {"next_cursor": ""},
-        }
+        return slack_response(
+            data={
+                "ok": True,
+                "channels": [
+                    {
+                        "id": "S-C0ENGME",
+                        "name": "eng-mech",
+                        "is_private": False,
+                        "is_member": True,
+                    }
+                ],
+                "response_metadata": {"next_cursor": ""},
+            }
+        )
 
-    def conversations_join(self, *, channel: str) -> None:
+    def conversations_join(self, *, channel: str) -> SlackResponse:
         self.calls.append({"method": "conversations_join", "channel": channel})
+        return slack_response(data={"ok": True, "channel": {"id": channel}})
 
-    def chat_postMessage(self, **kwargs: Any) -> dict[str, str]:
+    def chat_postMessage(self, **kwargs: Any) -> SlackResponse:
         self.calls.append({"method": "chat_postMessage", **kwargs})
         if self.post_error is not None:
             raise self.post_error
-        return {"ts": "1700000000.000100"}
+        return slack_response(data={"ok": True, "ts": "1700000000.000100"})
 
-    def files_upload_v2(self, **kwargs: Any) -> dict[str, Any]:
+    def files_upload_v2(self, **kwargs: Any) -> SlackResponse:
         self.calls.append({"method": "files_upload_v2", **kwargs})
         if self.upload_error is not None:
             raise self.upload_error
-        return {"file": {"permalink": f"{WORKSPACE}/files/F1/name"}}
+        file = {"id": "F1", "permalink": f"{WORKSPACE}/files/F1/name"}
+        return slack_response(data={"ok": True, "file": file, "files": [file]})
+
+
+def test_cli_seed_client_builds_web_client_without_retry_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: dict[str, object] = {}
+    web = object()
+
+    def factory(*, token: str, retry_handlers: list[object]) -> object:
+        recorded.update(token=token, retry_handlers=retry_handlers)
+        return web
+
+    monkeypatch.setattr(slack_sdk, "WebClient", factory)
+
+    adapter = cli._seed_client(BOT_TOKEN)
+
+    assert recorded == {"token": BOT_TOKEN, "retry_handlers": []}
+    assert isinstance(adapter, SlackWebSeedClient)
+    assert adapter._web is web
+
+
+def test_b11_adapter_auth_test_reads_identity_and_scopes_from_slack_response() -> None:
+    web = FakeWebClient()
+
+    auth = SlackWebSeedClient(web).auth_test()
+
+    assert auth == AuthInfo(team_id="T-SEED", url=WORKSPACE, scopes=ALL_SCOPES)
 
 
 def test_b11_adapter_turns_real_429_into_rate_limited() -> None:
@@ -689,19 +917,28 @@ def test_b11_adapter_post_sends_persona_metadata_and_thread_and_upload_returns_p
 def test_b11_request_error_from_upload_is_not_retried(tmp_path: Path, world: World) -> None:
     error = SlackRequestError("byte transfer stopped")
     web = FakeWebClient(upload_error=error)
+    map_path = tmp_path / "seed.json"
 
-    with pytest.raises(SlackRequestError, match="byte transfer"):
+    with pytest.raises(Exception) as caught:
         seed(
             world,
             [post(files=("name.xlsx",))],
             SlackWebSeedClient(web),
-            tmp_path / "seed.json",
+            map_path,
             pace=0,
             sleep=lambda _: None,
             dry_run=False,
         )
 
+    assert caught.value is not None
     assert sum(call["method"] == "files_upload_v2" for call in web.calls) == 1
+    saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
+    assert list(saved.messages) == ["C0ENGME:1791819000.100000"]
+    mapped = saved.messages["C0ENGME:1791819000.100000"]
+    assert mapped.channel == "S-C0ENGME"
+    assert mapped.ts == "1700000000.000100"
+    assert mapped.thread_ts == "1700000000.000100"
+    assert saved.files == {}
 
 
 def test_b2_reply_uses_a_root_from_the_saved_map(tmp_path: Path, world: World) -> None:
@@ -738,12 +975,34 @@ def test_b2_reply_without_a_saved_or_earlier_root_stops_before_any_write(
         key="C0ENGME:1791819001.100000",
         root_key="C0ENGME:1791819000.100000",
     )
+    valid_first = post(key="C0ENGEF:1791818999.100000", world_channel="C0ENGEF")
     client = FakeSlackSeedClient(world)
 
     with pytest.raises(Exception, match=re.escape(reply.key)):
         seed(
             world,
-            [reply],
+            [valid_first, reply],
+            client,
+            tmp_path / "seed.json",
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+        )
+
+    assert_no_writes(client)
+
+
+def test_b2_reply_whose_root_appears_only_later_stops_before_any_write(
+    tmp_path: Path, world: World
+) -> None:
+    root = post(key="C0ENGME:1791819002.100000")
+    reply = post(key="C0ENGME:1791819001.100000", root_key=root.key)
+    client = FakeSlackSeedClient(world)
+
+    with pytest.raises(Exception, match=re.escape(reply.key)):
+        seed(
+            world,
+            [reply, root],
             client,
             tmp_path / "seed.json",
             pace=0,
@@ -797,7 +1056,11 @@ def test_b13_pace_precedes_each_write_after_the_first_and_zero_disables_it(
 
 def test_b13_retry_wait_is_separate_from_pace_wait(tmp_path: Path, world: World) -> None:
     timeline: list[tuple[str, object]] = []
-    client = FakeSlackSeedClient(world, failures={3: RateLimited(3)}, timeline=timeline)
+    client = FakeSlackSeedClient(
+        world,
+        failures={("upload", 1): RateLimited(3)},
+        timeline=timeline,
+    )
 
     seed(
         world,
@@ -812,19 +1075,40 @@ def test_b13_retry_wait_is_separate_from_pace_wait(tmp_path: Path, world: World)
     writes_and_sleeps = [
         entry for entry in timeline if entry[0] == "sleep" or entry[1] in {"post", "upload"}
     ]
-    assert writes_and_sleeps == [
-        ("call", "post"),
-        ("sleep", 3),
-        ("sleep", 1.2),
+    assert writes_and_sleeps[0:3] == [
         ("call", "post"),
         ("sleep", 1.2),
         ("call", "upload"),
     ]
+    assert set(writes_and_sleeps[3:5]) == {("sleep", 1.2), ("sleep", 3)}
+    assert writes_and_sleeps[5] == ("call", "upload")
+
+
+def test_b13_first_write_retry_has_no_pace_wait(tmp_path: Path, world: World) -> None:
+    timeline: list[tuple[str, object]] = []
+    client = FakeSlackSeedClient(
+        world,
+        failures={("post", 1): RateLimited(3)},
+        timeline=timeline,
+    )
+
+    seed(
+        world,
+        [post()],
+        client,
+        tmp_path / "seed.json",
+        pace=1.2,
+        sleep=recording_sleep(timeline),
+        dry_run=False,
+    )
+
+    writes_and_sleeps = [entry for entry in timeline if entry[0] == "sleep" or entry[1] == "post"]
+    assert writes_and_sleeps == [("call", "post"), ("sleep", 3), ("call", "post")]
 
 
 @pytest.mark.parametrize(
     ("missing", "files"),
-    [(FILE_SCOPE, ("one.pdf",)), ("chat:write.customize", ())],
+    [("files:write", ("one.pdf",)), ("chat:write.customize", ())],
 )
 def test_b14_missing_required_scope_stops_real_run_before_any_write(
     tmp_path: Path, world: World, missing: str, files: tuple[str, ...]
@@ -843,6 +1127,35 @@ def test_b14_missing_required_scope_stops_real_run_before_any_write(
         )
 
     assert_no_writes(client)
+
+
+def test_b14_selection_without_files_does_not_require_files_write(
+    tmp_path: Path, world: World
+) -> None:
+    client = FakeSlackSeedClient(
+        world,
+        scopes=frozenset(
+            {
+                "chat:write",
+                "chat:write.customize",
+                "channels:read",
+                "channels:join",
+                "groups:read",
+            }
+        ),
+    )
+
+    report = seed(
+        world,
+        [post()],
+        client,
+        tmp_path / "seed.json",
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+    )
+
+    assert report.posts == 1
 
 
 @pytest.mark.parametrize("until_day", [0, 11])
@@ -898,13 +1211,14 @@ def test_command_until_day_uses_world_timezone_and_later_run_adds_only_day_two(
     assert len(successful_calls(client, "post")) - first_count == 18
     saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
     assert len(saved.messages) == 28
+    assert_mapped_messages(saved, client)
 
 
-def test_command_dry_run_reports_channel_counts_missing_scope_and_missing_channel(
+def test_command_dry_run_reports_exact_counts_then_missing_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
 ) -> None:
     available = [channel for channel in slack_channels(world) if channel.name != "kestrel-program"]
-    client = FakeSlackSeedClient(world, channels=available, scopes=ALL_SCOPES - {FILE_SCOPE})
+    client = FakeSlackSeedClient(world, channels=available)
     prepare_cli(monkeypatch, client)
 
     result = runner.invoke(
@@ -925,18 +1239,18 @@ def test_command_dry_run_reports_channel_counts_missing_scope_and_missing_channe
 
     assert result.exit_code == 1, result.output
     assert_no_writes(client)
-    plm_line = next(line for line in result.output.splitlines() if "plm-feed" in line)
-    program_line = next(line for line in result.output.splitlines() if "kestrel-program" in line)
-    assert re.search(r"\b5\b", plm_line) and re.search(r"\b1\b", plm_line)
-    assert re.search(r"\b5\b", program_line)
-    assert "kestrel-program" in result.output
-    assert FILE_SCOPE in result.output
+    assert result.output.splitlines() == [
+        *DAY_ONE_DRY_RUN_LINES,
+        "missing channel: kestrel-program",
+    ]
 
 
-def test_command_dry_run_lists_missing_customize_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
+def test_command_dry_run_reports_exact_counts_then_missing_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
 ) -> None:
-    client = FakeSlackSeedClient(world, scopes=ALL_SCOPES - {"chat:write.customize"})
+    client = FakeSlackSeedClient(world, scopes=ALL_SCOPES - {"files:write"})
     prepare_cli(monkeypatch, client)
 
     result = runner.invoke(
@@ -956,8 +1270,133 @@ def test_command_dry_run_lists_missing_customize_scope(
     )
 
     assert result.exit_code == 1, result.output
-    assert "chat:write.customize" in result.output
+    assert result.output.splitlines() == [
+        *DAY_ONE_DRY_RUN_LINES,
+        "missing scope: files:write",
+    ]
     assert_no_writes(client)
+
+
+def test_command_dry_run_unblocked_exits_zero_with_exact_count_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+) -> None:
+    client = FakeSlackSeedClient(world)
+    prepare_cli(monkeypatch, client)
+
+    result = runner.invoke(
+        app,
+        [
+            "seed",
+            "--world",
+            "kestrel",
+            "--map",
+            str(tmp_path / "seed.json"),
+            "--until-day",
+            "1",
+            "--dry-run",
+            "--pace",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == DAY_ONE_DRY_RUN_LINES
+    assert_no_writes(client)
+
+
+def test_command_dry_run_counts_only_pending_work_from_partial_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    corpus: list[Event],
+) -> None:
+    client = FakeSlackSeedClient(world)
+    prepare_cli(monkeypatch, client)
+    planned = plan_seed(world, corpus, 1)
+    file_post = next(item for item in planned if item.files)
+    done_message = file_post
+    done_file_key = f"{file_post.key}/{file_post.files[0]}"
+    map_path = tmp_path / "seed.json"
+    write_map(
+        map_path,
+        SeedMap(
+            team_id="T-SEED",
+            workspace_url=WORKSPACE,
+            world=world.name,
+            messages={
+                done_message.key: MappedMessage(
+                    channel=f"S-{done_message.world_channel}",
+                    ts="1700000000.000001",
+                    thread_ts="1700000000.000001",
+                )
+            },
+            files={done_file_key: MappedFile(permalink=f"{WORKSPACE}/files/F1/name")},
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "seed",
+            "--world",
+            "kestrel",
+            "--map",
+            str(map_path),
+            "--until-day",
+            "1",
+            "--dry-run",
+            "--pace",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == [
+        "kestrel-program: 5 posts, 0 files",
+        "plm-feed: 4 posts, 0 files",
+    ]
+    assert_no_writes(client)
+
+
+def test_b8_small_selection_reports_same_reaction_count_after_resume(
+    tmp_path: Path, world: World
+) -> None:
+    source = event().model_copy(
+        update={
+            "reactions": (
+                Reaction(name="eyes", user_id="U0EE01", ts="1791819001.100000"),
+                Reaction(name="ticket", user_id="U0SC01", ts="1791819002.100000"),
+            )
+        }
+    )
+    planned = plan_seed(world, [source], None)
+    map_path = tmp_path / "seed.json"
+
+    first = seed(
+        world,
+        planned,
+        FakeSlackSeedClient(world),
+        map_path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+    )
+    resumed_client = FakeSlackSeedClient(world)
+    resumed = seed(
+        world,
+        planned,
+        resumed_client,
+        map_path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+    )
+
+    assert first.reactions_not_seeded == 2
+    assert resumed.reactions_not_seeded == 2
+    assert_no_writes(resumed_client)
 
 
 def test_b12_summary_counts_full_rerun_and_one_missing_upload_with_same_reactions(
@@ -989,14 +1428,31 @@ def test_b12_summary_counts_full_rerun_and_one_missing_upload_with_same_reaction
     )
 
 
-def test_b12_cli_never_leaks_token_in_output_or_exception_chain(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World
+@pytest.mark.parametrize(
+    "error",
+    [
+        LookupError(f"authentication exposed {BOT_TOKEN}"),
+        SlackApiError(
+            "authentication failed",
+            slack_response(data={"ok": False, "error": BOT_TOKEN}),
+        ),
+        SlackRequestError(f"request exposed {BOT_TOKEN}"),
+    ],
+    ids=["generic", "slack-api", "slack-request"],
+)
+def test_b12_cli_never_leaks_token_in_output_logs_or_exception_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
 ) -> None:
     client = FakeSlackSeedClient(
         world,
-        failures={1: LookupError(f"authentication exposed {BOT_TOKEN}")},
+        failures={("auth_test", 1): error},
     )
     prepare_cli(monkeypatch, client)
+    caplog.set_level(logging.DEBUG)
 
     result = runner.invoke(
         app,
@@ -1017,5 +1473,7 @@ def test_b12_cli_never_leaks_token_in_output_or_exception_chain(
     assert result.exception is not None
     exception_chain = "".join(traceback.format_exception(result.exception))
     assert BOT_TOKEN not in result.output
+    assert BOT_TOKEN not in caplog.text
+    assert all(BOT_TOKEN not in record.getMessage() for record in caplog.records)
     assert BOT_TOKEN not in exception_chain
-    assert "LookupError" in result.output
+    assert "run" in result.output.lower() and "again" in result.output.lower()
