@@ -1,0 +1,46 @@
+{
+  "key": "600106312708031fdf82faa2a7915ca15e043cf3ef3569c7141a54b797761574",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program leads only: customer asks, budget and staffing\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792456800.000000] author U0EM01: Blocker: DVT-1 go/no-go G-DVT1 moves from 22 Oct to 29 Oct until the bracket lands."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message is a new thread root stating a blocker and a schedule change: the DVT-1 go/no-go gate moves from 22 Oct to 29 Oct because a bracket is not yet available. This is clearly project information, and the channel is for program leads on customer asks, budget and staffing, so it is relevant there.\", \"probability\": 0.97}",
+    "data": {
+      "rationale": "The changed message is a new thread root stating a blocker and a schedule change: the DVT-1 go/no-go gate moves from 22 Oct to 29 Oct because a bracket is not yet available. This is clearly project information, and the channel is for program leads on customer asks, budget and staffing, so it is relevant there.",
+      "probability": 0.97
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 592,
+    "output_tokens": 121
+  },
+  "recorded_at": "2026-10-13T22:34:08.411838+00:00"
+}
