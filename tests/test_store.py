@@ -396,19 +396,26 @@ def test_file_store_refuses_unrelated_database_without_modifying_it(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    ("method", "sql_fragment"),
+    ("method", "sql_fragment", "error_type"),
     [
-        ("execute", "PRAGMA journal_mode=WAL"),
-        ("executescript", "CREATE TABLE IF NOT EXISTS meta"),
-        ("execute", "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"),
+        ("execute", "SELECT name FROM sqlite_master", sqlite3.OperationalError),
+        ("execute", "PRAGMA journal_mode=WAL", sqlite3.OperationalError),
+        ("read_text", "schema.sql", OSError),
+        ("executescript", "CREATE TABLE IF NOT EXISTS meta", sqlite3.OperationalError),
+        (
+            "execute",
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            sqlite3.OperationalError,
+        ),
     ],
-    ids=("journal-mode", "schema", "schema-version"),
+    ids=("version-query", "journal-mode", "schema-read", "schema", "schema-version"),
 )
 def test_open_closes_connection_when_setup_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     sql_fragment: str,
+    error_type: type[BaseException],
 ) -> None:
     path = tmp_path / "store.sqlite"
     real_connect = sqlite3.connect
@@ -449,9 +456,17 @@ def test_open_closes_connection_when_setup_fails(
     def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
         return cast(sqlite3.Connection, FailingConnection(real_connect(*args, **kwargs)))
 
-    monkeypatch.setattr(sqlite3, "connect", connect)
+    real_read_text = Path.read_text
 
-    with pytest.raises(sqlite3.OperationalError, match="forced store setup failure"):
+    def read_text(file: Path, *args: Any, **kwargs: Any) -> str:
+        if method == "read_text" and file.name == sql_fragment:
+            raise OSError("forced store setup failure")
+        return real_read_text(file, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    with pytest.raises(error_type, match="forced store setup failure"):
         Store.open(path)
 
     assert closed
