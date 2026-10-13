@@ -165,7 +165,8 @@ In order. Each item is its own unit under `docs/process.md`.
 3. One day-pipeline module out of `daily/render.py`; a window value on `Selection`; the
    `Candidate` projection with newest evidence computed in one place. Trigger: the next
    change to selection.
-4. `ThreadRef` and `MessageRef` value objects. Trigger: the next change to the files that
+4. `ThreadRef` and `MessageRef` value objects in `digest.models`; the simulator's
+   `world.manifest.ThreadRef` is renamed. Trigger: the next change to the files that
    build or parse thread ids.
 5. A Slack anti-corruption adapter that maps Slack payloads to `Event`. Trigger: live
    ingest (D7).

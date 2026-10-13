@@ -541,7 +541,8 @@ Decision.
   entities) with the simulator's dates, scripted events and expected outcomes. Digest code
   reads only `Workspace`.
 - `ThreadRef(channel_id, thread_ts)` and `MessageRef(channel_id, ts)` replace string thread
-  ids and loose (channel_id, ts) pairs.
+  ids and loose (channel_id, ts) pairs. They live in `digest.models`. The simulator's
+  `world.manifest.ThreadRef`, which adds `authored`, is renamed and holds a `ThreadRef`.
 - Ledger and exposure, so this split is not redone:
   - An item's claims stay the extractor's assertions with their message. The ledger
     derives claim records with their own ids, keyed by (entity, attribute, param), with
@@ -558,7 +559,6 @@ Why. The code works around one type that carries three concepts:
 - `models.py` gives every item a nullable `AbsenceDetail`.
 - `absence.py` infers the asking message from evidence authors.
 - `daily/` imports `World` from `world.schema`, so live mode would build a fake world.
-Two independent design reviews (2026-10-12 and 2026-10-13) named the same split.
 
 Not chosen. Renaming `Item` to `Finding` (it touches the stored table and the tests for no
 change in behaviour); a package migration; a repository per type, an event bus or separate
