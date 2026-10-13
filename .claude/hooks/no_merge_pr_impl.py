@@ -55,6 +55,8 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 # Bare words that may precede the real command word and should be skipped.
 WRAPPERS = {"sudo", "command", "env", "time", "nohup", "exec", "builtin",
             "then", "do", "else", "!", "doas", "setsid"}
+# These shell keywords run the command that follows them (`if gh pr merge`).
+WRAPPERS |= {"if", "elif", "while", "until", "coproc"}
 # Wrappers that may carry their own option flags and/or a numeric argument
 # (duration, niceness, cpu mask, parallelism) before the real command, e.g.
 # `timeout 5 gh ...`, `nice -n5 gh ...`, `stdbuf -oL gh ...`, `xargs -n1 gh ...`.
