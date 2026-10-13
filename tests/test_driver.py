@@ -100,6 +100,17 @@ def _script_log(path: Path) -> Path:
     return Path(f"{path}.script.jsonl")
 
 
+def _store_files(path: Path) -> tuple[Path, Path, Path]:
+    return path, Path(f"{path}-wal"), Path(f"{path}-shm")
+
+
+def _write_script(path: Path, *lines: ScriptLine) -> None:
+    path.write_text(
+        "".join(f"{line.model_dump_json()}\n" for line in lines),
+        encoding="utf-8",
+    )
+
+
 def _diff_item() -> Item:
     return Item(
         item_id="ASK-GATE-MOVE",
@@ -367,6 +378,45 @@ def test_say_uses_read_only_base_without_changing_database_or_wal(tmp_path: Path
         writer.close()
 
 
+@pytest.mark.parametrize("scripted", [False, True], ids=["single", "script"])
+def test_say_never_opens_base_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scripted: bool
+) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    _seed_store(base, events=(_event(),))
+    _write_script(
+        source,
+        ScriptLine(
+            **{
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:30",
+                "text": TEXT,
+            }
+        ),
+    )
+    original_open = Store.open
+
+    def refuse_base_open(path: Path) -> Store:
+        if path == base:
+            raise AssertionError("base store opened writable")
+        return original_open(path)
+
+    monkeypatch.setattr(Store, "open", refuse_base_open)
+    args = (
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)]
+        if scripted
+        else _say_args(scratch, base)
+    )
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "1792456200.000000\n"
+
+
 def test_diff_same_store_copy_reports_no_change_and_stable_json(tmp_path: Path) -> None:
     base = tmp_path / "base.sqlite"
     copy = tmp_path / "copy.sqlite"
@@ -395,6 +445,57 @@ def test_diff_same_store_copy_reports_no_change_and_stable_json(tmp_path: Path) 
     assert first_json.exit_code == second_json.exit_code == 0
     assert first_json.stdout_bytes == second_json.stdout_bytes
     assert isinstance(json.loads(first_json.output), list)
+
+
+@pytest.mark.parametrize("same_store", [True, False], ids=["same-store", "two-stores"])
+def test_diff_never_opens_either_store_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_store: bool
+) -> None:
+    base = tmp_path / "base.sqlite"
+    changed = base if same_store else tmp_path / "changed.sqlite"
+    _seed_store(base)
+    if not same_store:
+        with Store.open(base) as store, store.copy_to(changed):
+            pass
+
+    def refuse_writable_open(path: Path) -> Store:
+        raise AssertionError(f"store opened writable: {path}")
+
+    monkeypatch.setattr(Store, "open", refuse_writable_open)
+
+    result = runner.invoke(
+        app,
+        ["diff", "--as-of", str(DAY), "--db", str(changed), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "no change\n"
+
+
+@pytest.mark.parametrize("bad_side", ["base", "changed"])
+@pytest.mark.parametrize(
+    ("contents", "reason"),
+    [(b"", r"(?i)(schema|store)"), (b"not a database", r"(?i)(database|sqlite)")],
+    ids=["empty", "non-database"],
+)
+def test_diff_refuses_non_store_without_changing_it(
+    tmp_path: Path, bad_side: str, contents: bytes, reason: str
+) -> None:
+    base = tmp_path / "before.data"
+    changed = tmp_path / "after.data"
+    bad = base if bad_side == "base" else changed
+    good = changed if bad_side == "base" else base
+    _seed_store(good)
+    bad.write_bytes(contents)
+
+    result = runner.invoke(
+        app,
+        ["diff", "--as-of", str(DAY), "--db", str(changed), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert re.search(reason, result.output), result.output
+    assert bad.read_bytes() == contents
 
 
 def test_diff_reports_changed_reader_then_readers_with_no_change(tmp_path: Path) -> None:
@@ -521,6 +622,27 @@ def test_diff_refusals_exit_one_with_reason(
     assert re.search(reason, result.output), result.output
 
 
+def test_diff_priors_validation_refusal_names_priors_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    changed = tmp_path / "changed.sqlite"
+    priors = tmp_path / "bad-priors.yaml"
+    _seed_store(base)
+    _seed_store(changed)
+    priors.write_text("triage: {}\n", encoding="utf-8")
+    monkeypatch.setattr("digest.cli.DEFAULT_PRIORS_PATH", priors)
+
+    result = runner.invoke(
+        app,
+        ["diff", "--as-of", str(DAY), "--db", str(changed), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert str(priors) in result.output
+    assert len(result.output.splitlines()) == 1
+
+
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
@@ -627,7 +749,7 @@ def test_say_refuses_non_working_store_day_without_write(tmp_path: Path) -> None
 def test_say_refuses_base_that_is_not_a_store_without_changing_it(
     tmp_path: Path, contents: bytes, reason: str
 ) -> None:
-    base = tmp_path / "not-a-store.sqlite"
+    base = tmp_path / "artifact.data"
     scratch = tmp_path / "scratch.sqlite"
     base.write_bytes(contents)
 
@@ -743,6 +865,40 @@ def test_say_refuses_existing_script_log_before_creating_scratch(tmp_path: Path)
     assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
 
 
+def test_say_script_refuses_existing_session_log_before_creating_scratch(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    log = _script_log(scratch)
+    _seed_store(base, events=(_event(),))
+    _write_script(
+        source,
+        ScriptLine(
+            **{
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:30",
+                "text": TEXT,
+            }
+        ),
+    )
+    log.write_bytes(b"keep this session\n")
+    base_before = base.read_bytes()
+
+    result = runner.invoke(
+        app,
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert result.output.splitlines() == [
+        f"script log {log} already exists; remove it or give another --db"
+    ]
+    assert log.read_bytes() == b"keep this session\n"
+    assert base.read_bytes() == base_before
+    assert not any(path.exists() for path in _store_files(scratch))
+
+
 def test_say_script_runs_lines_in_order_without_writing_session_log(tmp_path: Path) -> None:
     base = tmp_path / "base.sqlite"
     scratch = tmp_path / "scratch.sqlite"
@@ -777,6 +933,7 @@ def test_say_script_runs_lines_in_order_without_writing_session_log(tmp_path: Pa
     )
 
     assert result.exit_code == 0, result.output
+    assert result.output == "1792456200.000000\n1792456800.000000\n"
     with sqlite3.connect(scratch) as connection:
         messages = connection.execute(
             "SELECT text FROM events WHERE text LIKE '%scripted line' ORDER BY event_ts_us"
@@ -827,6 +984,112 @@ def test_say_script_removes_scratch_and_prints_no_ts_when_later_write_fails(
     assert result.exit_code == 1
     assert not any(Path(f"{scratch}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
     assert re.search(r"(?m)^\d{10}\.\d{6}$", result.output) is None
+    assert result.output.splitlines() == [f"{source}:2: forced second-line failure"]
+
+
+def test_say_script_rule_refusal_names_second_line_and_removes_scratch(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    _seed_store(base, events=(_event(),))
+    _write_script(
+        source,
+        ScriptLine(
+            **{
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:40",
+                "text": "First line",
+            }
+        ),
+        ScriptLine(
+            **{
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:30",
+                "text": "Second line is earlier",
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert len(result.output.splitlines()) == 1
+    assert result.output.startswith(f"{source}:2:")
+    assert re.search(r"(?m)^\d{10}\.\d{6}$", result.output) is None
+    assert not any(path.exists() for path in _store_files(scratch))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "{not json}\n",
+        json.dumps(
+            {
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:30",
+            }
+        )
+        + "\n",
+    ],
+    ids=["invalid-json", "bad-field"],
+)
+def test_say_script_malformed_line_has_one_line_path_prefix(tmp_path: Path, raw: str) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    _seed_store(base, events=(_event(),))
+    source.write_text(raw, encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert len(result.output.splitlines()) == 1
+    assert result.output.startswith(f"{source}:1:")
+    assert not any(path.exists() for path in _store_files(scratch))
+
+
+@pytest.mark.parametrize(
+    ("contents", "reason"),
+    [(b"", r"(?i)(schema|store)"), (b"not a database", r"(?i)(database|sqlite)")],
+    ids=["empty", "non-database"],
+)
+def test_say_script_refuses_non_store_base_without_changing_it(
+    tmp_path: Path, contents: bytes, reason: str
+) -> None:
+    base = tmp_path / "artifact.data"
+    scratch = tmp_path / "scratch.sqlite"
+    source = tmp_path / "scenario.jsonl"
+    base.write_bytes(contents)
+    _write_script(
+        source,
+        ScriptLine(
+            **{
+                "as": "U0CM01",
+                "channel": "ext-sunrise-cm",
+                "at": "2026-10-19T17:30",
+                "text": TEXT,
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["say", "--script", str(source), "--db", str(scratch), "--base-db", str(base)],
+    )
+
+    assert result.exit_code == 1
+    assert re.search(reason, result.output), result.output
+    assert base.read_bytes() == contents
+    assert not any(path.exists() for path in _store_files(scratch))
 
 
 def test_say_script_keeps_u2028_in_event_text(tmp_path: Path) -> None:
@@ -871,6 +1134,38 @@ def test_say_bad_thread_format_has_one_line_refusal(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "thread" in result.output.lower()
     assert len(result.output.splitlines()) == 1
+
+
+def test_say_rule_refusal_folds_newline_to_one_output_line(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    _seed_store(base, events=(_event(),))
+
+    result = runner.invoke(app, _say_args(scratch, base, **{"--as": "UNKNOWN\nPERSONA"}))
+
+    assert result.exit_code == 1
+    assert len(result.output.splitlines()) == 1
+    assert "UNKNOWN PERSONA" in result.output
+
+
+def test_say_removes_fresh_scratch_when_event_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    scratch = tmp_path / "scratch.sqlite"
+    _seed_store(base, events=(_event(),))
+
+    def fail_upsert(store: Store, *args: Any, **kwargs: Any) -> int:
+        raise sqlite3.OperationalError("forced event write failure")
+
+    monkeypatch.setattr(Store, "upsert_events", fail_upsert)
+
+    result = runner.invoke(app, _say_args(scratch, base))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.output.splitlines() == ["forced event write failure"]
+    assert not any(path.exists() for path in (*_store_files(scratch), _script_log(scratch)))
 
 
 def test_say_script_refuses_existing_db_without_write(tmp_path: Path) -> None:

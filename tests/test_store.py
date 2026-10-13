@@ -123,6 +123,8 @@ def test_copy_to_removes_target_when_backup_fails(
                 self.connection = connection
 
             def backup(self, target_connection: sqlite3.Connection) -> None:
+                Path(f"{target}-wal").write_bytes(b"partial wal")
+                Path(f"{target}-shm").write_bytes(b"partial shm")
                 raise sqlite3.OperationalError("forced backup failure")
 
             def close(self) -> None:
@@ -139,7 +141,28 @@ def test_copy_to_removes_target_when_backup_fails(
         with pytest.raises(sqlite3.OperationalError, match="forced backup failure"):
             store.copy_to(target)
 
-    assert not target.exists()
+    assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
+def test_copy_to_removes_target_when_opening_finished_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        original_open = Store.open
+
+        def fail_target_open(path: Path | Literal[":memory:"]) -> Store:
+            if path == target:
+                raise sqlite3.OperationalError("forced finished-copy open failure")
+            return original_open(path)
+
+        monkeypatch.setattr(Store, "open", fail_target_open)
+
+        with pytest.raises(sqlite3.OperationalError, match="finished-copy open failure"):
+            store.copy_to(target)
+
+    assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
 
 
 @pytest.mark.parametrize("deleted", [False, True])
