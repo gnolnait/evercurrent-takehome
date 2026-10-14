@@ -751,3 +751,64 @@ def test_triage_for_thread_orders_revisions_and_excludes_other_threads(store: St
 
 def test_triage_decision_missing_from_empty_store(store: Store) -> None:
     assert store.triage_decision(f"C1:{ROOT}", ROOT, "m2.1", "classify") is None
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [-1, 0, 1, 999999, 1000000, 1000001],
+    ids=["before-start", "at-start", "after-start", "before-end", "at-end", "after-end"],
+)
+def test_ra9_authored_messages_exact_bounds(store: Store, offset: int) -> None:
+    start = EPOCH + timedelta(seconds=1760000000)
+    end = start + timedelta(seconds=1)
+    seconds, micros = divmod(1760000000 * 1000000 + offset, 1000000)
+    ts = f"{seconds}.{micros:06d}"
+    store.upsert_events([event(ts), event(ts, channel_id="C2")])
+    authored = getattr(store, "authored_messages", None)
+    assert callable(authored), "Store must expose authored_messages(user_id, start, end)"
+    result = authored("U1", start, end)
+    assert isinstance(result, frozenset)
+    assert result == (frozenset({("C1", ts), ("C2", ts)}) if 0 < offset <= 1000000 else frozenset())
+    assert authored("unknown", start, end) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "case", ["other-author", "deleted", "old-edit", "reaction", "reply", "recent-edit"]
+)
+def test_ra8_authored_messages_use_current_author_and_original_time(
+    store: Store, case: str
+) -> None:
+    start = EPOCH + timedelta(seconds=1760000000)
+    end = start + timedelta(seconds=10)
+    original = event("1760000001.000001", thread_ts="1760000001.000001")
+    candidate = original
+    if case == "other-author":
+        candidate = original.model_copy(update={"user_id": "U2"})
+    elif case == "deleted":
+        candidate = original.model_copy(update={"deleted": True, "event_ts": "1760000002.000001"})
+    elif case == "old-edit":
+        candidate = event("1759999999.000001", edited=True, event_ts="1760000002.000001")
+    elif case == "reaction":
+        candidate = original.model_copy(
+            update={
+                "user_id": "U2",
+                "reactions": (Reaction(name="eyes", user_id="U1", ts="1760000002.000001"),),
+            }
+        )
+    elif case == "reply":
+        candidate = original.model_copy(update={"thread_ts": ROOT})
+    else:
+        candidate = original.model_copy(update={"edited": True, "event_ts": "1760000002.000001"})
+    authored = getattr(store, "authored_messages", None)
+    assert callable(authored), "Store must expose authored_messages(user_id, start, end)"
+    for row, qualifies in [(candidate, case in {"reply", "recent-edit"}), (original, True)]:
+        # A new store keeps each pair independent, including a change to message identity.
+        with Store.open(":memory:") as current:
+            current.upsert_events(
+                [row.model_copy(update={"deleted": False, "edited": False, "event_ts": row.ts})]
+            )
+            current.upsert_events([row])
+            authored_current = getattr(current, "authored_messages", None)
+            assert callable(authored_current)
+            result = authored_current("U1", start, end)
+            assert result == (frozenset({("C1", row.ts)}) if qualifies else frozenset())
