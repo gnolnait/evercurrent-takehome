@@ -3,6 +3,26 @@
 One short entry per unit (docs/process.md, stage 5): what the reviews caught, what they
 missed, and one process change at most. The newest entry is first.
 
+## 2026-10-13: the demo room, units 8 to 10 (PRs #62, #67, #68, #72 and unit 10)
+
+Caught. Measuring the plan's examples on the real day-6 store before any test was
+written corrected three expected effects, and measuring again after the digest window
+merged corrected two more; the test author pinned measured numbers, not guesses. Plan
+review found the central constraint early: the extraction request carries every
+person's role and every gate date, so the room keeps two views of the world. Code and
+adversarial reviews found a toggle that passed every set-value test, a curated edit that
+missed its cassette after another change, a reseed reference that could never push a
+revert back to Slack, and a save that could empty the copy, or delete the corpus's
+parent folder, on a failure or a bad path.
+
+Missed. The first tests read a cached state after a refusal, so a half-written store
+would have passed. The implementer worked against a fake that the protocol change broke,
+because the brief changed a shared protocol without naming the test fake that implements
+it. Codex rate-limited once (429) and the Claude lens took that lane.
+
+Change. When a brief changes a protocol or a shared type, name every test fake that
+implements it, and give the fake's change to the test author in the same round.
+
 ## 2026-10-12: channel_id on evidence, claims and task links (PR #20)
 
 Caught. An independent adversarial review mutated the fix. Two pair-keyed lookups in
