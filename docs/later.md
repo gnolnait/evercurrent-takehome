@@ -115,8 +115,8 @@ In order. Each item names its trigger. Measured numbers are from
    stalls; the report's "false-alarm rate" today is false detections over all detections
    (7 of 23). Score whole episodes, not one row per open task per day, and report the
    delay in days. Then add per-scenario tests on task-link extraction, because silence
-   is counted from links the extractor writes; ask absences go only to the asker and the
-   owner. Trigger: 30% of the detected absences are false.
+   is counted from links the extractor writes. Trigger: 30% of the detected absences are
+   false.
 2. Claim value against the cited text (D5). Check each claim value in the cited message
    after Slack-aware normalization (mentions, links, markup, curly quotes); on a miss,
    search the message for a supporting span and check again before the drop. A verbatim
@@ -158,6 +158,15 @@ In order. Each item names its trigger. Measured numbers are from
     list, so the change re-renders the corpus. Trigger: the next re-render.
 14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
     instead of an instant interruption. Trigger: a real-time tier.
+15. Phase in ranking. A spike on 2026-10-13 multiplied the role prior by a DVT table per
+    item type on days 9 and 10: no digest of six readers changed, because sections group
+    lines by item type. A rule that makes open changes carried into a new phase must-see
+    for their owners fired for nobody: six of the seven open changes on day 9 have no
+    owner (`docs/plans/phase-line.md`). Trigger: a world where changes land after a phase
+    starts, and items with owners.
+16. Gate dates from the corpus. The phase line counts to the configured gate date; the
+    corpus moves the PN-51010 T1 gate to 2026-10-21 while the configured G-TR1 date stays
+    2026-10-20. Trigger: the ledger reads schedule claims.
 
 ## Interaction (D27), after the 2026-10-14 interview
 

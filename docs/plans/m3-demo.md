@@ -147,8 +147,8 @@ one ask never shows twice. The absence names that item in its id
 (`absence:ask:<ask item_id>`, as `digest.absence` builds it). Every other ask keeps its
 line, in the same thread or another, and an ask whose absence line is not shown keeps
 its line. The ask absence goes to
-`needs_you` when the reader is the person asked, else to `not_happened`, as every other
-absence does; `decision`, `schedule_change`, `spec_change`,
+`needs_you` when the reader is the person asked and to `not_happened` when the reader is
+the asker; no other reader gets it (amended 2026-10-13, `docs/plans/ask-audience.md`); `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
 section holds its must-see lines plus up to its cap of ranked lines. A checklist absence reaches only the readers its must-see rule names (the task's owner
 role and the EM); it never enters another reader's ranked lane (user ruling, 2026-10-12).
@@ -216,15 +216,16 @@ Slack message per reader, in reader order, to the incoming webhook in the enviro
 variable `SLACK_WEBHOOK_URL` (also read from `.env`). It is the only command that sends
 anything over the network in replay mode, and it reads no model API key.
 - Message: Block Kit. A header block with the reader's name, role and date; a section
-  block with the window line of the terminal digest (W9, `docs/plans/digest-window.md`);
+  block with the window line and the phase line of the terminal digest (W9,
+  `docs/plans/digest-window.md`; `docs/plans/phase-line.md`);
   then for each non-empty section a section block with the bold section title, and one section block
   per line holding the same text as the terminal line in Slack mrkdwn (the title in
   bold, `[must see]` in bold, each source as `<permalink|source>`). Text from the model
   and from Slack is escaped for mrkdwn (`&`, `<`, `>`), so it cannot form a link or a
   mention. A section block's text stays under 3000 characters (cut with an ellipsis), and
   a message holds at most 50 blocks: lines past the limit are left out and a last block
-  says how many. The plain-text `text` field holds the header line and the window line, for
-  notifications.
+  says how many. The plain-text `text` field holds the header line, the window line and the
+  phase line, for notifications.
 - It posts nothing until all three digests are built; a refusal or cassette miss exits 1
   as `digest demo` does.
 - No `SLACK_WEBHOOK_URL`: exit 1 naming the variable. A post that Slack refuses (status
