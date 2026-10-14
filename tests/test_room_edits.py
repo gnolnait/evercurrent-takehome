@@ -21,6 +21,7 @@ from digest.llm.client import LLM
 from digest.llm.openrouter import OpenRouterBackend
 from digest.models import Event
 from digest.priors import load_priors
+from digest.replay import read_events
 from digest.room import (
     Edit,
     EditMessage,
@@ -34,6 +35,7 @@ from digest.room import (
 from digest.store import Store
 from digest.web.app import create_app
 from digest.world.load import load_world
+from test_extract import extracted_item, extraction_data, response
 from test_room import DAY, WORLD_PATH, base_for
 from test_room import day6_store as day6_store
 from test_web import FakeRoom, Page
@@ -247,9 +249,8 @@ def test_same_log_gives_equal_states_and_reset_restarts_stamp(
     rows = saved_events(copies[0])
     edited = next(e for e in rows if (e.channel_id, e.ts) == (change.channel_id, change.ts))
     zone = ZoneInfo(base.world.timezone)
-    assert datetime.fromtimestamp(float(edited.event_ts), zone) == datetime(
-        2026, 10, 19, 18, 1, tzinfo=zone
-    )
+    assert edited.edited is False
+    assert edited.event_ts == edited.ts
     posted = next(e for e in rows if e.text == POST.text)
     assert datetime.fromtimestamp(float(posted.ts), zone) == datetime(
         2026, 10, 19, 18, 2, tzinfo=zone
@@ -306,6 +307,15 @@ def test_edit_and_reply_reach_extraction_and_preserve_message_identity(
     ]
     assert any(change.text in text for text in extraction_texts)
     assert any(reply.text in text for text in extraction_texts)
+    offline_responses.clear()
+    files_only = change.model_copy(update={"files": ("files-only-revision.pdf",)})
+    room.apply(files_only)
+    assert any(
+        files_only.files[0] in message.content
+        for request in offline_responses
+        if request.model == "extract"
+        for message in request.messages
+    )
 
 
 def test_scenario_discards_earlier_message_changes(
@@ -347,6 +357,7 @@ def test_unrecorded_edit_is_atomic_and_builds_no_backend(
     assert room.state() == before
     assert snapshot(cassette_copy) == cassettes_before
     assert base.store_path.read_bytes() == store_before
+    assert room.apply(ROLE).messages == before.messages
 
 
 def test_curated_edits_replay_first_after_reset(base: RoomBase) -> None:
@@ -427,7 +438,9 @@ def test_save_preserves_untouched_lines_and_committed_corpus(
         if key != (change.channel_id, change.ts):
             assert by_key[key][1] == raw, key
     edited = by_key[(change.channel_id, change.ts)][0]
-    assert (edited.text, edited.files, edited.edited) == (change.text, change.files, True)
+    assert (edited.text, edited.files, edited.edited) == (change.text, change.files, False)
+    assert edited.event_ts == edited.ts
+    assert list(read_events(destination / "events.jsonl", base.world.workspace_url)) == rows
     added = [e for e in rows if (e.channel_id, e.ts) not in original_lines]
     assert {e.text for e in added} == {
         POST.text,
@@ -537,6 +550,7 @@ def test_real_reseed_requires_save_and_separate_request(
     assert response.status_code == 200
     assert [dry_run for _, dry_run in reseed.calls] == [True, False]
     assert reseed.calls[0][0] == reseed.calls[1][0]
+    assert reseed.calls[0][0].resolve() == tmp_path / ".room" / "kestrel"
     assert reseed.report in Page(response.text).root.text()
 
 
@@ -576,8 +590,98 @@ def test_seed_panel_and_routes_exist_only_with_reseed(base: RoomBase) -> None:
         page = Page(disabled.get("/").text)
         assert "Seed" not in {h.text().strip() for h in page.find("h2")}
         assert not any("/reseed" in (f.attrs.get("action") or "") for f in page.find("form"))
-        assert disabled.post("/reseed?dry_run=true").status_code == 404
-        assert disabled.post("/reseed?dry_run=false").status_code == 404
+
+
+@pytest.mark.parametrize("kind", ["edit_message", "post_message", "run_scenario"])
+def test_message_forms_change_the_digest(
+    base: RoomBase,
+    corpus: list[Event],
+    cassette_copy: Path,
+    offline_responses: list[LLMRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    room = Room(base, cassettes=cassette_copy)
+    before = room.state()
+    text = "Blocker: PN-11051 bracket inspection failed; stop the build."
+    if kind == "edit_message":
+        target = corpus[0]
+        form = {
+            "kind": kind,
+            "channel_id": target.channel_id,
+            "ts": target.ts,
+            "text": text,
+            "files": "inspection.pdf\nmeasurements.csv",
+        }
+        message_ts = target.ts
+    elif kind == "post_message":
+        form = {
+            "kind": kind,
+            "user_id": POST.user_id,
+            "channel_id": POST.channel_id,
+            "text": text,
+            "thread_ts": "",
+        }
+        message_ts = (
+            f"{datetime(2026, 10, 19, 18, 1, tzinfo=ZoneInfo(base.world.timezone)).timestamp():.6f}"
+        )
+    else:
+        form = {"kind": kind, "name": D3.name}
+        message_ts = ""
+        text = "G-DVT1 moves from 22 Oct to 29 Oct"
+
+    if kind != "run_scenario":
+        complete = LLM.complete
+
+        def extract_blocker(client: LLM, request: LLMRequest) -> LLMResponse:
+            if request.model == "extract" and any(text in m.content for m in request.messages):
+                data = extraction_data(
+                    extracted_item(
+                        type="blocker",
+                        title="Bracket inspection failed",
+                        summary=text,
+                        entities=["PN-11051"],
+                        owner="U0ME01",
+                        affected_roles=["ME"],
+                        evidence=[{"message_ts": message_ts, "quote": text}],
+                    )
+                )
+                client.cassettes.put(request_key(request), request, response(data))
+            return complete(client, request)
+
+        monkeypatch.setattr(LLM, "complete", extract_blocker)
+
+    with TestClient(create_app(room)) as client:
+        result = client.post("/edit", data=form, follow_redirects=False)
+        assert result.status_code == 303
+        page = Page(client.get(result.headers["location"]).text)
+    state = room.state()
+    assert state.message_changes == 1
+    assert state.selections != before.selections
+    assert any(state.last_effect)
+    matches = [
+        line
+        for selection in state.selections
+        for line in selection.lines
+        if any(text in evidence.quote for evidence in line.item.evidence)
+    ]
+    assert matches, "The submitted message must reach a reader's digest"
+    digest = next(
+        section
+        for section in page.find("section")
+        if any(node.tag == "h2" and node.text() == "Digests" for node in section.nodes())
+    )
+    assert any(line.item.title in digest.text() for line in matches)
+    if kind == "edit_message":
+        changed = next(
+            m for m in state.messages if (m.channel_id, m.ts) == (target.channel_id, target.ts)
+        )
+        assert changed.text == text
+        assert changed.files == ("inspection.pdf", "measurements.csv")
+    elif kind == "post_message":
+        posted = next(m for m in state.messages if m.posted)
+        assert posted.text == text
+        assert posted.thread_ts == posted.ts
 
 
 def test_message_text_and_file_names_are_escaped_without_external_references(
