@@ -1,0 +1,33 @@
+# Curated message changes for the demo room (docs/plans/m3-room-edits.md). Each one is
+# recorded as the first message change after a reset, so it replays offline.
+- name: anodize-po-placed
+  description: Hamid answers the anodize PO ask with the PO number and a ship date.
+  edit:
+    kind: post_message
+    user_id: U0SC01
+    channel_id: C0EXTCM
+    thread_ts: "1792068738.000800"
+    text: "PO-45002311 for the DVT-1 bracket anodize is placed with Sunrise. Ship date is 21 Oct."
+- name: thermal-review-closed
+  description: Tobias closes the TST-THM-02 thermal review after the vent rerun.
+  edit:
+    kind: post_message
+    user_id: U0EE01
+    channel_id: C0KPROG
+    thread_ts: "1792423800.010077"
+    text: "TST-THM-02 rerun with the new vent layout passed: 61 C max at 35 C ambient. The thermal review is closed."
+- name: chassis-rev-d
+  description: The ME flags that PN-11020 moves to Rev D, again changing the standoff hole pattern.
+  edit:
+    kind: post_message
+    user_id: U0ME01
+    channel_id: C0PLMFD
+    text: "Heads-up: PN-11020 moves to Rev D. The Orin carrier standoff hole pattern shifts again; ECO-0145 is in review."
+- name: stale-pack-attachment
+  description: The CM's stale drawing pack message gains the PDF it was built from.
+  edit:
+    kind: edit_message
+    channel_id: C0EXTCM
+    ts: "1792164600.010061"
+    text: "FAI photos + CMM for PN-11020 came back with the Rev B hole pattern. We built from the attached drawing pack."
+    files: ["DOC-11020-CM_RevB.pdf"]
