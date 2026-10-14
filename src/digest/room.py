@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import logging
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -33,6 +34,8 @@ from digest.replay import read_events
 from digest.settings import Settings
 from digest.store import Store
 from digest.world.schema import Persona, World
+
+log = logging.getLogger(__name__)
 
 _READERS = ("U0ME01", "U0SC01", "U0EM01")
 _DAY = 6  # the world day of the room
@@ -505,12 +508,17 @@ class Room:
         is a clean corpus that `read_events` and `plan_seed` accept. The room store keeps
         the edit flag and the stamp.
 
-        The copy is built in a temporary folder beside `path`, which replaces `path` only
-        when every file is written. On a failure the previous copy stays as it was and the
-        temporary folder is removed.
+        `path` must be a folder strictly inside `<working directory>/.room/`; any other
+        path is refused with ValueError before any write. The copy is built in a temporary
+        folder beside `path`, which replaces `path` only when every file is written. On a
+        failure the previous copy stays as it was and the temporary folder is removed.
         """
-        if path.resolve() == self._world_dir:
-            raise ValueError(f"cannot save the room over the committed corpus {path}")
+        root = (Path.cwd() / ".room").resolve()
+        target = path.resolve()
+        if target == root or not target.is_relative_to(root):
+            raise ValueError(f"the room saves only into a folder inside {root}, not {path}")
+        if target.exists() and not target.is_dir():
+            raise ValueError(f"cannot save the room over {path}: it is not a folder")
         events = dict(self._corpus)
         for key, event in self._changed.items():
             committed = self._corpus.get(key)
@@ -527,10 +535,10 @@ class Room:
             shutil.copytree(self._world_dir, staging, dirs_exist_ok=True)
             with (staging / "events.jsonl").open("w", encoding="utf-8", newline="\n") as file:
                 file.writelines(event.model_dump_json() + "\n" for event in ordered)
-            _replace_dir(staging, path)
         except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
+            _remove_folder(staging)
             raise
+        _replace_dir(staging, path)
         return path
 
     def _write(
@@ -713,21 +721,47 @@ def _replace_dir(new: Path, path: Path) -> None:
     """Put the folder `new` at `path`; both are in the same parent folder.
 
     Windows cannot rename a folder over an existing one, so an existing `path` moves
-    aside first, and it moves back when the second rename fails.
+    aside first, and it moves back when the second rename fails. A failure before the
+    new folder is in place removes `new`. When the previous folder also cannot move
+    back, the error names both folders, and both stay on disk.
     """
-    if not path.exists():
-        new.rename(path)
-        return
-    # mkdtemp reserves a free name; the rename below needs that name with no folder.
-    old = Path(tempfile.mkdtemp(prefix=f".{path.name}-old-", dir=path.parent))
-    old.rmdir()
-    path.rename(old)
+    try:
+        if not path.exists():
+            new.rename(path)
+            return
+        # mkdtemp reserves a free name; the rename below needs that name with no folder.
+        old = Path(tempfile.mkdtemp(prefix=f".{path.name}-old-", dir=path.parent))
+        old.rmdir()
+        path.rename(old)
+    except BaseException:
+        _remove_folder(new)
+        raise
     try:
         new.rename(path)
-    except BaseException:
-        old.rename(path)
+    except BaseException as error:
+        try:
+            old.rename(path)
+        except OSError as restore_error:
+            raise OSError(
+                f"cannot put the room copy at {path} ({error}) or move the previous copy "
+                f"back ({restore_error}); the new copy is in {new} and the previous copy "
+                f"is in {old}"
+            ) from error
+        _remove_folder(new)
         raise
-    shutil.rmtree(old, ignore_errors=True)
+    _remove_folder(old)
+
+
+def _remove_folder(path: Path) -> None:
+    """Remove a folder; log a warning that names a folder left behind."""
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        log.warning(
+            "room_folder_left", extra={"path": str(path), "error_class": type(error).__name__}
+        )
 
 
 def _remove_store(path: Path) -> None:
