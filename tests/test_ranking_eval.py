@@ -1,4 +1,4 @@
-"""Unit 14: B14.1 to B14.7 of docs/plans/m4-ranking-eval.md (v0.2.1).
+"""Unit 14: B14.1 to B14.12 of docs/plans/m4-ranking-eval.md (v0.3.1).
 
 B14.1 to B14.3 test the pure helpers with numbers worked out by hand. B14.4 to B14.6 run the
 ranking eval on the Kestrel world and the committed cassettes (replay mode, no network) and
@@ -11,7 +11,7 @@ whole row. Each expected day value below comes from one persona-day worked out i
 Each persona-day also pins its selected top 5 (the premise), so a changed recording fails on the
 premise and not on a grade.
 
-A run is lazy (`Run.report()`), so the stubs raise NotImplementedError inside each test and not
+A run is lazy (`Run.report()`), so incomplete code fails inside each test and not
 in a fixture. The spy assumes `ranking.py` imports `select_digest` at module level (AGENTS.md
 asks for top-level imports).
 """
@@ -20,6 +20,7 @@ import math
 import re
 import shutil
 import socket
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
@@ -36,6 +37,7 @@ from digest.daily.profile import can_see, profile_for
 from digest.daily.render import select_digest
 from digest.daily.select import Selection
 from digest.eval import ranking
+from digest.eval.extraction import _absence_key, _qualifies
 from digest.eval.ranking import (
     ConfigScores,
     PersonaScores,
@@ -48,12 +50,13 @@ from digest.eval.ranking import (
 )
 from digest.extract.stage import run_extract
 from digest.llm.client import LLM, from_settings
-from digest.models import micros_since_epoch, ts_micros
+from digest.models import Item, micros_since_epoch, ts_micros
 from digest.priors import Priors
 from digest.project import add_working_days
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
+from digest.world.golden import Golden, read_golden
 from digest.world.load import load_world
 from digest.world.schema import World
 
@@ -136,6 +139,7 @@ class Built(dict[tuple[str, int, str], Selection]):
     def __init__(self) -> None:
         super().__init__()
         self.send_ids: dict[tuple[str, int], list[str]] = {}
+        self.snapshots: dict[int, dict[str, Item]] = {}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -352,8 +356,11 @@ class Run:
     seconds: float | None = None
     applied: int = 0  # selections that `wrap` changed
     _report: RankingReport | None = None
+    _error: Exception | None = field(default=None, repr=False)
 
     def report(self) -> RankingReport:
+        if self._error is not None:
+            raise self._error.with_traceback(None)
         if self._report is None:
             patch = pytest.MonkeyPatch()
             # raising=False: the stub module does not import select_digest yet.
@@ -364,6 +371,10 @@ class Run:
                     self.world_dir, self.llm, self.priors, self.store_path
                 )
                 self.seconds = perf_counter() - start
+            except Exception as error:
+                # A failed eval can leave a complete store. Do not replay it from day 1.
+                self._error = error
+                raise
             finally:
                 patch.undo()
         return self._report
@@ -467,7 +478,7 @@ def _replay_days(
 
     A selection for a day uses the previous world day as the previous digest, and none on day 1,
     as `digest demo` does. With a "full" config it also records the send-everything list of the
-    plan: the absence items of the C0 selection by item id, then every open item the reader can
+    plan: the absence items of the C0 selection by item id, then every item the reader can
     see whose newest evidence falls in the window, newest first, then by item id.
     """
     world = load_world(world_dir / "world.yaml")
@@ -494,7 +505,8 @@ def _replay_days(
             start_day = previous or add_working_days(today, -priors.daily.window.first_working_days)
             start = micros_since_epoch(datetime.combine(start_day, time.max, zone))
             end = micros_since_epoch(datetime.combine(today, time.max, zone))
-            items = [i for i in store.items(as_of) if i.status == "open"]
+            items = list(store.items(as_of))
+            built.snapshots[day] = {item.item_id: item for item in items}
             times = {
                 (e.channel_id, e.ts): ts_micros(e.event_ts)
                 for thread in {i.thread_id for i in items}
@@ -524,6 +536,11 @@ def _replay_days(
                     for line in built[(user, day, "full")].lines
                     if line.item.absence is not None
                 )
+                built.snapshots[day].update(
+                    (line.item.item_id, line.item)
+                    for line in built[(user, day, "full")].lines
+                    if line.item.absence is not None
+                )
                 built.send_ids[(user, day)] = [*absences, *(i.item_id for i in shown)]
     return built
 
@@ -532,6 +549,18 @@ def _replay_days(
 def built(tmp_path_factory: pytest.TempPathFactory, priors: Priors, llm: LLM) -> Built:
     path = tmp_path_factory.mktemp("ranking-built") / "kestrel.sqlite"
     return _replay_days(WORLD_DIR, path, llm, priors, CONFIGS)
+
+
+@pytest.fixture(scope="module")
+def zero_built(tmp_path_factory: pytest.TempPathFactory, priors: Priors, llm: LLM) -> Built:
+    path = tmp_path_factory.mktemp("ranking-zero-built") / "kestrel.sqlite"
+    zero = priors.model_copy(update={"daily": priors.daily.model_copy(update={"min_score": 0})})
+    return _replay_days(WORLD_DIR, path, llm, zero, CONFIGS)
+
+
+@pytest.fixture(scope="module")
+def golden() -> Golden:
+    return read_golden(WORLD_DIR / "golden.jsonl")
 
 
 @pytest.fixture(scope="module")
@@ -565,10 +594,130 @@ def _assert_scores(
     ndcgs = [value for value in ndcg if value is not None]
     assert scores.recall_n == len(recalls)
     assert scores.recall_without == len(recall) - len(recalls)
-    assert scores.recall_at_5 == pytest.approx(sum(recalls) / len(recalls))
+    assert scores.recall_at_5 == pytest.approx(sum(recalls) / len(recalls) if recalls else None)
     assert scores.ndcg_n == len(ndcgs)
     assert scores.ndcg_without == len(ndcg) - len(ndcgs)
-    assert scores.ndcg_at_5 == pytest.approx(sum(ndcgs) / len(ndcgs))
+    assert scores.ndcg_at_5 == pytest.approx(sum(ndcgs) / len(ndcgs) if ndcgs else None)
+
+
+Fact = str | tuple[int, str, str | None]
+METRIC_NAMES = ("overall recall", "overall nDCG", "ranked-lane recall", "ranked-lane nDCG")
+
+
+def _facts(selection: Selection, world: World, golden: Golden) -> dict[Fact, int]:
+    """Read the window, visibility and audience from the selection and world labels."""
+    start = selection.previous_digest or add_working_days(
+        selection.day, -selection.first_working_days
+    )
+    profile = selection.profile
+    facts: dict[Fact, int] = {}
+    for item in golden.items:
+        if start < item.date <= selection.day and can_see(world, profile, item.channel_id):
+            facts[item.event_id] = (
+                2
+                if profile.user_id in item.must_see_for
+                else 1
+                if profile.role in item.affected_roles
+                else 0
+            )
+    channels = {item.event_id: item.channel_id for item in golden.items}
+    for absence in golden.absences:
+        if start < absence.date <= selection.day and can_see(
+            world, profile, channels[absence.cites]
+        ):
+            audience = profile.user_id if absence.source == "ask" else profile.role
+            key = (absence.day, absence.source, absence.task or absence.cites)
+            facts[key] = 2 if audience in absence.audience else 0
+    return facts
+
+
+def _deliveries(items: Sequence[Item], day: int, golden: Golden) -> list[Fact | None]:
+    """Credit the first unused qualifying fact in golden order for each item."""
+    asks = {
+        f"{item.channel_id}:{item.thread_ts}": item.event_id
+        for item in golden.items
+        if item.type == "ask"
+    }
+    used: set[Fact] = set()
+    deliveries: list[Fact | None] = []
+    for item in items:
+        candidates: list[Fact] = (
+            [_absence_key(day, item, asks)]
+            if item.absence is not None
+            else [
+                fact.event_id
+                for fact in golden.items
+                if item.thread_id == f"{fact.channel_id}:{fact.thread_ts}"
+                and _qualifies(fact, item)
+            ]
+        )
+        match = next((fact for fact in candidates if fact not in used), None)
+        deliveries.append(match)
+        if match is not None:
+            used.add(match)
+    return deliveries
+
+
+def _day_view(
+    built: Built,
+    world: World,
+    golden: Golden,
+    user: str,
+    day: int,
+    name: str,
+    *,
+    ranked: bool,
+) -> tuple[list[str], list[int], list[int]]:
+    """Return ids, line grades and fact grades before the cut at five (R3 and R6a)."""
+    c0 = built[(user, day, "full")]
+    facts = _facts(c0, world, golden)
+    if name == "send-everything":
+        ids = built.send_ids[(user, day)]
+    else:
+        ids = [
+            line.item.item_id
+            for line in built[(user, day, name)].lines
+            if not (ranked and line.must_see)
+        ]
+    if ranked:
+        c0_facts = _deliveries([line.item for line in c0.lines], day, golden)
+        removed = {
+            fact
+            for line, fact in zip(c0.lines, c0_facts, strict=True)
+            if line.must_see and fact in facts
+        }
+        facts = {fact: grade for fact, grade in facts.items() if fact not in removed}
+        # Remove deliveries before the top-five cut. Zero grades would still consume slots.
+        delivered = _deliveries([built.snapshots[day][item_id] for item_id in ids], day, golden)
+        ids = [item_id for item_id, fact in zip(ids, delivered, strict=True) if fact not in removed]
+    delivered = _deliveries([built.snapshots[day][item_id] for item_id in ids], day, golden)
+    return (
+        ids,
+        [facts.get(fact, 0) if fact is not None else 0 for fact in delivered],
+        list(facts.values()),
+    )
+
+
+def _values(grades: Sequence[int], facts: Sequence[int]) -> tuple[float | None, float | None]:
+    """R5/R6 arithmetic; do not use the metric helpers under test."""
+    must_see = facts.count(2)
+    recall = grades[:5].count(2) / must_see if must_see else None
+    ideal = sum(
+        (2**grade - 1) / math.log2(rank + 2)
+        for rank, grade in enumerate(sorted(facts, reverse=True)[:5])
+    )
+    dcg = sum((2**grade - 1) / math.log2(rank + 2) for rank, grade in enumerate(grades[:5]))
+    return recall, dcg / ideal if ideal else None
+
+
+def _day_metrics(
+    built: Built, world: World, golden: Golden, user: str, day: int, name: str
+) -> tuple[float | None, ...]:
+    values: list[float | None] = []
+    for ranked in (False, True):
+        _, grades, facts = _day_view(built, world, golden, user, day, name, ranked=ranked)
+        values.extend(_values(grades, facts))
+    return tuple(values)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -737,6 +886,8 @@ def test_each_configuration_selects_with_its_named_terms_off(
     assert base_run.calls, "ranking.py must call a module-level select_digest"
     seen: dict[frozenset[str], set[tuple[str, date, date | None]]] = {}
     for call in base_run.calls:
+        if call.priors.daily.min_score != priors.daily.min_score:
+            continue  # B14.8 checks the additional min_score 0 selections.
         seen.setdefault(call.priors.daily.terms_off, set()).add(
             (call.user_id, call.day, call.previous_digest)
         )
@@ -756,20 +907,15 @@ def test_each_configuration_selects_with_its_named_terms_off(
     assert set(configs[-2].terms_off) == {"importance", "personal_relevance"}
 
 
-def _ids(selection: Selection, *, ranked_only: bool) -> tuple[str, ...]:
-    lines = [line for line in selection.lines if not (ranked_only and line.must_see)]
-    return tuple(line.item.item_id for line in lines[:5])
-
-
-def _changed_days(built: Built, name: str) -> int:
+def _changed_days(built: Built, name: str, world: World, golden: Golden) -> int:
     """Persona-days whose overall top 5 or ranked-lane top 5 differs from C0 (item ids, in order)."""
     pairs = {(user, day) for user, day, config in built if config == "full"}
     return sum(
         1
         for user, day in pairs
         if any(
-            _ids(built[(user, day, name)], ranked_only=lane)
-            != _ids(built[(user, day, "full")], ranked_only=lane)
+            _day_view(built, world, golden, user, day, name, ranked=lane)[0][:5]
+            != _day_view(built, world, golden, user, day, "full", ranked=lane)[0][:5]
             for lane in (False, True)
         )
     )
@@ -786,7 +932,7 @@ def _changed_days(built: Built, name: str) -> int:
     ],
 )
 def test_changed_days_equals_the_count_from_comparing_the_top_5_lists(
-    name: str, base_run: Run, built: Built
+    name: str, base_run: Run, built: Built, world: World, golden: Golden
 ) -> None:
     """B14.5. Setup: this file's own selections for C0 and each config, day by day.
 
@@ -796,7 +942,7 @@ def test_changed_days_equals_the_count_from_comparing_the_top_5_lists(
     """
     report = base_run.report()
 
-    expected = _changed_days(built, name)
+    expected = _changed_days(built, name, world, golden)
     config = next(
         c for c in report.configs if set(c.terms_off) == set(CONFIGS[name]) and c.terms_off
     )
@@ -918,7 +1064,7 @@ def test_each_ablation_verdict_follows_from_the_configuration_values(base_run: R
 #   8    [2,0,1,0]      [2,2,1,1,0..]    1 / 2   (3 + 1 / 2) / (3 + 3 / log2 3 + 1 / 2 + 1 / log2 5)
 #   9    [2,2]          [2,2,2,0..]      2 / 3   (3 + 3 / log2 3) / (3 + 3 / log2 3 + 3 / 2)
 #   10   [2,0]          [2,0]            1 / 1   1
-# The send-everything list has no must-see lane, so its ranked-lane list is the whole list.
+# R6a removes deliveries from C0's must-see lane before the ranked-lane top-five cut.
 # ---------------------------------------------------------------------------------------------
 
 SEND_FW_TOP5: dict[int, list[str]] = {
@@ -948,12 +1094,14 @@ SEND_NDCG = [
 ]
 
 
-def test_send_everything_scores_the_firmware_reader_by_hand(base_run: Run, built: Built) -> None:
+def test_send_everything_scores_the_firmware_reader_by_hand(
+    base_run: Run, built: Built, world: World, golden: Golden
+) -> None:
     """Baseline send-everything. Setup: the firmware reader's ten days worked by hand; the top 5
     of each day is pinned and is rebuilt from the store by this file.
 
     Action: run_ranking_eval; read the send-everything row of U0FW01 and its changed_days.
-    Assert: recall and nDCG (overall) equal the hand-worked days; changed_days equals this file's
+    Assert: recall and nDCG in both lanes equal the hand-worked days; changed_days equals this file's
     count of persona-days whose send-everything top 5 differs from C0's overall top 5 or C0's
     ranked-lane top 5.
     """
@@ -962,14 +1110,16 @@ def test_send_everything_scores_the_firmware_reader_by_hand(base_run: Run, built
     send = report.configs[-1]
     assert send.name == "send-everything"
     _assert_scores(_persona(send, "U0FW01").overall, SEND_RECALL, SEND_NDCG)
+    # R6a: day 8 loses ASK-SAF, so FILTER moves from rank 3 to rank 2.
+    # Day 9 loses ASK-SAF, so GO moves from rank 2 to rank 1. Other ranked values
+    # equal C0's hand table, except day 2 delivers LTB at rank 5.
+    ranked_recall = [*FW_RANKED_RECALL]
+    ranked_ndcg = [*FW_RANKED_NDCG]
+    ranked_recall[1], ranked_ndcg[1] = 1.0, 1 / math.log2(6)
+    _assert_scores(_persona(send, "U0FW01").ranked_lane, ranked_recall, ranked_ndcg)
     for day, ids in SEND_FW_TOP5.items():
         assert built.send_ids[("U0FW01", day)][:5] == ids, f"premise: day {day}"
-    expected = sum(
-        1
-        for (user, day), ids in built.send_ids.items()
-        if tuple(ids[:5]) != _ids(built[(user, day, "full")], ranked_only=False)
-        or tuple(ids[:5]) != _ids(built[(user, day, "full")], ranked_only=True)
-    )
+    expected = _changed_days(built, "send-everything", world, golden)
     assert send.changed_days == expected
 
 
@@ -994,7 +1144,8 @@ def test_send_everything_scores_the_firmware_reader_by_hand(base_run: Run, built
 #   4    [0,0,0,0]     [2,2,1,0..]   0 / 2   0
 #   5    [2,0,0,0]     [2,2,0...]    1 / 2   3 / (3 + 3 / log2 3)
 #   6    [0,0,2,0,0]   [2,0...]       1 / 1   0.5
-#   7    [0,0,1,1,0]   [2,1,1,0..]   0 / 1   (1 / 2 + 1 / log2 5) / (3 + 1 / log2 3 + 1 / 2)
+#   7    [1,0,0,1,0]   [2,1,1,0..]   0 / 1   (1 + 1 / log2 5) / (3 + 1 / log2 3 + 1 / 2)
+# R3 credits FLAG_ASK at rank 1 for S13-BRACKET; BRACKET at rank 3 repeats it.
 #   8    [0,2,1,0,0]   [2,1,0...]     1 / 1   (3 / log2 3 + 1 / 2) / (3 + 1 / log2 3)
 #   9    [0,2,2,0,0]   [2,2,0...]     2 / 2   (3 / log2 3 + 3 / 2) / (3 + 3 / log2 3)
 #   10   [0,0,0,0,0]   [0,0]          none    none
@@ -1018,7 +1169,7 @@ ME_NDCG = [
     0.0,
     3 / (3 + 3 / L3),
     0.5,
-    (1 / 2 + 1 / L5) / (3 + 1 / L3 + 1 / 2),
+    (1 + 1 / L5) / (3 + 1 / L3 + 1 / 2),
     (3 / L3 + 1 / 2) / (3 + 1 / L3),
     (3 / L3 + 3 / 2) / (3 + 3 / L3),
     None,
@@ -1212,6 +1363,23 @@ def _tables(section: list[str]) -> list[list[list[str]]]:
     return tables
 
 
+ZERO_HEADING = "With min_score 0 (admission fixed)"
+ADMISSION_NOTE = (
+    "The configured rows mix admission with order; these rows fix admission and show order only."
+)
+
+
+def _table_pair(section: list[str], *, zero: bool) -> tuple[list[list[str]], list[list[str]]]:
+    """Find each pair within its heading, since both pairs have the same row names."""
+    split = next(i for i, line in enumerate(section) if line.lstrip("# ") == ZERO_HEADING)
+    tables = _tables(section[split:] if zero else section[:split])
+    names = [*CONFIGS, "send-everything"]
+    configs = [rows for rows in tables if [row[0] for row in rows] == names]
+    ablations = [rows for rows in tables if [row[0] for row in rows] == list(TERMS)]
+    assert len(configs) == len(ablations) == 1
+    return configs[0], ablations[0]
+
+
 @dataclass
 class CliRun:
     """One lazy `digest eval` in a scratch root with the cassettes and the network blocked."""
@@ -1269,7 +1437,7 @@ def test_digest_eval_writes_the_ranking_section_offline(
 
     Action: read the report the command wrote.
     Assert: the file holds write_ranking_section(report) of the same run; the Ranking section
-    holds a configuration table with seven rows (the report's names, in order) whose numbers
+    holds each threshold's configuration table with seven rows (the report's names, in order) whose numbers
     are the report's at 3 decimals (or n/a), an ablation table with the four terms, their drops
     and verdicts, a persona table with one row per human persona, its role and its C0 numbers,
     the exact keep-rule line with min_effect 0.01 and the labels line; the command made the
@@ -1286,23 +1454,24 @@ def test_digest_eval_writes_the_ranking_section_offline(
     section = lines[start:]
     tables = _tables(section)
 
-    names = [config.name for config in report.configs]
-    config_tables = [rows for rows in tables if [row[0] for row in rows] == names]
-    assert len(names) == 7 and len(config_tables) == 1
-    for row, config in zip(config_tables[0], report.configs, strict=True):
-        for scores in (config.overall, config.ranked_lane):
-            assert _fmt(scores.recall_at_5) in row, config.name
-            assert _fmt(scores.ndcg_at_5) in row, config.name
-            assert str(scores.recall_n) in row and str(scores.ndcg_n) in row, config.name
-        assert str(config.changed_days) in row, config.name
-
-    ablation_tables = [rows for rows in tables if [row[0] for row in rows] == list(TERMS)]
-    assert len(ablation_tables) == 1
-    for row, expected in zip(ablation_tables[0], report.ablation, strict=True):
-        assert expected.term == row[0]
-        assert expected.verdict in row
-        for drop in expected.drops.values():
-            assert _fmt(drop) in row, expected.term
+    for zero, configs, ablation in (
+        (False, report.configs, report.ablation),
+        (True, report.zero_threshold, report.zero_ablation),
+    ):
+        config_rows, ablation_rows = _table_pair(section, zero=zero)
+        assert len(configs) == 7
+        for row, config in zip(config_rows, configs, strict=True):
+            for scores in (config.overall, config.ranked_lane):
+                assert _fmt(scores.recall_at_5) in row, config.name
+                assert _fmt(scores.ndcg_at_5) in row, config.name
+                assert str(scores.recall_n) in row and str(scores.ndcg_n) in row, config.name
+            assert str(config.changed_days) in row, config.name
+        for row, expected in zip(ablation_rows, ablation, strict=True):
+            assert expected.term == row[0]
+            assert expected.verdict in row
+            for drop in expected.drops.values():
+                assert any(_fmt(drop) in cell for cell in row), expected.term
+    assert ADMISSION_NOTE in section
 
     readers = [(p.name, p.role) for p in world.personas if p.role is not None]
     assert len(readers) == 7
@@ -1332,3 +1501,258 @@ def test_digest_eval_writes_the_ranking_section_offline(
     assert LABELS_LINE in section
     assert (cli_run.root / "data" / "eval-ranking-kestrel.sqlite").is_file()
     assert (cli_run.root / "data" / "eval-kestrel.sqlite").is_file()
+
+
+# B14.8 to B14.12 use the same day-by-day store and the labels, never ranking's helpers.
+
+
+def _expected_days(
+    built: Built, world: World, golden: Golden, name: str
+) -> dict[tuple[str, int], tuple[float | None, ...]]:
+    return {
+        (user, day): _day_metrics(built, world, golden, user, day, name)
+        for user, day, config in built
+        if config == "full"
+    }
+
+
+def _persona_mean(
+    days: dict[tuple[str, int], tuple[float | None, ...]], metric: int
+) -> float | None:
+    means = []
+    for user in sorted({user for user, _ in days}):
+        values = [
+            row[metric]
+            for (reader, _), row in days.items()
+            if reader == user and row[metric] is not None
+        ]
+        if values:
+            means.append(sum(values) / len(values))
+    return sum(means) / len(means) if means else None
+
+
+def test_zero_threshold_selects_all_configs_and_reports_order_only(
+    base_run: Run, zero_built: Built, world: World, golden: Golden, priors: Priors
+) -> None:
+    """B14.8. Setup: own min_score 0 selections on each world day, with caps unchanged.
+
+    Action: run the eval and read the zero-threshold selections, scores and ablation.
+    Assert: priors, all seven rows, drops, verdicts and both printed table pairs match R10.
+    """
+    expected = {
+        name: _expected_days(zero_built, world, golden, name)
+        for name in (*CONFIGS, "send-everything")
+    }
+    report = base_run.report()
+    assert report.min_score == priors.daily.min_score
+    zero_calls = [call for call in base_run.calls if call.priors.daily.min_score == 0]
+    for name, off in CONFIGS.items():
+        calls = [call for call in zero_calls if call.priors.daily.terms_off == off]
+        assert {(call.user_id, call.day, call.previous_digest) for call in calls} == {
+            (user, world.date_of(day), world.date_of(day - 1) if day > 1 else None)
+            for user, day in expected[name]
+        }, name
+        daily = priors.daily.model_copy(update={"terms_off": off, "min_score": 0})
+        assert all(call.priors == priors.model_copy(update={"daily": daily}) for call in calls)
+    assert [config.name for config in report.zero_threshold] == [*CONFIGS, "send-everything"]
+    for config in report.zero_threshold:
+        if config.name in CONFIGS:
+            assert set(config.terms_off) == CONFIGS[config.name]
+        days = expected[config.name]
+        assert {persona.user_id for persona in config.per_persona} == {user for user, _ in days}
+        assert config.changed_days == _changed_days(zero_built, config.name, world, golden)
+        for persona in config.per_persona:
+            rows = [days[persona.user_id, day] for day in range(1, world.days + 1)]
+            _assert_scores(persona.overall, [r[0] for r in rows], [r[1] for r in rows])
+            _assert_scores(persona.ranked_lane, [r[2] for r in rows], [r[3] for r in rows])
+        for index, (lane, field_name) in enumerate(METRIC_FIELDS):
+            assert getattr(getattr(config, lane), field_name) == pytest.approx(
+                _persona_mean(days, index)
+            ), (config.name, lane, field_name)
+    assert [row.term for row in report.zero_ablation] == list(TERMS)
+    for row in report.zero_ablation:
+        drops = {}
+        for index, metric in enumerate(METRIC_NAMES):
+            c0 = _persona_mean(expected["full"], index)
+            off = _persona_mean(expected[row.term], index)
+            drops[metric] = (c0 - off) / c0 if c0 else None
+        assert row.drops == pytest.approx(drops)
+        votes = [drop >= priors.ablation.min_effect for drop in drops.values() if drop is not None]
+        assert row.verdict == ("keep" if any(votes) else "remove" if votes else "no vote")
+    section = write_ranking_section(report).splitlines()
+    assert ADMISSION_NOTE in section
+    _table_pair(section, zero=False)
+    _table_pair(section, zero=True)
+
+
+def test_below_threshold_counts_grade_two_ranked_lines_by_type_and_severity(
+    base_run: Run, zero_built: Built, world: World, golden: Golden, priors: Priors
+) -> None:
+    """B14.9. Setup: C0 at min_score 0 on the test's own store, plus the world labels.
+
+    Action: count grade-2 ranked lines below the configured score, and all must-see facts.
+    Assert: the sorted type/severity counts, total denominator and printed table match R11.
+    """
+    counts: Counter[tuple[str, str]] = Counter()
+    must_see_facts = 0
+    for (_user, day, name), selection in zero_built.items():
+        if name != "full":
+            continue
+        facts = _facts(selection, world, golden)
+        must_see_facts += list(facts.values()).count(2)
+        delivered = _deliveries([line.item for line in selection.lines], day, golden)
+        for line, fact in zip(selection.lines, delivered, strict=True):
+            if not line.must_see and facts.get(fact) == 2 and line.score < priors.daily.min_score:
+                counts[line.item.type, line.item.severity] += 1
+    expected = [
+        (kind, severity, count)
+        for (kind, severity), count in sorted(
+            counts.items(), key=lambda entry: (-entry[1], *entry[0])
+        )
+    ]
+    assert expected and 0 < sum(counts.values()) < must_see_facts
+    report = base_run.report()
+    assert [(row.type, row.severity, row.count) for row in report.below_threshold] == expected
+    assert report.must_see_facts == must_see_facts
+    section = write_ranking_section(report).splitlines()
+    heading = f"Must-see facts below min_score {priors.daily.min_score}"
+    start = next(i for i, line in enumerate(section) if line.lstrip("# ") == heading)
+    end = next(
+        (i for i in range(start + 1, len(section)) if section[i].startswith("#")), len(section)
+    )
+    block = section[start:end]
+    assert _tables(block) == [[[kind, severity, str(count)] for kind, severity, count in expected]]
+    assert re.search(rf"\b{must_see_facts}\b", "\n".join(block))
+
+
+@pytest.mark.parametrize(
+    "chosen",
+    [(BRACKET,), (FLAG_ASK,), (BRACKET, FLAG_ASK), (FLAG_ASK, BRACKET)],
+    ids=["bracket-only", "ask-only", "both-bracket-first", "both-ask-first"],
+)
+def test_each_qualifying_bracket_item_delivers_once_and_old_facts_score_zero(
+    chosen: tuple[str, ...],
+    built: Built,
+    world: World,
+    golden: Golden,
+    tmp_path: Path,
+    llm: LLM,
+    priors: Priors,
+) -> None:
+    """B14.10. Setup: both S13-BRACKET items in the independent store on days 7 to 9.
+
+    Action: select either item, or both in either order, for the EM on those days.
+    Assert: day 7 credits one grade-2 fact; days 8 and 9 credit zero for the old fact.
+    """
+    fact = next(fact for fact in golden.items if fact.event_id == "S13-BRACKET")
+    user = "U0EM01"
+    assert user in fact.must_see_for
+    for day in (7, 8, 9):
+        qualifying = {
+            item.item_id
+            for item in built.snapshots[day].values()
+            if item.thread_id == f"{fact.channel_id}:{fact.thread_ts}" and _qualifies(fact, item)
+        }
+        assert qualifying == {BRACKET, FLAG_ASK}
+
+    def select_bracket(reader: str, date_: date, selection: Selection) -> Selection:
+        if reader != user or date_ not in {world.date_of(d) for d in (7, 8, 9)}:
+            return selection
+        day = next(d for d in (7, 8, 9) if world.date_of(d) == date_)
+        template = built[(user, 7, "full")].lines[0]
+        lines = tuple(
+            template.model_copy(
+                update={
+                    "item": built.snapshots[day][item_id],
+                    "must_see": False,
+                }
+            )
+            for item_id in chosen
+        )
+        return selection.model_copy(update={"lines": lines})
+
+    expected = Built()
+    expected.update(
+        {
+            key: select_bracket(key[0], world.date_of(key[1]), selection)
+            for key, selection in built.items()
+        }
+    )
+    expected.snapshots = built.snapshots
+    for day in (7, 8, 9):
+        _, grades, _ = _day_view(expected, world, golden, user, day, "full", ranked=False)
+        assert grades == ([2] + [0] * (len(chosen) - 1) if day == 7 else [0] * len(chosen))
+    rows = [
+        _day_metrics(expected, world, golden, user, day, "full") for day in range(1, world.days + 1)
+    ]
+    run = Run(WORLD_DIR, tmp_path / "ranking.sqlite", llm, priors, wrap=select_bracket)
+    persona = _persona(run.report().configs[0], user)
+    assert run.applied > 0
+    _assert_scores(persona.overall, [r[0] for r in rows], [r[1] for r in rows])
+    _assert_scores(persona.ranked_lane, [r[2] for r in rows], [r[3] for r in rows])
+
+
+def test_send_everything_drops_c0_deliveries_before_the_ranked_top_five(
+    base_run: Run, built: Built, world: World, golden: Golden
+) -> None:
+    """B14.11. Setup: U0SC01 on day 4; C0 delivers ASK-PO through its must-see lane.
+
+    Action: remove that fact's line from send-everything before taking five, on every day.
+    Assert: the named list excludes ASK-PO; each persona's ranked means match the own store.
+    """
+    c0 = built[("U0SC01", 4, "full")]
+    must = [line.item for line in c0.lines if line.must_see]
+    assert "ASK-PO" in _deliveries(must, 4, golden)
+    assert built.send_ids[("U0SC01", 4)][0] == PO_AMEND_ASK
+    ids, _, _ = _day_view(built, world, golden, "U0SC01", 4, "send-everything", ranked=True)
+    assert ids[:5] == [SUPPLIER_NOISE, BOM_11034, DROP_IN_ASK, MLCC, ANODIZE_ASK]
+    assert PO_AMEND_ASK not in ids
+    expected = _expected_days(built, world, golden, "send-everything")
+    send = base_run.report().configs[-1]
+    for persona in send.per_persona:
+        rows = [expected[persona.user_id, day] for day in range(1, world.days + 1)]
+        _assert_scores(persona.ranked_lane, [r[2] for r in rows], [r[3] for r in rows])
+
+
+@pytest.mark.parametrize("zero", [False, True], ids=["configured", "zero-threshold"])
+def test_ablation_moved_counts_differing_persona_days_and_prints_each_metric(
+    zero: bool, base_run: Run, built: Built, zero_built: Built, world: World, golden: Golden
+) -> None:
+    """B14.12. Setup: independent day values for C0 and each term, at both thresholds.
+
+    Action: count differing values for each metric, including days without a value.
+    Assert: each moved entry and its printed count match; unchanged metrics report zero.
+    """
+    selections = zero_built if zero else built
+    c0 = _expected_days(selections, world, golden, "full")
+    expected = {}
+    for term in TERMS:
+        off = _expected_days(selections, world, golden, term)
+        expected[term] = {
+            metric: sum(c0[key][index] != off[key][index] for key in c0)
+            for index, metric in enumerate(METRIC_NAMES)
+        }
+    assert len(c0) == world.days * sum(persona.role is not None for persona in world.personas)
+    report = base_run.report()
+    rows = report.zero_ablation if zero else report.ablation
+    assert {row.term: row.moved for row in rows} == expected
+    section = write_ranking_section(report).splitlines()
+    split = next(i for i, line in enumerate(section) if line.lstrip("# ") == ZERO_HEADING)
+    block = section[split:] if zero else section[:split]
+    header_line = next(line for line in block if line.startswith("|") and _cells(line)[0] == "term")
+    headers = _cells(header_line)
+    _, printed = _table_pair(section, zero=zero)
+    for cells in printed:
+        for metric, count in expected[cells[0]].items():
+            index = next(
+                i
+                for i, header in enumerate(headers)
+                if metric.lower() in header.lower() and "drop" in header.lower()
+            )
+            # Accept a count in the drop cell or a separate adjacent moved column.
+            if "moved" in headers[index + 1].lower():
+                assert cells[index + 1] == str(count), (cells[0], metric)
+            else:
+                assert "moved" in (headers[index] + cells[index]).lower()
+                numbers = re.findall(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])", cells[index])
+                assert str(count) in numbers[1:], (cells[0], metric)
