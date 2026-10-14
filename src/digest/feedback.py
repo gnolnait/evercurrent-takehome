@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from digest.models import Frozen
 from digest.store import Store
@@ -40,13 +40,26 @@ class FeedbackEvent(Frozen):
     idempotency_key: str
 
 
+class Episode(NamedTuple):
+    """One silence of one absence: a new last evidence starts a new episode."""
+
+    source: str
+    subject: str
+    last_evidence: str
+
+
+def episode(source: str, subject: str, channel: str, message_ts: str) -> Episode:
+    """Return the episode key. Posting and selection both call this constructor."""
+    raise NotImplementedError
+
+
 @dataclass(frozen=True)
 class FeedbackState:
     """The feedback in effect for one reader on one day."""
 
     resolved: frozenset[str]
     snoozed: Mapping[str, date]
-    suppressed: frozenset[tuple[str, str, str]]
+    suppressed: frozenset[Episode]
 
 
 class UndoMismatch(ValueError):
@@ -59,6 +72,7 @@ def record(
     subject: Subject,
     *,
     reader: str,
+    actor: str,
     slack_user: str,
     run_id: str,
     day: date,
