@@ -1,6 +1,7 @@
 # Plan: M5 slice, the Slack digest layout (v6)
 
-Status: v0.2, 2026-10-13 (first plan review and the advisor's cuts applied). Process stage 1
+Status: v0.3, 2026-10-13 (rebased on main after #73, #74, #75 and #77; choice 6 settled:
+a folded ask absence keeps its absence wording). Process stage 1
 (`docs/process.md`). Stacked on PR #73 (`digest post --seed-map`, branch `m5-links`);
 rebased onto `main` after #73 merges. The design comes from a design pass on the real day-6
 payloads; three readers' mock payloads (v6) were posted to the user's DM in Scratch on
@@ -60,8 +61,11 @@ Block order with at least one item:
 
 1. `header`, plain_text: `<program> · <Day d Mon>` of `selection.day`. Example:
    `Kestrel K2 · Mon 19 Oct`.
-2. `context`: the window line, word for word from `render.window_line`:
-   `Since your digest of 2026-10-16` or `First digest: the last 5 working days`.
+2. `context`: the lines of `render.context_lines(world, selection)`, word for word, joined
+   by a newline: the window line (`Since your digest of 2026-10-16` or `First digest: the
+   last 5 working days`), then the phase line when the world has a phase window on the
+   day (`Phase: ... since ... . Next gate: ...`). The bold gate line (3.1) stays: it is the
+   reader's gate with the buffer, and it may name the same gate as the phase line.
 3. `section`: the summary: the gate line (3.1), a line break, the count line (3.2). With no
    gate, the count line only.
 4. `divider`, then the top items (4.1), 2 blocks each.
@@ -208,8 +212,10 @@ The kept item (X with its members, in selection order):
 
 Text of a kept item with members:
 
-- An ask item (ask or ask absence): the title of its first member, and its own ask body
-  (5.3).
+- An ask item of type ask: the title of its first member, and its own ask body (5.3).
+- An ask absence: its own title (5.2) and its own body (5.3). Its members add only
+  must-see, files and codes: an absence keeps saying what was not found and where
+  (SPEC section 5.7).
 - A checklist absence: its own title (5.2), and the body of its best member: must-see
   first, then the higher score, then selection order.
 
@@ -267,7 +273,6 @@ One resolver gives the ask message of an ask item. Title, body, link (6.1) and t
 |---|---|
 | The reader asked (asker = reader) | `No reply from <owner first name> in this thread for <days text>` |
 | The reader was asked (owner = reader) | `<Asker> has had no reply from you in this thread for <days text>` |
-| Two others | `No reply from <owner first name> to <Asker> in this thread for <days text>` |
 
 - A kept item with members: see 4.3.
 
@@ -431,7 +436,6 @@ The meta column lists the parts that can show; the rules are in 5.4 to 5.7.
 | Ask to you (needs_you) | data title, or its first member's title | `<Asker> asked you: “<quote>”` | `Asked of you` · `New` or `Asked <date>` · `You replied` · codes · `Message` or `Thread` |
 | Ask absence, you asked | `No reply from Ana in this thread for 3 working days` | `You asked: “<quote>”` | `Your question` · `Owner: Ana (FW)` · `Thread` |
 | Ask absence, asked of you | `Grace has had no reply from you in this thread for 3 working days` | `Grace asked you: “<quote>”` | `Asked of you` · `Thread` |
-| Ask absence, two others | `No reply from Ana to Grace in this thread for 3 working days` | `Grace asked: “<quote>”` | `Owner: Ana (FW)` · `Thread` |
 | Checklist absence | `TST-EMC-01 EMC pre-scan: no progress evidence for 3 working days` | best member's sentence, or the cadence | `Gate task` · `Owner: Tobias (EE)` · codes · other-gate buffer · `Thread` · `checked: #eng-elec-fw threads` |
 | Blocker, risk | data title | first sentence | label when top · owner · age · codes · `Thread` · files |
 | Decision | data title | first sentence | owner · age · codes · `Thread` · files |
@@ -571,7 +575,7 @@ covers.
 
 - A1 (3). Block order of the top message with items, with and without a foot; the no-item
   form with `hidden = 0` (3 blocks) and `hidden > 0` (5 blocks); the header
-  `<program> · <Day d Mon>`; the window line word for word in block 1; no reply with no
+  `<program> · <Day d Mon>`; the `context_lines` text word for word in block 1, with and without a phase line; no reply with no
   item.
 - A2 (3.1, D8). Each gate rule in turn, with a candidate for a later rule present; a past
   gate is never picked; equal dates go to the lower id; `today`, `tomorrow`, `in N days`;
@@ -594,7 +598,8 @@ covers.
   the same thread does not fold; a shared non-gate code in another thread does not fold by
   rule (b); two asks in one thread stay apart; two absences stay apart; a risk that matches
   two absorbers goes to the first; the kept item is must-see when a member is; a folded ask
-  takes its first member's title and keeps its own body; a folded checklist absence takes
+  of type ask takes its first member's title and keeps its own body; a folded ask absence
+  keeps its own title and body; a folded checklist absence takes
   its best member's sentence; counts use the kept items.
 - A8 (5.1, D3). The ask message is the first entry by a known non-owner author; an entry
   whose key is not in `authors` is skipped; with no ask message, the body is the summary's
