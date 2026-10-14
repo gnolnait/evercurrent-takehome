@@ -19,9 +19,12 @@ omitted and takes new metadata when given; it is rate-limit Tier 3.
 
 ## Behaviours
 
-R1. **Reference.** `seed` gains `reference: Sequence[Post] | None = None`: the posts the
-map was seeded from (`plan_seed` over the committed `events.jsonl`). With `None`, the
-behaviour is exactly as today (every existing test stays green).
+R1. **Reference.** `seed` gains `reference: Sequence[Post] | None = None`: the posts that
+Slack holds now, that is the corpus last seeded or pushed (`plan_seed` over the committed
+`events.jsonl` before the first push; after a push, the corpus that push sent). With
+`None`, the behaviour is exactly as today (every existing test stays green). The seeder
+stores no text, so it compares against the reference only: a caller that passes the
+committed corpus after a push cannot push a change back to the committed text.
 
 R2. **Update.** With a reference, a post whose key is in the map, whose key is in the
 reference, and whose `text` differs from the reference post's `text`, is updated:

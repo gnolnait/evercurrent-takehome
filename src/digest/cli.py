@@ -304,7 +304,10 @@ def seed(
     reference_path: Path | None = typer.Option(
         None,
         "--reference",
-        help="Corpus the map was seeded from; update changed messages in place.",
+        help=(
+            "The corpus that Slack holds now (the last one seeded or pushed); update the "
+            "messages whose text differs in place."
+        ),
     ),
 ) -> None:
     """Post the world's corpus into the Slack workspace of SLACK_BOT_TOKEN, under persona
@@ -318,7 +321,11 @@ def seed(
 
     With --reference, the command updates in place each seeded message whose text
     differs from the reference, and lists the seeded messages the corpus no longer holds.
-    It deletes nothing (docs/plans/m5-reseed.md).
+    It deletes nothing (docs/plans/m5-reseed.md). The reference must be the corpus Slack
+    holds now, the last one seeded or pushed: a message changed back to text that matches
+    the reference is not pushed. A dry run then also prints an `updates:` count and one
+    `removed:` line per removed message; a real run prints one `not deleted:` line per
+    removed message after the summary line.
     """
     world_dir = Path("data") / "world" / world
     # Each refusal comes after its try statement, so no exception chains to it.
