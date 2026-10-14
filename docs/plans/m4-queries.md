@@ -6,7 +6,7 @@ unit 13 (the web preview's open-items page) are thin adapters over this layer.
 
 v0.2 folds in the plan reviews: `query` gets an authorizer (a read-only open still lets
 `VACUUM INTO` and `ATTACH` write files), the day comes from the store and is checked
-once, absences resolve in `get_item`, the project state lists the people and the task
+when the context opens, absences resolve in `get_item`, the project state lists the people and the task
 state, the entity history leads with the owners, and `search_items` takes filters.
 
 ## Goal
@@ -38,7 +38,7 @@ def open_context(store, world, priors, *, previous_digest: date | None | Literal
   `digest/daily/render.py`, which `select_digest` calls; its behaviour is unchanged. The
   store keeps only the latest item versions, so no function takes another day.
   `"auto"` gives the previous world day, or a first digest on world day 1, as
-  `digest demo` and the room do. A function never opens or closes the store.
+  `digest demo` does. A function never opens or closes the store.
 
 ## Functions (the SPEC section 3 read tools, plus one helper)
 
@@ -94,8 +94,8 @@ items of `detect_absences` for the day; absences are computed, never stored.
   state: `done` (a task link with effect `done`), `in progress` (other task links, with the
   newest link day) or `no evidence`; and the people: user id, name, role, kind. The task
   state reads `task_citations`, as `checklist_absences` does.
-- Q9 `query`: one SQL statement on a new `Store.open_readonly(ctx.store.path)`
-  connection with:
+- Q9 `query`: one SQL statement on a new read-only connection to `ctx.store.path`
+  (`mode=ro`, the URI `Store.open_readonly` uses) with:
   - an authorizer that allows only `SQLITE_SELECT`, `SQLITE_READ`, `SQLITE_FUNCTION`,
     `SQLITE_RECURSIVE`, and `SQLITE_PRAGMA` for `data_version` with no argument (FTS5
     reads it); it denies the rest, so `VACUUM INTO`, `ATTACH`, temp tables and every
@@ -113,7 +113,8 @@ items of `detect_absences` for the day; absences are computed, never stored.
 
 Views (`ItemView`, `ClaimView`, `EntityView`, `RankedLineView`, `DigestView`,
 `ProjectStateView`, `QueryResult`) are frozen models of plain fields, so an adapter can
-serialize them directly; a persona id carries the persona name beside it.
+serialize them directly; a persona id carries the persona name beside it, except the ids inside the
+embedded `Item` (for example an ask absence's `asker`).
 
 ## Layers
 
