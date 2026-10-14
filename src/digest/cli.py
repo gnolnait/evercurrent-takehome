@@ -568,6 +568,23 @@ def serve(
         uvicorn.Server(server_config(create_app(room), port)).run()
 
 
+@app.command("mcp")
+def mcp_cmd(
+    day: int = typer.Option(6, "--day", help="World day of the demo store; used without --db."),
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default the store's world."
+    ),
+    db: Path | None = typer.Option(
+        None, "--db", help="Store to serve; default the demo store of --day."
+    ),
+) -> None:
+    """Serve the query tools to an MCP client on stdio (docs/plans/m4-mcp.md M5).
+
+    Nothing but the protocol goes to stdout.
+    """
+    raise NotImplementedError
+
+
 @app.command("eval")
 def eval_cmd(
     world: str | None = typer.Option(

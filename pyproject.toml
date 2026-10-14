@@ -108,7 +108,7 @@ name = "layers"
 type = "layers"
 layers = [
     "digest.cli",
-    "digest.web",
+    "digest.web | digest.mcp_server",
     "digest.room",
     "digest.queries",
     "digest.eval | digest.driver",
