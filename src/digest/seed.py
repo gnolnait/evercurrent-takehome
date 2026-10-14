@@ -240,15 +240,17 @@ def seed(
 ) -> SeedReport:
     """Make the posts and uploads that the map at `map_path` does not hold yet.
 
-    With `reference`, also update in place the mapped messages whose text changed
-    (docs/plans/m5-reseed.md); not built yet.
+    With `reference`, the posts the map was seeded from, also update in place each mapped
+    message whose text differs from its reference post, and report in `removed` the mapped
+    reference keys that `posts` no longer holds. Nothing is deleted (docs/plans/m5-reseed.md).
 
     Owns every map read and write (B9, B10). A `map_path` of None means
     `.slack-seed/<team_id>-<world>.json` in the working directory. See the plan for the
     checks before the first write (B1, B2, B10, B14), retries (B11) and pace (B13). A
     check that fails raises `SeedBlocked`; a dry run prints it as a blocker line instead.
-    A client error stops the run as it is. A run that stops before its first post or
-    upload writes no new map file; after a write, the map keeps every acknowledged write (B9, B15).
+    A client error stops the run as it is. A run that stops before its first update, post
+    or upload writes no new map file; after a write, the map keeps every acknowledged post
+    and upload (B9, B15). An update changes no map entry, so a stopped run repeats it.
     """
     auth = _retry(client.auth_test, sleep)
     path = map_path or Path(".slack-seed") / f"{auth.team_id}-{world.name}.json"
@@ -261,30 +263,56 @@ def seed(
     slack_ids, to_join, blockers = _resolve_channels(world, posts, listed)
     blockers += _changed_channels(world, slack_ids, seed_map)
     blockers += _missing_roots(posts, seed_map)
+    compared = {item.key: item for item in reference or ()}
+    blockers += _moved_messages(posts, compared)
     blockers += scope_blockers
     reactions = sum(post.reactions for post in posts)
+    selected = {post.key for post in posts}
+    removed = tuple(key for key in compared if key in seed_map.messages and key not in selected)
+    edits = {
+        post.key
+        for post in posts
+        if post.key in seed_map.messages
+        and post.key in compared
+        and compared[post.key].text != post.text
+    }
     if dry_run:
-        for line in [*_pending_lines(world, posts, seed_map), *blockers]:
+        changes = []
+        if reference is not None:
+            changes = [f"updates: {len(edits)}", *(f"removed: {key}" for key in removed)]
+        for line in [*_pending_lines(world, posts, seed_map), *changes, *blockers]:
             print(line)
-        return SeedReport(0, 0, 0, reactions, complete=not blockers, map_path=path)
+        return SeedReport(0, 0, 0, reactions, complete=not blockers, map_path=path, removed=removed)
     if blockers:
         raise SeedBlocked("; ".join(blockers))
     if path.exists() and not seed_map.complete:
         print(RESUME_LIMIT)
     written = False  # pace only after the first acknowledged write of the run (B13)
-    posted = uploaded = 0
+    posted = uploaded = updated = 0
     used: set[str] = set()
     for post in posts:
         channel = slack_ids[post.world_channel]
         pending = [name for name in post.files if f"{post.key}/{name}" not in seed_map.files]
-        if post.key in seed_map.messages and not pending:
+        if post.key in seed_map.messages and not pending and post.key not in edits:
             continue
         if channel in to_join:
             _retry(partial(client.join, channel), sleep)
             to_join.discard(channel)
-        if not written:  # save the map just before the first post or upload of the run (B15)
+        if not written:  # save the map just before the first write of the run (B15, R7)
             seed_map.complete = False
             seed_map.save(path)
+        if post.key in edits:  # no map entry changes, so no checkpoint (R7)
+            mapped = seed_map.messages[post.key]
+            change = partial(
+                client.update, mapped.channel, mapped.ts, post.text, metadata=post.metadata
+            )
+            _retry(change, sleep, pace if written else 0)
+            written = True
+            updated += 1
+            used.add(mapped.channel)
+            print(f"updated {post.key}", flush=True)
+            if not pending:
+                continue
         seed_map.channels[post.world_channel] = channel
         if post.key not in seed_map.messages:
             root = None if post.root_key == post.key else seed_map.messages[post.root_key].ts
@@ -318,7 +346,16 @@ def seed(
             print(f"uploaded {post.key}/{name}", flush=True)
     seed_map.complete = True
     seed_map.save(path)
-    return SeedReport(posted, uploaded, len(used), reactions, complete=True, map_path=path)
+    return SeedReport(
+        posted,
+        uploaded,
+        len(used),
+        reactions,
+        complete=True,
+        map_path=path,
+        updated=updated,
+        removed=removed,
+    )
 
 
 def _retry[T](operation: Callable[[], T], sleep: Callable[[float], None], pace: float = 0) -> T:
@@ -408,6 +445,17 @@ def _missing_roots(posts: Sequence[Post], seed_map: SeedMap) -> list[str]:
             blockers.append(f"missing thread root {post.root_key} for reply {post.key}")
         known.add(post.key)
     return blockers
+
+
+def _moved_messages(posts: Sequence[Post], compared: Mapping[str, Post]) -> list[str]:
+    """One blocker per post whose channel or thread root differs from its reference post (R2a)."""
+    return [
+        f"moved message {post.key}: its channel or thread root differs from the reference"
+        for post in posts
+        if post.key in compared
+        and (post.world_channel, post.root_key)
+        != (compared[post.key].world_channel, compared[post.key].root_key)
+    ]
 
 
 def _pending_lines(world: World, posts: Sequence[Post], seed_map: SeedMap) -> list[str]:
@@ -528,7 +576,7 @@ class SlackWebSeedClient:
     def update(
         self, channel_id: str, ts: str, text: str, *, metadata: Mapping[str, object]
     ) -> None:
-        raise NotImplementedError
+        self._call("chat_update", channel=channel_id, ts=ts, text=text, metadata=metadata)
 
     def upload(self, channel_id: str, thread_ts: str, filename: str, content: bytes) -> str:
         response = self._call(
