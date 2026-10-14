@@ -1,5 +1,6 @@
 """Unit 12b: B12b.1 through B12b.7 in docs/plans/m4-mcp.md v0.2."""
 
+import inspect
 import shutil
 import sqlite3
 import sys
@@ -82,6 +83,22 @@ async def test_list_tools_has_nine_described_tools(
     assert len(result.tools) == 9
     assert {tool.name for tool in result.tools} == TOOL_NAMES
     assert all(tool.description and tool.description.strip() for tool in result.tools)
+    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
+    from digest import queries
+
+    for tool in result.tools:
+        parameters = {
+            name: parameter
+            for name, parameter in inspect.signature(getattr(queries, tool.name)).parameters.items()
+            if name != "ctx" and (tool.name != "query" or name == "sql")
+        }
+        assert set(tool.inputSchema["properties"]) == set(parameters), tool.name
+        required = [
+            name
+            for name, parameter in parameters.items()
+            if parameter.default is inspect.Parameter.empty
+        ]
+        assert sorted(tool.inputSchema.get("required", [])) == sorted(required), tool.name
 
 
 @pytest.mark.anyio
@@ -114,6 +131,31 @@ async def test_tool_structured_content_matches_query(
 
     assert not result.isError, result.content
     assert result.structuredContent == expected
+
+
+@pytest.mark.anyio
+async def test_search_items_passes_filters_and_limit(
+    day6_store: Path, world: World, priors: Priors
+) -> None:
+    """Setup three matching asks / Action filter and limit / Assert the query result (B12b.2)."""
+    server = build_server(day6_store, world, priors)
+    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
+    from digest import queries
+
+    filters = {"type": "ask", "status": "open", "owner": "U0SC01"}
+    with Store.open_readonly(day6_store) as store:
+        ctx = queries.open_context(store, world, priors)
+        matches = queries.search_items(ctx, **filters, limit=100)
+        assert len(matches) > 1
+        limited = queries.search_items(ctx, **filters, limit=1)
+        assert len(limited) == 1
+        expected = TypeAdapter(Any).dump_python(limited, mode="json", by_alias=True)
+
+    async with create_connected_server_and_client_session(server._mcp_server) as client:
+        result = await client.call_tool("search_items", {**filters, "limit": 1})
+
+    assert not result.isError, result.content
+    assert result.structuredContent == {"result": expected}
 
 
 @pytest.mark.anyio
@@ -153,18 +195,21 @@ async def test_schema_resource_returns_store_schema(
     assert content.text == (ROOT / "src/digest/schema.sql").read_text("utf-8")
 
 
-@pytest.mark.parametrize("fault", ["no-until", "wrong-world"])
+@pytest.mark.parametrize("fault", ["no-until", "wrong-world", "missing-file"])
 def test_cli_refuses_invalid_store_without_stdout(
     day6_store: Path, tmp_path: Path, fault: str
 ) -> None:
-    """Setup invalid metadata / Action start CLI / Assert exit 1 and no stdout (B12b.5)."""
+    """Setup an invalid store / Action start CLI / Assert exit 1 and no stdout (B12b.5)."""
     path = tmp_path / "invalid.sqlite"
-    shutil.copy2(day6_store, path)
-    with closing(sqlite3.connect(path)) as db, db:
-        if fault == "no-until":
-            db.execute("DELETE FROM meta WHERE key = 'until'")
-        else:
-            db.execute("UPDATE meta SET value = 'other-world' WHERE key = 'world'")
+    if fault != "missing-file":
+        shutil.copy2(day6_store, path)
+        with closing(sqlite3.connect(path)) as db, db:
+            if fault == "no-until":
+                db.execute("DELETE FROM meta WHERE key = 'until'")
+            else:
+                db.execute("UPDATE meta SET value = 'other-world' WHERE key = 'world'")
+    else:
+        assert not path.exists()
     args = ["mcp", "--db", str(path)]
     if fault == "wrong-world":
         args += ["--world", "kestrel"]
@@ -173,19 +218,27 @@ def test_cli_refuses_invalid_store_without_stdout(
 
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert "until" in result.stderr if fault == "no-until" else "world" in result.stderr
+    if fault != "missing-file":
+        assert "until" in result.stderr if fault == "no-until" else "world" in result.stderr
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("explicit_world", [True, False], ids=["explicit-world", "store-world"])
 async def test_stdio_lists_tools_and_calls_blockers(
-    day6_store: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    day6_store: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    world: World,
+    priors: Priors,
+    explicit_world: bool,
 ) -> None:
     """Setup a store copy / Action use the stdio client / Assert valid MCP replies (B12b.6)."""
     path = tmp_path / "stdio.sqlite"
     shutil.copy2(day6_store, path)
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "digest", "mcp", "--world", "kestrel", "--db", str(path)],
+        args=["-m", "digest", "mcp", "--db", str(path)]
+        + (["--world", "kestrel"] if explicit_world else []),
         cwd=ROOT,
         env={"DIGEST_MODE": "replay", "NO_COLOR": "1"},
     )
@@ -197,6 +250,7 @@ async def test_stdio_lists_tools_and_calls_blockers(
         await client.initialize()
         tools = await client.list_tools()
         result = await client.call_tool("list_open_blockers", {})
+        state = await client.call_tool("get_project_state", {})
 
     assert len(tools.tools) == 9
     assert {tool.name for tool in tools.tools} == TOOL_NAMES
@@ -205,29 +259,87 @@ async def test_stdio_lists_tools_and_calls_blockers(
     assert test_room.STALE_PACK in {
         view["item"]["item_id"] for view in result.structuredContent["result"]
     }
+    # Import after initialization so the subprocess reaches the CLI stub first.
+    from digest import queries
+
+    with Store.open_readonly(path) as store:
+        ctx = queries.open_context(store, world, priors)
+        expected = TypeAdapter(Any).dump_python(
+            queries.get_project_state(ctx), mode="json", by_alias=True
+        )
+    assert not state.isError, state.content
+    assert state.structuredContent == expected
     assert not [
         record for record in caplog.records if record.name == "mcp.client.stdio" and record.exc_info
     ]
 
 
 @pytest.mark.anyio
-async def test_replacing_store_changes_project_day(
+async def test_stdio_default_store_uses_requested_day(world: World) -> None:
+    """Setup the default store / Action start day 6 / Assert tools and the world date (B12b.6)."""
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "digest", "mcp", "--day", "6"],
+        cwd=ROOT,
+        env={"DIGEST_MODE": "replay", "NO_COLOR": "1"},
+    )
+    async with (
+        stdio_client(parameters) as (read, write),
+        ClientSession(read, write, read_timeout_seconds=timedelta(seconds=120)) as client,
+    ):
+        await client.initialize()
+        tools = await client.list_tools()
+        result = await client.call_tool("get_project_state", {})
+
+    assert len(tools.tools) == 9
+    assert {tool.name for tool in tools.tools} == TOOL_NAMES
+    assert not result.isError, result.content
+    assert result.structuredContent is not None
+    assert result.structuredContent["day"] == world.date_of(6).isoformat()
+
+
+@pytest.mark.anyio
+async def test_replacing_store_refreshes_every_tool(
     day6_store: Path, day5_store: Path, tmp_path: Path, world: World, priors: Priors
 ) -> None:
-    """Setup day 6 / Action replace with day 5 between calls / Assert the new day (B12b.7)."""
+    """Setup day 6 / Action replace with day 5 / Assert each tool reads the new store (B12b.7)."""
     path = tmp_path / "served.sqlite"
     shutil.copy2(day6_store, path)
     server = build_server(path, world, priors)
+    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
+    from digest import queries
+
+    arguments_by_name = {
+        "search_items": {"type": "blocker", "limit": 100},
+        "get_item": {"item_id": "absence:G-DVT1.thermal"},
+        "get_entity_history": {"entity": "TST-THM-02"},
+        "why_ranked": {
+            "user_id": "U0ME01",
+            "item_id": "C0ENGEF:1791993300.010026#1791993300.010026#0",
+        },
+        "query": {"sql": "SELECT value FROM meta WHERE key = 'until'"},
+    }
+    cases = [
+        (name, arguments_by_name.get(name, args), wrapped) for name, args, wrapped in TOOL_CASES
+    ]
 
     async with create_connected_server_and_client_session(server._mcp_server) as client:
-        before = await client.call_tool("get_project_state", {})
-        assert not before.isError, before.content
-        assert before.structuredContent is not None
-        assert before.structuredContent["day"] == "2026-10-19"
+        before = {}
+        for name, arguments, _ in cases:
+            result = await client.call_tool(name, arguments)
+            assert not result.isError, (name, result.content)
+            before[name] = result.structuredContent
 
         shutil.copy2(day5_store, path)
-        after = await client.call_tool("get_project_state", {})
-
-    assert not after.isError, after.content
-    assert after.structuredContent is not None
-    assert after.structuredContent["day"] == "2026-10-18"
+        with Store.open_readonly(day5_store) as store:
+            ctx = queries.open_context(store, world, priors)
+            for name, arguments, wrapped in cases:
+                expected = TypeAdapter(Any).dump_python(
+                    getattr(queries, name)(ctx, **arguments), mode="json", by_alias=True
+                )
+                if wrapped:
+                    expected = {"result": expected}
+                assert before[name] != expected, (name, "the fixture must expose a cached result")
+                after = await client.call_tool(name, arguments)
+                assert not after.isError, (name, after.content)
+                assert after.structuredContent == expected, name
