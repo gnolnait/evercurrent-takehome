@@ -38,3 +38,20 @@ store rule without checking the tests that pin it.
 
 Change. Before a brief changes the behaviour of a module outside the unit, grep the
 tests that pin that module and name them in the brief.
+
+## M4 unit 14, ranking metrics and the ablation (2026-10-14)
+
+Caught. The first run said three of four score terms should go and send-everything beat
+the full ranker. The ranking owner asked for a confound check before anyone believed it:
+with `min_score` 0, most of the effect of two terms was admission through the score
+threshold, not order. An independent review of the grading then found three real
+defects (credit tied to one of two duplicate items, send-everything lines that took
+ranked-lane slots at grade 0, and no count of the persona-days behind each verdict), and
+the final review found that the ranked lane reassigned facts after it dropped lines.
+
+Missed. The plan named "off means 1" without asking what that does to a fixed threshold;
+the admission confound was visible from the ablation-switch plan's own consequences
+section.
+
+Change. When a metric compares configurations that change score scale, run one
+configuration that holds admission fixed before reading any verdict.
