@@ -38,3 +38,19 @@ store rule without checking the tests that pin it.
 
 Change. Before a brief changes the behaviour of a module outside the unit, grep the
 tests that pin that module and name them in the brief.
+
+## M4 unit 12a, the query function layer (2026-10-14)
+
+Caught. A probe before the plan review showed that a `mode=ro` connection still lets
+`VACUUM INTO` and `ATTACH` create files, so `query` got an allowlist authorizer. The
+plan review found that a day other than the store's day would read later item versions,
+so the day now comes from the store. The code review found that a per-cell length limit
+does not bound a result of many wide rows; `query` now has a column limit and an 8 MB
+result budget.
+
+Missed. The first test round pinned only the must-see line of a digest; empty ranked
+lists passed. The test review caught it before any code existed.
+
+Change. When a function takes caller SQL, probe each write path (`VACUUM INTO`,
+`ATTACH`, pragmas, temp tables) and the result size on a real connection before the
+plan is reviewed.
