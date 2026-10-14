@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx2
@@ -14,6 +15,8 @@ from digest.llm import (
     parse_json_output,
     strict_schema,
 )
+
+log = logging.getLogger(__name__)
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -55,12 +58,24 @@ class OpenRouterBackend:
             }
             # Route only to an endpoint that honours the schema.
             body["provider"] = {"require_parameters": True}
-        response = self.client.post(
-            URL, json=body, headers={"Authorization": f"Bearer {self.api_key}"}
-        )
+        # A request error can hold the request and the key. The refusal and the log give
+        # only its class, and `from None` drops the chain.
+        try:
+            response = self.client.post(
+                URL, json=body, headers={"Authorization": f"Bearer {self.api_key}"}
+            )
+        except httpx2.RequestError as error:
+            error_class = type(error).__name__
+            log.warning("llm_unreachable", extra={"backend": self.name, "error_class": error_class})
+            raise LLMOutputError(f"openrouter unreachable: {error_class}", raw="") from None
         if not response.is_success:
             raise LLMOutputError(f"openrouter status {response.status_code}", raw=response.text)
-        payload = response.json()
+        # Only this call is in the try statement. LLMOutputError is a ValueError, so a wider
+        # try statement would catch the refusals above and below.
+        try:
+            payload = response.json()
+        except ValueError:
+            raise LLMOutputError("openrouter reply is not JSON", raw=response.text) from None
         if "choices" not in payload:
             raise LLMOutputError("openrouter reply without choices", raw=response.text)
         choice = payload["choices"][0]

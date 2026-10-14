@@ -3,6 +3,7 @@ docs/plans/m3-room-edits.md, unit 10)."""
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from itertools import groupby
@@ -36,6 +37,8 @@ from digest.room import (
     SetRole,
     SetTaskOwner,
 )
+
+log = logging.getLogger(__name__)
 
 # Autoescape is on for every template; no template marks data as safe.
 _TEMPLATES = Environment(
@@ -75,8 +78,34 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
     # The message changes at the last save; empty before the first save (plan S3).
     saved: list[tuple[Edit, ...]] = []
 
-    def render(refusal: str | None = None, notice: str | None = None) -> HTMLResponse:
-        return _page(room.state(), refusal, notice=notice, curated=curated, seed=reseed is not None)
+    def render(
+        refusal: str | None = None, notice: str | None = None, *, status: int = 400
+    ) -> HTMLResponse:
+        return _page(
+            room.state(),
+            refusal,
+            notice=notice,
+            curated=curated,
+            seed=reseed is not None,
+            status=status,
+        )
+
+    def failed(route: str, error: Exception) -> HTMLResponse:
+        """The 500 page for an unexpected room error (plan m3-failures F4 and F5).
+
+        The page and the log fields name only the error class. The message can hold a
+        path, a token or a model reply. The traceback goes only to the local server log.
+        """
+        error_class = type(error).__name__
+        log.error(
+            "room_rebuild_failed",
+            extra={"route": route, "error_class": error_class},
+            exc_info=True,
+        )
+        return render(
+            f"The room could not apply this change ({error_class}); the room is unchanged.",
+            status=500,
+        )
 
     @app.get("/")
     async def page() -> HTMLResponse:
@@ -92,11 +121,18 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
             room.apply(_edit_from(form), fresh=fresh)
         except ValueError as error:
             return render(str(error))
+        except Exception as error:
+            return failed("/edit", error)
         return RedirectResponse("/", status_code=303)
 
     @app.post("/reset")
-    async def reset() -> RedirectResponse:
-        room.reset()
+    async def reset() -> Response:
+        try:
+            room.reset()
+        except ValueError as error:
+            return render(str(error))
+        except Exception as error:
+            return failed("/reset", error)
         return RedirectResponse("/", status_code=303)
 
     @app.post("/save")
@@ -225,8 +261,9 @@ def _page(
     notice: str | None = None,
     curated: Sequence[dict[str, Any]] = (),
     seed: bool = False,
+    status: int = 400,
 ) -> HTMLResponse:
-    """The room page for the state; a refusal answers 400 and shows its reason.
+    """The room page for the state; a refusal answers `status` and shows its reason.
 
     `notice` is the result of a save or a reseed. `seed` shows the Seed panel.
     """
@@ -314,7 +351,7 @@ def _page(
         curated=curated,
         seed=seed,
     )
-    return HTMLResponse(html, status_code=200 if refusal is None else 400)
+    return HTMLResponse(html, status_code=200 if refusal is None else status)
 
 
 def _title(

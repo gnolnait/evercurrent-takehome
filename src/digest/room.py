@@ -489,9 +489,10 @@ class Room:
         return self._state
 
     def reset(self) -> RoomState:
-        """Drop every edit."""
-        old, self._store, self._changed = self._store, None, {}
-        self._state = self._build((), None, {}, None)
+        """Drop every edit; when the build fails, keep the state and the message changes."""
+        # Build first. Change the room only after the build succeeds.
+        state = self._build((), None, {}, None)
+        old, self._store, self._changed, self._state = self._store, None, {}, state
         if old is not None:
             _remove_store(old)
         return self._state
@@ -649,16 +650,16 @@ class Room:
                 )
             except OSError as error:
                 raise ValueError(f"cannot start a live model call: {error}") from None
-            # run_extract counts a backend failure (LLMOutputError: an HTTP status such as
-            # an auth or rate-limit refusal, or output that does not validate) as a failed
-            # thread, and the check below refuses it.
+            # run_extract counts a backend failure as a failed thread, and the check below
+            # refuses it. A backend failure is an LLMOutputError: a network failure, an HTTP
+            # status such as an auth or rate-limit refusal, or output that does not validate.
             report = run_extract(
                 store, self._llm, glossary, world.project, self._base.priors, as_of, zone, purposes
             )
         if report.failed:
             cause = (
-                "the live model call failed (an auth or rate-limit refusal, another HTTP "
-                "error, or output that did not validate)"
+                "the live model call failed (a network failure, an auth or rate-limit "
+                "refusal, another HTTP error, or output that did not validate)"
                 if self._llm.mode == "record"
                 else "a recorded model output did not validate"
             )
