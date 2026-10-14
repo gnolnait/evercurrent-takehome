@@ -30,15 +30,13 @@ Part of the mechanical engineer's digest (summaries and sources trimmed):
 Daily digest for Nadia Brenner (ME) - 2026-10-19
 Since your digest of 2026-10-16
 
-Not happened
-- Not happened: Grace Okonkwo asked Ana Folau, no reply for 3 working days
-  EM Grace Okonkwo asks FW owner Ana Folau when TST-SAF-01 will be rerun on the DVT firmware ...
-  source: https://kestrel-k2.slack.com/archives/C0ENGEF/p1791997800010040
-
 Risks
 - PN-11020 chassis base built to stale Rev B drawing pack (PN-11020, V-SUNRISE, DOC-11020-CM, chassis) [must see]
   FAI photos and CMM for PN-11020 show the Rev B hole pattern. Sunrise is building from a stale drawing pack. ...
   source: https://kestrel-k2.slack.com/archives/C0EXTCM/p1792164600010061
+- Top-cover DFM review open and blocking G-DVT1 (G-TR1, PN-51010, G-DVT1) [must see]
+  The top-cover DFM review is still open and waiting on snap detail feedback. ...
+  source: https://kestrel-k2.slack.com/archives/C0KPROG/p1792423800010077
 ```
 
 The run takes about 5 s on a laptop; a test holds it under 60 s. A digest shows the sections that have lines (Needs you,
@@ -81,7 +79,8 @@ workspace `kestrel-k2.slack.com`, which does not exist.
 - Other lines are ranked by importance (type and severity) times the role's interest in
   the item type times personal relevance (1.0 for an owned entity, 0.8 for the reader's
   role, else 0.4). A line needs a score of at least 0.15, and each section shows at most
-  5 ranked lines (3 for Not happened).
+  5 ranked lines. Not happened holds only absences, which are must-see for the readers
+  they name and are not ranked.
 
 ## How well extraction works
 
@@ -120,7 +119,8 @@ stricter matching on golden threads only, so it does not establish whether keyin
 precision meets 0.8. The cut is a conservative scope decision under that uncertainty.
 
 A digest covers what is new since the reader's previous digest, plus must-see items and
-open blockers and ask absences of any age; the header names the window. Delivery is not
+open blockers of any age; the header names the window. An absence goes only to the
+readers it names: an unanswered ask to the asker and the person asked. Delivery is not
 recorded yet, so the caller states the previous digest (the demo uses the previous world
 day).
 

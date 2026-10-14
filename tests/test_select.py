@@ -425,6 +425,8 @@ def test_checklist_absence_reaches_only_task_role_and_em(
     selection = choose(absences=[missing], profile=profile, table=table)
 
     assert tuple((line.item.item_id, line.must_see) for line in selection.lines) == expected
+    assert all(line.section == "not_happened" for line in selection.lines)
+    assert selection.hidden == 0
 
 
 def test_role_owned_entity_makes_blocker_must_see_when_persona_omits_it() -> None:
@@ -459,14 +461,17 @@ def test_role_owned_entity_makes_blocker_must_see_when_persona_omits_it() -> Non
     ],
     ids=["blocker-not-owned", "gate-not-owned", "owned-part-not-gate", "ask-third-party"],
 )
-def test_items_outside_must_see_rules_are_ranked(row: Item, profile: Profile) -> None:
+def test_items_outside_must_see_rules_rank_only_non_absences(row: Item, profile: Profile) -> None:
     selection = choose(
         absences=[row] if row.type == "absence" else [],
         items=[] if row.type == "absence" else [row],
         profile=profile,
     )
 
-    assert selection.lines[0].must_see is False
+    if row.type == "absence":
+        assert selection.lines == ()
+    else:
+        assert selection.lines[0].must_see is False
 
 
 def test_must_see_line_is_kept_above_section_cap() -> None:
@@ -564,9 +569,12 @@ def test_ranked_score_uses_type_and_severity_weights(
         table=priors(role_priors={"ME": {}}),
     )
 
-    line = selection.lines[0]
-    importance = type_weight * severity_weight
-    assert line.score == pytest.approx(importance * 0.5 * 0.4)
+    if item_type == "absence":
+        assert selection.lines == ()
+    else:
+        line = selection.lines[0]
+        importance = type_weight * severity_weight
+        assert line.score == pytest.approx(importance * 0.5 * 0.4)
 
 
 def test_ranked_score_uses_default_role_prior() -> None:
@@ -693,40 +701,179 @@ def test_ask_in_another_thread_keeps_line_beside_absence() -> None:
     ]
 
 
-def test_ask_absence_for_asker_goes_to_not_happened() -> None:
+@pytest.mark.parametrize(
+    ("user_id", "section", "reason"),
+    [
+        ("UASKER", "not_happened", "must see: an ask absence, you asked"),
+        ("UEMPTY", "needs_you", "must see: an ask absence, you were asked"),
+    ],
+    ids=["asker", "asked"],
+)
+def test_ask_absence_reaches_named_readers_as_must_see(
+    user_id: str, section: str, reason: str
+) -> None:
+    """AA2: both named readers keep the absence above the score threshold."""
     ask = item("ask", type="ask", owner="UEMPTY")
     missing = absence(
         f"absence:ask:{ask.item_id}",
         source="ask",
-        asker="UREADER",
+        asker="UASKER",
         owner="UEMPTY",
         affected_roles=(),
     ).model_copy(update={"thread_id": ask.thread_id})
 
-    selection = choose([ask], [missing])
+    selection = choose(
+        [ask], [missing], profile=profile_for(world(), user_id), table=priors(min_score=1.1)
+    )
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("absence:ask:ask", "not_happened")
+        ("absence:ask:ask", section)
     ]
+    assert selection.lines[0].must_see is True
+    assert selection.lines[0].score == 0
+    assert selection.lines[0].reason == reason
+    assert selection.hidden == 0
 
 
-def test_ranked_ask_absence_replaces_ask_without_fyi_copy_for_third_party_reader() -> None:
-    ask = item("ask", type="ask", owner="UREADER")
+@pytest.mark.parametrize("in_window", [True, False], ids=["in-window", "before-window"])
+def test_third_reader_keeps_only_ask_in_window(in_window: bool) -> None:
+    """AA4: an absence outside the audience cannot replace the cited ask."""
+    previous = date(2026, 10, 13)
+    boundary = datetime.combine(previous, time.max, ZoneInfo(world().timezone))
+    stamp = slack_ts(boundary + timedelta(hours=1 if in_window else -1))
+    cited = evidence("CPUBLIC").model_copy(update={"message_ts": stamp})
+    ask = item(
+        "ask",
+        type="ask",
+        owner="UREADER",
+        evidence=(cited,),
+        first_seen=stamp,
+        last_updated=stamp,
+    )
     missing = absence(
         f"absence:ask:{ask.item_id}",
         source="ask",
         asker="UASKER",
         owner="UREADER",
         affected_roles=(),
-    ).model_copy(update={"thread_id": ask.thread_id})
+    ).model_copy(
+        update={
+            "thread_id": ask.thread_id,
+            "evidence": (cited,),
+            "first_seen": stamp,
+            "last_updated": stamp,
+        }
+    )
+    profile = profile_for(world(), "UEMPTY")
+    table = priors(role_priors={"FW": {"ask": 1.0, "absence": 1.0}}, min_score=0.1)
+    assert can_see(world(), profile, "CPUBLIC")
+    assert table.daily.min_score < 0.6 * 0.7 * 0.4
+    assert table.daily.min_score < 0.9 * 0.7 * 0.4
+    assert SECTION_CAPS["fyi"] > 1 and SECTION_CAPS["not_happened"] > 1
 
-    selection = choose([ask], [missing], profile=profile_for(world(), "UEMPTY"))
+    selection = choose(
+        [ask],
+        [missing],
+        profile=profile,
+        table=table,
+        previous_digest=previous,
+        newest_evidence={ask.item_id: ts_micros(stamp), missing.item_id: ts_micros(stamp)},
+    )
 
-    assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("absence:ask:ask", "not_happened")
+    assert [(line.item.item_id, line.section) for line in selection.lines] == (
+        [("ask", "fyi")] if in_window else []
+    )
+    assert all(line.section != "not_happened" for line in selection.lines)
+    assert all(line.must_see is False for line in selection.lines)
+    assert selection.hidden == 0
+
+
+@pytest.mark.parametrize("in_window", [True, False], ids=["in-window", "before-window"])
+@pytest.mark.parametrize(
+    ("role", "owned_entities", "affected_roles"),
+    [("EM", (), ()), ("ME", (), ("ME",)), ("ME", ("PN-OTHER",), ())],
+    ids=["em", "affected-role", "entity-owner"],
+)
+def test_ask_absence_excludes_third_reader_but_reaches_asker(
+    role: Role,
+    owned_entities: tuple[str, ...],
+    affected_roles: tuple[Role, ...],
+    in_window: bool,
+) -> None:
+    """AA1: role and entity ownership do not extend the ask audience."""
+    previous = date(2026, 10, 13)
+    boundary = datetime.combine(previous, time.max, ZoneInfo(world().timezone))
+    stamp = slack_ts(boundary + timedelta(hours=1 if in_window else -1))
+    missing = absence(
+        "absence:ask:audience",
+        source="ask",
+        asker="UASKER",
+        owner="UEMPTY",
+        affected_roles=affected_roles,
+    ).model_copy(
+        update={
+            "first_seen": stamp,
+            "last_updated": stamp,
+            "evidence": (evidence("CPUBLIC").model_copy(update={"message_ts": stamp}),),
+        }
+    )
+    profile = reader(owned_entities=owned_entities).model_copy(update={"role": role})
+    table = priors(role_priors={role: {"absence": 1.0}}, min_score=0.1)
+    assert can_see(world(), profile, missing.evidence[0].channel_id)
+    assert table.daily.min_score < 0.9 * 0.7 * 0.4
+    assert SECTION_CAPS["not_happened"] > 1
+    newest = {missing.item_id: ts_micros(stamp)}
+
+    paired = choose(
+        absences=[missing],
+        profile=profile_for(world(), "UASKER"),
+        table=table,
+        previous_digest=previous,
+        newest_evidence=newest,
+    )
+    assert [(line.item.item_id, line.section, line.must_see) for line in paired.lines] == [
+        (missing.item_id, "not_happened", True)
     ]
-    assert all(line.section != "fyi" for line in selection.lines)
-    assert selection.lines[0].must_see is False
+    assert paired.hidden == 0
+
+    selection = choose(
+        absences=[missing],
+        profile=profile,
+        table=table,
+        previous_digest=previous,
+        newest_evidence=newest,
+    )
+    assert selection.hidden == 0
+    assert selection.lines == ()
+
+
+@pytest.mark.parametrize(
+    ("channel", "named_reader", "hidden"),
+    [
+        ("CPUBLIC", "neither", 0),
+        ("CHIDDEN", "neither", 1),
+        ("CHIDDEN", "asker", 1),
+        ("CHIDDEN", "asked", 1),
+    ],
+    ids=["visible-third-reader", "hidden-third-reader", "hidden-asker", "hidden-asked"],
+)
+def test_ask_absence_visibility_precedes_audience(
+    channel: str, named_reader: str, hidden: int
+) -> None:
+    """AA3: only the visibility filter increases the hidden count."""
+    missing = absence(
+        "absence:ask:visibility",
+        source="ask",
+        channel_ids=(channel,),
+        asker="UREADER" if named_reader == "asker" else "UASKER",
+        owner="UREADER" if named_reader == "asked" else "UEMPTY",
+        affected_roles=(),
+    )
+
+    selection = choose(absences=[missing], table=priors(min_score=0.01))
+
+    assert selection.hidden == hidden
+    assert selection.lines == ()
 
 
 def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
@@ -836,7 +983,6 @@ def test_each_section_caps_only_ranked_lines() -> None:
 
     assert counts == {
         "needs_you": 7,
-        "not_happened": 3,
         "decisions": 5,
         "risks": 6,
         "fyi": 5,
@@ -952,7 +1098,7 @@ def test_window_uses_newest_evidence_after_previous_day_end(
 
 @pytest.mark.parametrize("kind", ["blocker", "ask", "ask-absence", "checklist-absence", "decision"])
 def test_window_keeps_only_open_ranked_exceptions(kind: str) -> None:
-    """W3: only old blockers and ask absences remain ranked candidates."""
+    """W3: only old blockers remain ranked candidates."""
     old = slack_ts(datetime(2026, 9, 1, tzinfo=UTC))
     row = (
         absence(
@@ -973,7 +1119,7 @@ def test_window_keeps_only_open_ranked_exceptions(kind: str) -> None:
     )
 
     assert [(line.item.item_id, line.must_see) for line in selected.lines] == (
-        [("old", False)] if kind in {"blocker", "ask-absence"} else []
+        [("old", False)] if kind == "blocker" else []
     )
 
 

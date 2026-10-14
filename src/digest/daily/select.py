@@ -1,8 +1,9 @@
 """Choose a reader's lines: the visibility filter, the must-see lane and the ranked lane (plan B5.2 to B5.5).
 
 The ranked lane takes items whose newest evidence is in the digest window, plus open blockers
-and ask absences of any age (SPEC section 5 steps 6 and 9). When the digest shows an ask
-absence line, the line of the ask its id names is left out.
+of any age (SPEC section 5 steps 6 and 9). An absence reaches only the readers its must-see
+rule names and never enters the ranked lane. When the digest shows an ask absence line, the
+line of the ask its id names is left out.
 """
 
 from __future__ import annotations
@@ -89,8 +90,8 @@ def select(
     """Choose the reader's lines for the day. Items must be open and updated by the end of the day.
 
     `newest_evidence` maps an item id to its newest evidence in microseconds since the epoch.
-    An absence, or an item not in the map, uses its `last_updated`. A checklist absence that
-    is not must-see for the reader is left out. It is not counted in `hidden`.
+    An absence, or an item not in the map, uses its `last_updated`. An absence that is not
+    must-see for the reader is left out. It is not counted in `hidden`.
     """
     zone = ZoneInfo(world.timezone)
     end = micros_since_epoch(datetime.combine(day, time.max, zone))
@@ -116,11 +117,10 @@ def select(
             line = Line(item=trimmed, section=section, must_see=True, reason=rule, score=0)
             must_see[section].append(line)
             continue
-        if _is_checklist_absence(trimmed):
-            continue  # a checklist absence never enters the ranked lane (plan B5.5)
+        if trimmed.absence is not None:
+            continue  # an absence never enters the ranked lane (SPEC section 5 step 6)
         newest = newest_evidence.get(item.item_id, ts_micros(item.last_updated))
-        aged = trimmed.type == "blocker" or _cited_ask(trimmed) is not None
-        if not (aged or start < newest <= end):
+        if not (trimmed.type == "blocker" or start < newest <= end):
             continue
         line = _ranked_line(trimmed, section, profile, priors)
         if line.score >= priors.daily.min_score:
@@ -142,11 +142,6 @@ def select(
         previous_digest=previous_digest,
         first_working_days=window.first_working_days,
     )
-
-
-def _is_checklist_absence(item: Item) -> bool:
-    """True when the item is a checklist absence."""
-    return item.absence is not None and item.absence.source == "checklist"
 
 
 def _cited_ask(item: Item) -> str | None:
@@ -180,7 +175,8 @@ def _section_of(item: Item, profile: Profile) -> Section:
     """The item's section (plan B5.5).
 
     An ask and an ask absence go to needs_you only when the reader is the person asked (the
-    item's `owner`). Any other ask goes to fyi. Any other ask absence goes to not_happened.
+    item's `owner`). Any other ask goes to fyi. An ask absence reaches only its asker
+    otherwise, in not_happened.
     """
     asked = item.type == "ask" or (item.absence is not None and item.absence.source == "ask")
     if asked and item.owner == profile.user_id:
