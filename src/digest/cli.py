@@ -9,7 +9,8 @@ import re
 import sqlite3
 import tempfile
 from collections import Counter
-from collections.abc import Set
+from collections.abc import Iterator, Set
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
@@ -318,11 +319,41 @@ def run(
 def serve(
     port: int = typer.Option(8000, help="Port on 127.0.0.1."),
 ) -> None:
-    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world."""
-    # Unit 9 imports digest.web inside this function: the web extra is optional, and a
-    # top-level import would break `digest demo` on a plain `uv sync`, as `post` avoids
-    # for slack-sdk.
-    raise typer.Exit(code=_not_yet("serve"))
+    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world (offline).
+
+    The command builds the day-6 store as `digest demo` does, in a temporary directory
+    that lasts until the server stops. It closes its own connection to the store before
+    the server starts; the room opens the store for each rebuild. The command never
+    constructs the settings object, so it reads no API key and no `.env` file.
+    """
+    # The web extra is optional. A top-level import would break `digest demo` on a plain
+    # `uv sync`, as `post` avoids for slack-sdk. digest.room is imported here beside the
+    # web app that uses it.
+    # The refusal comes after the try statement, so no exception chains to it.
+    try:
+        import uvicorn
+
+        from digest.room import Room, build_base
+        from digest.web.app import create_app, server_config
+    except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
+        _refuse("digest serve needs the web extra; run uv sync --extra web")
+    failure: str | None = None
+    # build_base reads world day 6; the store must end on that day.
+    with _demo_store(6) as (loaded, priors, store):
+        try:
+            base = build_base(store, loaded, priors)
+            store.close()
+            room = Room(base)
+        except (ValueError, OSError) as error:  # a refused store
+            failure = str(error)
+        if failure is not None:
+            _refuse(failure)
+        typer.echo(f"serving the demo room at http://127.0.0.1:{port}/")
+        uvicorn.Server(server_config(create_app(room), port)).run()
 
 
 @app.command("eval")
@@ -792,14 +823,40 @@ def world_golden(
 def _demo_selections(day: int) -> tuple[World, list[Selection]]:
     """Build the selections of the demo readers for a world day of the bundled world.
 
-    The function replays the bundled world into a temporary store one day at a time and
-    runs the extract stage at the end of each day from the recorded cassettes. It returns
-    the world and one selection for each reader of `_DEMO_READERS`, in the same order. A
-    cassette directory that does not exist or holds no cassette file stops the command
-    before any replay. A failed thread in any extract run stops the command before it
-    selects a digest. The function never constructs the settings object. It assumes that
-    each reader got the digest of the previous world day; on world day 1, each digest is a
+    The function builds the store with `_demo_store`. It returns the world and one
+    selection for each reader of `_DEMO_READERS`, in the same order. A refused store stops
+    the command. The function never constructs the settings object. It assumes that each
+    reader got the digest of the previous world day; on world day 1, each digest is a
     first digest.
+    """
+    selections: list[Selection] = []
+    # The refusal comes after the try statement, so no exception chains to it.
+    failure: str | None = None
+    with _demo_store(day) as (loaded, priors, store):
+        today = loaded.date_of(day)
+        previous = loaded.date_of(day - 1) if day > 1 else None
+        try:
+            for user_id in _DEMO_READERS:
+                selections.append(
+                    select_digest(store, loaded, priors, user_id, today, previous_digest=previous)
+                )
+        except (ValueError, OSError) as error:  # a refused store
+            failure = str(error)
+    if failure is not None:
+        _refuse(failure)
+    return loaded, selections
+
+
+@contextmanager
+def _demo_store(day: int) -> Iterator[tuple[World, Priors, Store]]:
+    """Yield the bundled world, the priors and a store replayed and extracted through `day`.
+
+    The function replays the bundled world into a temporary store one day at a time and
+    runs the extract stage at the end of each day from the recorded cassettes. The store
+    and its temporary directory last until the `with` block ends. A cassette directory that
+    does not exist or holds no cassette file stops the command before any replay. A failed
+    thread in any extract run stops the command before the function yields. The function
+    never constructs the settings object.
     """
     world_dir = Path("data") / "world" / _DEMO_WORLD
     source = world_dir / "world.yaml"
@@ -832,9 +889,7 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
         _refuse(f"cassette directory {cassettes} does not exist or holds no cassette file")
     llm = LLM(None, Cassettes(cassettes), "replay")
     today = loaded.date_of(day)
-    previous = loaded.date_of(day - 1) if day > 1 else None
     zone = ZoneInfo(loaded.timezone)
-    selections: list[Selection] = []
     # Windows can hold a handle on the store file after it closes. A cleanup error must not
     # replace the output or the exit code.
     with (
@@ -845,22 +900,20 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
             total = _extract_days(
                 store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir
             )
-            if total.failed:
-                noun = "thread" if total.failed == 1 else "threads"
-                _refuse(
-                    f"extract reported {total.failed} failed {noun} up to day {day}; "
-                    "the demo builds no digest from a partial extraction"
-                )
-            for user_id in _DEMO_READERS:
-                selections.append(
-                    select_digest(store, loaded, priors, user_id, today, previous_digest=previous)
-                )
         # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
         except (CassetteMiss, ValueError, OSError) as error:
             failure = str(error)
-    if failure is not None:
-        _refuse(failure)
-    return loaded, selections
+        if failure is not None:
+            _refuse(failure)
+        if total.failed:
+            noun = "thread" if total.failed == 1 else "threads"
+            _refuse(
+                f"extract reported {total.failed} failed {noun} up to day {day}; "
+                "the demo builds no digest from a partial extraction"
+            )
+        # The yield is outside the try statement, so an error in the caller's block is
+        # not reported as an extract failure.
+        yield loaded, priors, store
 
 
 def _webhook_url() -> str | None:
@@ -1200,8 +1253,3 @@ def _instant(text: str) -> datetime | None:
 def _refuse(reason: str) -> NoReturn:
     typer.echo(reason, err=True)
     raise typer.Exit(code=1)
-
-
-def _not_yet(name: str) -> int:
-    typer.echo(f"`digest {name}` is not implemented yet; see SPEC.md section 9.", err=True)
-    return 2

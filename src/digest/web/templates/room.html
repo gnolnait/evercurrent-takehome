@@ -1,1 +1,215 @@
-<!-- The demo room page; unit 9 fills it in (docs/plans/m3-ui.md). -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downstream demo room</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 1rem 1.5rem; color: #1d1d1f; background: #fafafa; line-height: 1.4; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.2rem; border-bottom: 1px solid #ccc; padding-bottom: 0.2rem; margin-top: 2rem; }
+  h3 { font-size: 1.05rem; margin-bottom: 0.25rem; }
+  h4 { font-size: 0.95rem; margin: 0.75rem 0 0.25rem; }
+  .note { color: #555; max-width: 60rem; }
+  .refusal { background: #fde8e8; border: 1px solid #c53030; padding: 0.5rem 0.75rem; }
+  .notice { background: #fff8e1; border: 1px solid #b7791f; padding: 0.5rem 0.75rem; }
+  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1rem; }
+  .column { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem 0.75rem; }
+  .forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0.75rem; }
+  form { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem 0.75rem; }
+  form h3 { margin-top: 0; }
+  label { display: block; margin: 0.25rem 0; }
+  select, input { max-width: 100%; }
+  ul.lines { padding-left: 1rem; }
+  ul.lines > li { margin-bottom: 0.6rem; }
+  .heading { font-weight: 600; }
+  .tag { font-size: 0.75rem; background: #c53030; color: #fff; border-radius: 3px; padding: 0 0.3rem; }
+  .summary { margin: 0.15rem 0; }
+  .source { margin: 0.1rem 0; font-size: 0.8rem; color: #555; word-break: break-all; }
+  details { font-size: 0.85rem; color: #333; }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 0.85rem; }
+  th, td { border: 1px solid #ddd; padding: 0.25rem 0.4rem; text-align: left; vertical-align: top; }
+  .wide { overflow-x: auto; }
+</style>
+</head>
+<body>
+{%- macro place(view) -%}
+{{ section_titles[view.section] }}, {% if view.lane == "must_see" %}must see{% else %}rank {{ view.rank }}{% endif %}
+{%- endmacro %}
+<h1>Downstream demo room: {{ world.program }}</h1>
+<p class="note">Day {{ day }}. An edit changes who reads what and what counts as late. It does not change what the model extracted, and it does not show what a reader was last told.</p>
+
+<h2>Edits</h2>
+{% if refusal is not none %}<p class="refusal">{{ refusal }}</p>{% endif %}
+{% if no_change %}<p class="notice">This edit changed no digest.</p>{% endif %}
+<h3>Edits made</h3>
+{% if edits %}
+<ol>
+{% for line in edits %}  <li>{{ line }}</li>
+{% endfor %}</ol>
+{% else %}
+<p>No edits. The room shows the recorded world.</p>
+{% endif %}
+<form method="post" action="/reset"><button type="submit">Reset to the recorded world</button></form>
+
+<div class="forms">
+<form method="post" action="/edit">
+  <h3>Reader role</h3>
+  <input type="hidden" name="kind" value="set_role">
+  <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }} ({{ p.user_id }})</option>{% endfor %}</select></label>
+  <label>Role <select name="role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+  <button type="submit">Set role</button>
+</form>
+<form method="post" action="/edit">
+  <h3>Channel membership</h3>
+  <input type="hidden" name="kind" value="set_membership">
+  <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }} ({{ p.user_id }})</option>{% endfor %}</select></label>
+  <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
+  <label>Member <select name="member"><option value="true">true</option><option value="false">false</option></select></label>
+  <button type="submit">Set membership</button>
+</form>
+<form method="post" action="/edit">
+  <h3>Channel private flag</h3>
+  <input type="hidden" name="kind" value="set_private">
+  <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
+  <label>Private <select name="private"><option value="true">true</option><option value="false">false</option></select></label>
+  <button type="submit">Set private flag</button>
+</form>
+<form method="post" action="/edit">
+  <h3>Entity owner role</h3>
+  <input type="hidden" name="kind" value="set_owner">
+  <label>Entity <select name="entity_id">{% for e in world.entities %}<option value="{{ e.id }}">{{ e.id }}</option>{% endfor %}</select></label>
+  <label>Owner role <select name="role"><option value="">none</option>{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+  <button type="submit">Set owner role</button>
+</form>
+<form method="post" action="/edit">
+  <h3>Gate date</h3>
+  <input type="hidden" name="kind" value="set_gate_date">
+  <label>Gate <select name="gate_id">{% for g in world.project.gates %}<option value="{{ g.id }}">{{ g.id }} ({{ g.date.isoformat() }})</option>{% endfor %}</select></label>
+  <label>Date <input type="date" name="date" required></label>
+  <button type="submit">Set gate date</button>
+</form>
+<form method="post" action="/edit">
+  <h3>Task owner role</h3>
+  <input type="hidden" name="kind" value="set_task_owner">
+  <label>Task <select name="task_id">{% for t in tasks %}<option value="{{ t.id }}">{{ t.id }}</option>{% endfor %}</select></label>
+  <label>Owner role <select name="role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+  <button type="submit">Set task owner</button>
+</form>
+</div>
+
+<h2>Digests</h2>
+<div class="columns">
+{% for reader in readers %}{% set profile = reader.selection.profile %}
+<section class="column">
+  <h3>{{ profile.name }} ({{ profile.role }})</h3>
+  <p class="note">{{ reader.window }}</p>
+  {% for title, rows in reader.sections %}
+  <h4>{{ title }}</h4>
+  <ul class="lines">
+  {% for row, heading, summary in rows %}
+    <li>
+      <span class="heading">{{ heading }}</span>{% if row.must_see %} <span class="tag">must see</span>{% endif %}
+      <p class="summary">{{ summary }}</p>
+      <details><summary>Reason</summary><p>{{ row.reason }}</p></details>
+      {% for entry in row.item.evidence %}<p class="source">source: {{ entry.permalink }}</p>{% endfor %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% else %}
+  <p>Nothing new for {{ profile.name }}.</p>
+  {% endfor %}
+  {% if reader.selection.hidden %}<p class="note">{{ reader.selection.hidden }} hidden by the visibility filter.</p>{% endif %}
+</section>
+{% endfor %}
+</div>
+
+<h2>Changes against the recorded world</h2>
+<div class="columns">
+{% for reader in readers %}{% set profile = reader.selection.profile %}{% set diff = reader.diff %}
+<section class="column">
+  <h3>{{ profile.name }} ({{ profile.role }})</h3>
+  {% if edits %}<p class="note">Lines the latest edit changed: {{ reader.effect }}</p>{% endif %}
+  {% if not (diff.added or diff.removed or diff.changed or reader.reworded) %}
+  <p>Same lines as the recorded world.</p>
+  {% endif %}
+  {% if diff.added %}
+  <h4>Added</h4>
+  <ul>
+  {% for view in diff.added %}
+    <li>{{ view.title }} ({{ view.item_id }}): {{ place(view) }}
+      <details><summary>Reason</summary><p>{{ view.reason }}</p></details></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  {% if diff.removed %}
+  <h4>Removed</h4>
+  <ul>
+  {% for view in diff.removed %}
+    <li>{{ view.title }} ({{ view.item_id }}): {{ place(view) }}</li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  {% if diff.changed %}
+  <h4>Changed</h4>
+  <ul>
+  {% for change in diff.changed %}
+    <li>{{ change.after.title }} ({{ change.item_id }}): from {{ place(change.before) }} to {{ place(change.after) }}
+      {% if "reason" in change.fields %}<details><summary>Reason before and after</summary><p>Before: {{ change.before.reason }}</p><p>After: {{ change.after.reason }}</p></details>{% endif %}
+      {% if "title" in change.fields %}<p>Title before: {{ change.before.title }}</p>{% endif %}</li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  {% if reader.reworded %}
+  <h4>Wording changed</h4>
+  <ul>
+  {% for item_id, heading in reader.reworded %}
+    <li>{{ item_id }}: {{ heading }}</li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endfor %}
+</div>
+
+<h2>World</h2>
+<h3>People</h3>
+<div class="wide"><table>
+  <tr><th>Name</th><th>Id</th><th>Role</th><th>Team</th><th>Manager</th><th>Channels</th><th>Owns (with children)</th></tr>
+  {% for p in world.personas %}
+  <tr><td>{{ p.name }}</td><td>{{ p.user_id }}</td><td>{{ p.role or p.kind }}</td><td>{{ p.team or "" }}</td>
+    <td>{{ names.get(p.manager, p.manager) if p.manager else "" }}</td>
+    <td>{% for c in p.channels %}#{{ channel_names.get(c, c) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+    <td>{{ owned.get(p.user_id, [])|join(", ") }}</td></tr>
+  {% endfor %}
+</table></div>
+<h3>Channels</h3>
+<div class="wide"><table>
+  <tr><th>Name</th><th>Id</th><th>Purpose</th><th>Private</th><th>Members</th></tr>
+  {% for c in world.channels %}
+  <tr><td>#{{ c.name }}</td><td>{{ c.id }}</td><td>{{ c.purpose }}</td><td>{{ "yes" if c.private else "no" }}</td>
+    <td>{{ members[c.id]|join(", ") }}</td></tr>
+  {% endfor %}
+</table></div>
+<h3>Entities</h3>
+<div class="wide"><table>
+  <tr><th>Id</th><th>Type</th><th>Description</th><th>Owner role</th><th>Parent</th><th>Owned by</th></tr>
+  {% for e in world.entities %}
+  <tr><td>{{ e.id }}</td><td>{{ e.type }}</td><td>{{ e.description }}</td><td>{{ e.owner or "" }}</td>
+    <td>{{ e.parent or e.subsystem or "" }}</td>
+    <td>{% for u in owners.get(e.id, ()) %}{{ names.get(u, u) }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+  {% endfor %}
+</table></div>
+<h3>Gates and checklist tasks</h3>
+<div class="wide"><table>
+  <tr><th>Gate</th><th>Date</th><th>Buffer (working days)</th><th>Task</th><th>Task id</th><th>Owner role</th><th>Cadence (working days)</th></tr>
+  {% for g in world.project.gates %}
+  {% for t in g.checklist %}
+  <tr><td>{{ g.id }} {{ g.name }}</td><td>{{ g.date.isoformat() }}</td><td>{{ g.buffer_days }}</td><td>{{ t.task }}</td><td>{{ t.id }}</td><td>{{ t.owner }}</td><td>{{ t.expected_cadence_days }}</td></tr>
+  {% else %}
+  <tr><td>{{ g.id }} {{ g.name }}</td><td>{{ g.date.isoformat() }}</td><td>{{ g.buffer_days }}</td><td colspan="4">No checklist tasks</td></tr>
+  {% endfor %}
+  {% endfor %}
+</table></div>
+</body>
+</html>
