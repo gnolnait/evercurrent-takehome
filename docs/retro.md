@@ -89,3 +89,17 @@ lists passed. The test review caught it before any code existed.
 Change. When a function takes caller SQL, probe each write path (`VACUUM INTO`,
 `ATTACH`, pragmas, temp tables) and the result size on a real connection before the
 plan is reviewed.
+
+## M4 unit 13, the open-items page (2026-10-14)
+
+Caught. The plan review found that the page would print raw user ids in ask headings and
+drop the absence detail, so each item renders as the room renders a digest line, and it
+names the readers whose current digest carries it. The implementer found that an older
+escaping test forbade every link on the room page; the test now forbids only links to
+outside pages.
+
+Missed. The first test round could not tell the current world from the base world,
+because the only edit it made was a message post; the test review added a world edit.
+
+Change. When a page reads room state, test it after one edit of each kind (message,
+world, reset), not only after the kind the feature was written for.

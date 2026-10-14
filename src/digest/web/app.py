@@ -84,7 +84,10 @@ _SAVED_NOTE = (
 
 
 def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
-    """Routes: GET /, POST /edit, POST /reset, POST /save; with `reseed`, POST /reseed."""
+    """Routes: GET /, GET /items, POST /edit, POST /reset, POST /save; with `reseed`, POST /reseed.
+
+    GET /items answers 404 for a room that is not an `ItemsRoom`.
+    """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     curated = _curated(Path("data") / "world" / room.state().world.name / "room-edits.yaml")
     # The message changes at the last save; empty before the first save (plan S3).
