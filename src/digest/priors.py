@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_serializer, model_validator
 
 from digest.models import Frozen, ItemType, Role
 
@@ -59,6 +59,11 @@ class DailyPriors(Frozen):
     window: WindowPriors = WindowPriors()
     recent_activity: RecentActivityPriors = RecentActivityPriors()
     terms_off: frozenset[TermName] = frozenset()  # set by the ablation only (SPEC section 7)
+
+    @field_serializer("terms_off")
+    def _terms_off_as_list(self, terms: frozenset[str]) -> list[str]:
+        """A sorted list, so a dump of the priors is valid YAML and stable."""
+        return sorted(terms)
 
 
 class AblationPriors(Frozen):
