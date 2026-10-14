@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData
 
 from digest.daily.render import SECTION_TITLES, line_parts, window_line
+from digest.driver import Change, LineView
 from digest.models import Role
 from digest.room import (
     Edit,
@@ -116,11 +117,16 @@ def _page(state: RoomState, refusal: str | None) -> HTMLResponse:
     world = state.world
     names = {persona.user_id: persona.name for persona in world.personas}
     tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
+    # A persona user id in a diff title becomes the persona name (longest id first).
+    # The id must be a whole token: no letter, digit, underscore or hyphen on either side.
+    alternatives = "|".join(re.escape(u) for u in sorted(names, key=len, reverse=True))
+    ids = re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])" if names else "(?!)")
     readers = []
     for selection, diff, reworded, effect in zip(
         state.selections, state.diffs, state.reworded, state.last_effect, strict=True
     ):
         parts = {row.item.item_id: line_parts(row, names, tasks) for row in selection.lines}
+        headings = {item_id: heading for item_id, (heading, _) in parts.items()}
         sections = [
             (
                 title,
@@ -134,6 +140,23 @@ def _page(state: RoomState, refusal: str | None) -> HTMLResponse:
                 "window": window_line(selection),
                 "sections": [(title, rows) for title, rows in sections if rows],
                 "diff": diff,
+                "added": [(view, _title(view, headings, ids, names)) for view in diff.added],
+                # A removed line is not in the selection, so its title takes persona names.
+                "removed": [(view, _title(view, {}, ids, names)) for view in diff.removed],
+                "changed": [
+                    (
+                        change,
+                        _title(
+                            change.before,
+                            {} if "title" in change.fields else headings,
+                            ids,
+                            names,
+                        ),
+                        _title(change.after, headings, ids, names),
+                        _changed_fields(change),
+                    )
+                    for change in diff.changed
+                ],
                 "reworded": [(item_id, parts.get(item_id, ("", ""))[0]) for item_id in reworded],
                 "effect": effect,
             }
@@ -166,15 +189,41 @@ def _page(state: RoomState, refusal: str | None) -> HTMLResponse:
     return HTMLResponse(html, status_code=200 if refusal is None else 400)
 
 
+def _title(
+    view: LineView, headings: dict[str, str], ids: re.Pattern[str], names: dict[str, str]
+) -> str:
+    """The line heading if the selection has the line, else the title with persona names."""
+    if view.item_id in headings:
+        return headings[view.item_id]
+    return ids.sub(lambda match: names[match.group(0)], view.title)
+
+
+def _changed_fields(change: Change) -> list[str]:
+    """One short note per changed field of a line, for example "rank 3 to 1"."""
+    before, after = change.before, change.after
+    notes = []
+    if "section" in change.fields:
+        notes.append(f"{SECTION_TITLES[before.section]} to {SECTION_TITLES[after.section]}")
+    if "lane" in change.fields or "rank" in change.fields:
+        old = "must see" if before.rank is None else f"rank {before.rank}"
+        new = "must see" if after.rank is None else f"rank {after.rank}"
+        notes.append(f"{old} to {new}")
+    if "title" in change.fields:
+        notes.append("title changed")
+    if "reason" in change.fields:
+        notes.append("reason changed")
+    return notes
+
+
 def _describe(edit: Edit, names: dict[str, str], channels: dict[str, str]) -> str:
     """One line of the edit list."""
     match edit:
         case SetRole():
-            return f"{names.get(edit.user_id, edit.user_id)} ({edit.user_id}): role {edit.role}"
+            return f"{names.get(edit.user_id, edit.user_id)}: role {edit.role}"
         case SetMembership():
             verb = "joins" if edit.member else "leaves"
             channel = channels.get(edit.channel_id, edit.channel_id)
-            return f"{names.get(edit.user_id, edit.user_id)} ({edit.user_id}) {verb} #{channel}"
+            return f"{names.get(edit.user_id, edit.user_id)} {verb} #{channel}"
         case SetPrivate():
             shown = "private" if edit.private else "public"
             return f"#{channels.get(edit.channel_id, edit.channel_id)}: {shown}"
