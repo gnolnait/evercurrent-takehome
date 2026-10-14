@@ -3,6 +3,26 @@
 One short entry per unit (docs/process.md, stage 5): what the reviews caught, what they
 missed, and one process change at most. The newest entry is first.
 
+## 2026-10-13: the demo room, units 8 to 10 (PRs #62, #67, #68, #72 and unit 10)
+
+Caught. Measuring the plan's examples on the real day-6 store before any test was
+written corrected three expected effects, and measuring again after the digest window
+merged corrected two more; the test author pinned measured numbers, not guesses. Plan
+review found the central constraint early: the extraction request carries every
+person's role and every gate date, so the room keeps two views of the world. Code and
+adversarial reviews found a toggle that passed every set-value test, a curated edit that
+missed its cassette after another change, a reseed reference that could never push a
+revert back to Slack, and a save that could empty the copy, or delete the corpus's
+parent folder, on a failure or a bad path.
+
+Missed. The first tests read a cached state after a refusal, so a half-written store
+would have passed. The implementer worked against a fake that the protocol change broke,
+because the brief changed a shared protocol without naming the test fake that implements
+it. Codex rate-limited once (429) and the Claude lens took that lane.
+
+Change. When a brief changes a protocol or a shared type, name every test fake that
+implements it, and give the fake's change to the test author in the same round.
+
 ## 2026-10-12: channel_id on evidence, claims and task links (PR #20)
 
 Caught. An independent adversarial review mutated the fix. Two pair-keyed lookups in
@@ -54,3 +74,19 @@ lists passed. The test review caught it before any code existed.
 Change. When a function takes caller SQL, probe each write path (`VACUUM INTO`,
 `ATTACH`, pragmas, temp tables) and the result size on a real connection before the
 plan is reviewed.
+
+
+
+## M4 unit 12b, the MCP server (2026-10-14)
+
+Caught. The plan review found that a context kept for the server's life would read a
+stale day after a replay and would hold a Windows file handle, so each tool call now
+opens the store and closes it. A spike before the plan found that SDK 2.x cannot be
+imported on this laptop, which set the SDK to 1.30.0.
+
+Missed. The first test round compared each tool's result with the bare view, but the
+SDK wraps a tuple or an optional view in a "result" field; two reviewers caught it from
+a probe of the installed SDK.
+
+Change. Before a plan names an SDK's output shape, call the SDK once on each return type
+the plan uses and paste what comes back into the plan.

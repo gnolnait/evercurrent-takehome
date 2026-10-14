@@ -103,13 +103,15 @@ class FakeRoom:
         self.after = after or initial
         self.current = initial
         self.received: list[Edit] = []
+        self.apply_calls: list[tuple[Edit, bool]] = []
         self.reset_calls = 0
 
     def state(self) -> RoomState:
         return self.current
 
-    def apply(self, edit: Edit) -> RoomState:
+    def apply(self, edit: Edit, *, fresh: bool = False) -> RoomState:
         self.received.append(edit)
+        self.apply_calls.append((edit, fresh))
         if isinstance(edit, SetGateDate) and edit.date == date(2026, 10, 24):
             raise ValueError(REFUSAL)
         self.current = self.after.model_copy(update={"edits": (*self.current.edits, edit)})

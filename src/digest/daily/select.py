@@ -239,8 +239,11 @@ def _ranked_line(
     """Score the item as importance * role_prior * personal_relevance (plan B5.4).
 
     An item that is neither owned nor in the reader's role gets the recent-activity relevance
-    when it shares an entity with `active`.
+    when it shares an entity with `active`. For the ablation (SPEC section 7), a factor in
+    `priors.daily.terms_off` is 1 and the reason shows `<term>=1.0 (off)`; `recent_activity`
+    there removes only the lift, with no marker.
     """
+    off = priors.daily.terms_off
     importance = TYPE_WEIGHTS[item.type] * SEVERITY_WEIGHTS[item.severity]
     role_prior = priors.daily.role_priors.get(profile.role, {}).get(item.type, DEFAULT_ROLE_PRIOR)
     if set(item.entities) & set(profile.owned_entities):
@@ -249,13 +252,20 @@ def _ranked_line(
         relevance = 0.8
     else:
         relevance = 0.4
-    shared = sorted(set(item.entities) & active) if relevance == 0.4 else []
+    lifts = relevance == 0.4 and not {"personal_relevance", "recent_activity"} & off
+    shared = sorted(set(item.entities) & active) if lifts else []
     if shared:
         relevance = priors.daily.recent_activity.relevance
     lift = f" (recent activity: {', '.join(shared)})" if shared else ""
-    reason = (
-        f"importance={round(importance, 3)} role_prior={round(role_prior, 3)} "
-        f"personal_relevance={relevance}{lift}"
-    )
+    importance_text = f"importance={round(importance, 3)}"
+    role_text = f"role_prior={round(role_prior, 3)}"
+    relevance_text = f"personal_relevance={relevance}{lift}"
+    if "importance" in off:
+        importance, importance_text = 1.0, "importance=1.0 (off)"
+    if "role_prior" in off:
+        role_prior, role_text = 1.0, "role_prior=1.0 (off)"
+    if "personal_relevance" in off:
+        relevance, relevance_text = 1.0, "personal_relevance=1.0 (off)"
+    reason = f"{importance_text} {role_text} {relevance_text}"
     score = importance * role_prior * relevance
     return Line(item=item, section=section, must_see=False, reason=reason, score=score)

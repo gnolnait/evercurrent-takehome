@@ -158,9 +158,12 @@ and the person asked. Delivery is not
 recorded yet, so the caller states the previous digest (the demo uses the previous world
 day).
 
+Built: an MCP server (stdio) with nine read tools over the store, so you can ask your
+own assistant about the project; see `docs/mcp.md`.
+
 Designed, not built: the claims ledger and linking, stale beliefs, delivery records,
-phase re-weighting, feedback, live ingest from Slack, the web preview's profile and
-open-items pages, and the MCP server. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
+phase re-weighting, feedback (and the MCP `feedback` tool), live ingest from Slack, and
+the web preview's profile and open-items pages. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
 for the ordered next steps and other deferred work.
 
 ## Develop

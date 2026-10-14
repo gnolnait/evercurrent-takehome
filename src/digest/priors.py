@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_serializer, model_validator
 
 from digest.models import Frozen, ItemType, Role
 
@@ -40,6 +40,11 @@ class WindowPriors(Frozen):
         return self
 
 
+# The ranking terms the ablation can switch off (SPEC section 7). recent_activity is the
+# lift inside personal_relevance, not a factor of its own.
+TermName = Literal["importance", "role_prior", "personal_relevance", "recent_activity"]
+
+
 class RecentActivityPriors(Frozen):
     """The reader's own recent messages lift `personal_relevance` (SPEC section 5 step 6)."""
 
@@ -53,12 +58,25 @@ class DailyPriors(Frozen):
     min_score: float = Field(default=0.15, ge=0)  # a ranked line below this is left out
     window: WindowPriors = WindowPriors()
     recent_activity: RecentActivityPriors = RecentActivityPriors()
+    terms_off: frozenset[TermName] = frozenset()  # set by the ablation only (SPEC section 7)
+
+    @field_serializer("terms_off")
+    def _terms_off_as_list(self, terms: frozenset[str]) -> list[str]:
+        """A sorted list, so a dump of the priors is valid YAML and stable."""
+        return sorted(terms)
+
+
+class AblationPriors(Frozen):
+    """The ranking ablation's keep rule (SPEC section 7)."""
+
+    min_effect: float = Field(default=0.01, gt=0, le=1)  # a relative drop, 0.01 is 1%
 
 
 class Priors(Frozen):
     triage: TriagePriors
     absence: AbsencePriors
     daily: DailyPriors = DailyPriors()
+    ablation: AblationPriors = AblationPriors()
 
 
 def load_priors(path: Path = DEFAULT_PRIORS_PATH) -> Priors:

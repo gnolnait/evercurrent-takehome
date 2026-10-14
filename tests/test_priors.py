@@ -254,3 +254,93 @@ def test_ra10_recent_activity_rejects_invalid_values(
         error["loc"] == ("recent_activity", field) and error["type"] == error_type
         for error in raised.value.errors()
     )
+
+
+def test_ab5_terms_off_validation() -> None:
+    data = load_priors().model_dump()
+    data["daily"]["terms_off"] = {"importance", "recent_activity"}
+    valid = priors_module.Priors.model_validate(data)
+    assert isinstance(valid.daily.terms_off, frozenset)
+    assert valid.daily.terms_off == frozenset({"importance", "recent_activity"})
+
+    data["daily"]["terms_off"] = frozenset({"role_prior", "personal_relevance"})
+    assert priors_module.Priors.model_validate(data).daily.terms_off == frozenset(
+        {"role_prior", "personal_relevance"}
+    )
+    data["daily"]["terms_off"] = yaml.safe_load("[importance, importance, recent_activity]")
+    listed = priors_module.Priors.model_validate(data).daily.terms_off
+    assert isinstance(listed, frozenset)
+    assert listed == frozenset({"importance", "recent_activity"})
+
+    data["daily"]["terms_off"] = ["importance", "unknown"]
+    with pytest.raises(ValidationError) as raised:
+        priors_module.Priors.model_validate(data)
+    assert any(
+        error["loc"] == ("daily", "terms_off", 1)
+        and error["type"] == "literal_error"
+        and error["input"] == "unknown"
+        for error in raised.value.errors()
+    )
+    for invalid in ("importance", None):
+        data["daily"]["terms_off"] = invalid
+        with pytest.raises(ValidationError) as raised:
+            priors_module.Priors.model_validate(data)
+        assert any(
+            error["loc"] == ("daily", "terms_off") and error["type"] == "frozen_set_type"
+            for error in raised.value.errors()
+        )
+    data["daily"].pop("terms_off")
+    assert priors_module.Priors.model_validate(data).daily.terms_off == frozenset()
+
+
+@pytest.mark.parametrize("source", ["model", "omitted", "bundled"])
+def test_ab7_ablation_defaults(source: str) -> None:
+    if source == "model":
+        model = getattr(priors_module, "AblationPriors", None)
+        assert callable(model), "priors must expose AblationPriors"
+        ablation = model()
+    else:
+        data = load_priors().model_dump()
+        if source == "omitted":
+            data.pop("ablation", None)
+        table = priors_module.Priors.model_validate(data)
+        ablation = getattr(table, "ablation", None)
+        assert ablation is not None, "Priors must expose ablation"
+        if source == "bundled":
+            path = Path(__file__).resolve().parents[1] / "config/priors.yaml"
+            bundled = yaml.safe_load(path.read_text(encoding="utf-8"))
+            assert bundled["ablation"]["min_effect"] == 0.01
+    assert ablation.min_effect == 0.01
+
+
+@pytest.mark.parametrize(
+    "minimum", [None, 0.000001, 0.2, 1.0], ids=["omitted", "small", "fraction", "one"]
+)
+def test_ab7_ablation_loads_yaml(tmp_path: Path, minimum: float | None) -> None:
+    data = load_priors().model_dump(mode="json")
+    data.pop("ablation", None)
+    if minimum is not None:
+        data["ablation"] = {"min_effect": minimum}
+    path = tmp_path / "ablation.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    ablation = getattr(load_priors(path), "ablation", None)
+    assert ablation is not None, "Priors must expose ablation"
+    assert ablation.min_effect == (0.01 if minimum is None else minimum)
+
+
+@pytest.mark.parametrize(
+    ("minimum", "error_type"),
+    [(0.0, "greater_than"), (-0.01, "greater_than"), (1.000001, "less_than_equal")],
+    ids=["zero", "negative", "above-one"],
+)
+def test_ab7_ablation_rejects_invalid_minimum(minimum: float, error_type: str) -> None:
+    data = load_priors().model_dump()
+    data["ablation"] = {"min_effect": 1.0}
+    assert priors_module.Priors.model_validate(data).ablation.min_effect == 1.0
+    data["ablation"] = {"min_effect": minimum}
+    with pytest.raises(ValidationError) as raised:
+        priors_module.Priors.model_validate(data)
+    assert any(
+        error["loc"] == ("ablation", "min_effect") and error["type"] == error_type
+        for error in raised.value.errors()
+    )
