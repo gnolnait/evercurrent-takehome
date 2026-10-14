@@ -516,7 +516,7 @@ and the golden labels carry the eval alone.
 ## D26. Target domain model: three contexts, absences out of Item
 
 Status: designed, 2026-10-13. Built parts: stable item ids (PR #49) and the digest window
-(branch `digest-window`, not merged). Nothing below is built unless it says so.
+(PR #58). Nothing below is built unless it says so.
 
 Decision.
 - Three domain contexts inside the one process, as the packages that exist today; no
@@ -568,6 +568,40 @@ Order. The Structure section of `docs/later.md`.
 
 Would change it. A second process or team that owns one context: its boundary then becomes
 an API.
+
+## D27. Interaction model: inform, ask by button, draft writes, earn authority
+
+Status: designed, 2026-10-13. Built: the digest informs. Nothing else below is built.
+
+Decision.
+- The digest is a briefing that a reader finishes in one scan. It is the morning
+  surface and the record of what each reader was told. Conversation is follow-up in the
+  digest's thread, never the morning surface.
+- Inform: every line is a cited claim with an owner where one is known. Its actions are
+  feedback events in the store (SPEC section 5 step 8).
+- Ask: at most one open question per user, answerable with a button, only about the
+  system's own uncertainty (did this happen, is this yours). Never a free-text prompt,
+  and never "what do you want to see?".
+- Act: a write outside the store (a Slack reply, a nudge, a ticket edit) is a draft that
+  the user edits and sends. The system never posts or writes on its own.
+- Earn authority: a line type gets a draft action only when its precision, measured on
+  reader labels, passes a gate. For absence lines the label is `it happened`, and the gate
+  is a false-alarm rate of at most 10% on at least 50 labels (both numbers are a design
+  choice, not a measurement). Today 7 of 23 detected absences on the golden set are false,
+  so absence lines get `it happened`, not a draft.
+- Order, each step a gate for the next: per-line actions with a seen record; `it happened`
+  labels; thread questions answered by the D20 read tools; drafted replies to ask
+  absences; drafted ticket edits. The steps are in `docs/later.md`.
+
+Why. Readers already get too much Slack, so a digest that asks every morning becomes one
+more inbox. Each button is both the reader's control and a label, and labels are what the
+precision gates need. Slack text is untrusted: extraction runs with no tools, and an agent
+that reads Slack and holds write tools can be steered by a message, so writes stay drafts.
+A draft built on a false absence sends a nudge to someone who already replied, and that
+costs more trust than a missed line.
+
+Would change it. Reader labels that put a line type well inside its gate for a month: that
+type may move from drafts to one-click send, still with a preview.
 
 ## Validation against EverCurrent's published experience
 

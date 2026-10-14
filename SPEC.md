@@ -1,6 +1,6 @@
 # SPEC: role- and phase-aware daily Slack digest
 
-Status: v0.4.3, 2026-10-12. This is the contract the tests are written against. Change it by
+Status: v0.4.4, 2026-10-13. This is the contract the tests are written against. Change it by
 editing this file first, then the tests, then the code. v0.2 added the belief ledger,
 absence detection, decision landing map and world-first simulator on top of the v0.1
 baseline pipeline. v0.3 adds, after the design review: bot personas for systems of
@@ -16,7 +16,9 @@ term, adds a `window_recency` term for windows longer than 36 hours, and makes
 the ranked-lane tie-break deterministic. v0.4.3 closes gaps that a contract review
 found: visibility of merged items, open items older than the window, role and person
 ownership, asks and task links in the domain model, the `spec_param` key, neutral and
-bounded score terms, the ablation rule, and the MCP tool budget and access.
+bounded score terms, the ablation rule, and the MCP tool budget and access. v0.4.4 adds
+the interaction model (D27): when the system informs, asks and drafts; the `it happened`
+action on absence lines; the wording of an absence line; and absence source (h).
 
 ## 1. Problem
 
@@ -67,7 +69,15 @@ In scope
   stale beliefs and absences.
 - Decision landing map across roles.
 - Feedback loop: thumbs up/down, "more like this", mute topic, and the `needs_you`
-  actions done, snooze, not mine, and confirm on a contradiction line; profile updates.
+  actions done, snooze, not mine, and confirm on a contradiction line; `it happened` on
+  an absence line; profile updates.
+- Interaction model (D27). The digest informs: each line is a cited claim, and each
+  action on it records a feedback event in the store. v1 asks no question and writes
+  nothing outside the store. Later surfaces follow three rules. The system asks at most
+  one open question per user, answerable with a button, and only about its own
+  uncertainty ("did this happen?", "is this yours?"). A write outside the store (a Slack
+  reply, a ticket edit) is a draft that the user edits and sends. A line type gets a
+  draft action only when its measured precision passes the gate in D27.
 - World-first simulator: scripted ground truth, including bot personas for the systems
   of record, rendered into noisy Slack by a different model family; golden labels
   derived from the script.
@@ -102,7 +112,8 @@ In scope
 - One-command demo on the bundled corpus with no API key (LLM cassettes).
 
 Out of scope for v1 (tracked in `docs/later.md`)
-- Interactive Q&A agent in Slack, "asks back" questions, Linear, PLM or org-chart
+- Interactive Q&A agent in Slack, "asks back" questions, drafted replies and ticket
+  edits (their order and gates are in D27), Linear, PLM or org-chart
   connectors beyond the event envelope, multi-workspace, point-in-time history of
   edited messages, formal verification of the ledger.
 
@@ -316,7 +327,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    of the entities it names, else for the EM, citing the blocker. (f, stretch) Evidence for a checklist task that predates a revision change of the
    task's own entity makes the task an absence again ("passed on Rev B; Rev C since day
    9; no evidence on Rev C"). (g, stretch) A scoped claim whose scope has ended while the old value is still in use is
-   an absence for the key's owner, citing the deviation. The window before a gate in which
+   an absence for the key's owner, citing the deviation. (h, stretch) A released
+   revision of a buildable document for a part built in an external channel, with no post
+   of that revision into the channel after a cadence, or posted there with no reply from
+   the supplier or contract manufacturer after a cadence, is an absence for the document's owner, citing
+   the release. The window before a gate in which
    an absence can fire scales with the task's priority, and an absence that persists
    across days rises in rank and states how many days it has been silent. Never emit an
    absence without a citation.
@@ -392,7 +407,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    entity does not fill a section; items that differ in a discriminating field (rev,
    qty, date, status, owner) are exempt from the penalty. Each line: fact, specific id and rev, buffer
    or deadline math, consequence, owner, source link, and a history label when the item
-   is not new (ongoing N days, escalated from risk to blocker, resurfaced). The
+   is not new (ongoing N days, escalated from risk to blocker, resurfaced). An absence
+   line states what was not found and where the system looked (no reply from the person
+   asked in the thread since the ask), and never states that the event did not happen;
+   the rule applies to the line body, and the section key and title `not_happened`
+   stay. The
    consequence clause comes from a template table per role and item type; the fact,
    ids, values and link are identical for every reader. An item the reader was shown
    while open and that has since resolved appears once more with its closing evidence,
@@ -412,7 +431,12 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    exposure for that reader only; on a checklist absence it records exposure only,
    section 4), snooze until a date, not mine (reader removed from the
    audience), and, on a contradiction line, confirm (the owner picks a value, which
-   writes an `owner_stated` claim).
+   writes an `owner_stated` claim). Absence lines carry `it happened`, with an optional
+   permalink to the evidence. The event is keyed by the absence's own key (D26: source,
+   and task or ask) and the day shown. It is an absence false-alarm label for the
+   evaluation, and it hides that absence from the reader's later digests. It does not
+   change a task's state, the ledger or another reader's digest; a linked message
+   becomes evidence only when extraction reads it on a later run.
 9. Delivery: a two-tier policy. Items in the must-see lane whose urgency crosses the
    interrupt threshold (a blocker on an owned entity, an ask with a same-day due) may be
    sent in real time when the user has enabled it; everything else waits for the digest

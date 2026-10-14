@@ -156,6 +156,25 @@ In order. Each item names its trigger. Measured numbers are from
 14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
     instead of an instant interruption. Trigger: a real-time tier.
 
+## Interaction (D27), after the 2026-10-14 interview
+
+In order. Each step is a gate for the next.
+
+1. Per-line actions in the Slack digest (done, snooze, not mine, `it happened`) and a
+   seen record per item. The seen record also brings back an item that the score
+   threshold or a section cap cut on the day its evidence landed. Trigger: delivery to a
+   real workspace.
+2. `it happened` labels until the absence false-alarm rate is measured on at least 50
+   reader labels. Trigger: step 1.
+3. Questions in the digest's thread, answered by the D20 read tools with cited records.
+   Trigger: the reader-scoped server exists.
+4. Drafted replies to ask absences, which the reader edits and sends. Trigger: the
+   absence false-alarm rate passes the D27 gate.
+5. A phase-shaped digest inside a gate buffer: days to the gate, open blockers, and
+   checklist tasks with no evidence first. `Project.phase_on` exists and nothing calls it
+   yet. Trigger: a reader asks for gate status in the thread more than once a week.
+6. Drafted ticket edits from a blocker line. Trigger: a tracker connector exists (D25).
+
 ## Structure (D26), after the 2026-10-14 interview
 
 In order. Each item is its own unit under `docs/process.md`.
