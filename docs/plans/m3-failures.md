@@ -31,7 +31,11 @@ unchanged:
   first logs one event `llm_unreachable` with fields `backend` and `error_class`, so the
   transport class reaches the log (`extract_failed` logs only `LLMOutputError`). A
   success reply whose body is not JSON becomes
-  `LLMOutputError("openrouter reply is not JSON", raw=response.text)`. `run_extract` counts
+  `LLMOutputError("openrouter reply is not JSON", raw=response.text)`. A JSON reply of
+  the wrong shape (not an object, `choices` missing, null or empty, a choice without
+  `message` or `finish_reason`, a `usage` that is not an object) becomes
+  `LLMOutputError("openrouter reply has an unexpected shape", raw=response.text)`. The
+  adversarial pass found these crash `digest extract` today. `run_extract` counts
   either as a failed thread (it catches `LLMOutputError`), and the wrapper does not retry
   it (it retries only `LLMOutputInvalid`).
   The `LLMOutputError` docstring ("The backend answered") changes to cover a backend that
