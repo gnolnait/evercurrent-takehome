@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Annotated, Any, Protocol
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, ValidationInfo, field_validator
 
 from digest.models import Event, permalink_for, ts_datetime
 from digest.world.schema import World
@@ -135,6 +135,20 @@ class SeedMap(BaseModel):
     channels: dict[str, ChannelId] = Field(default_factory=dict)  # world channel -> Slack id
     messages: dict[str, MappedMessage] = Field(default_factory=dict)  # "<ch>:<ts>"
     files: dict[str, MappedFile] = Field(default_factory=dict)  # "<ch>:<ts>/<name>"
+
+    @field_validator("files")
+    @classmethod
+    def _files_in_workspace(
+        cls, files: dict[str, MappedFile], info: ValidationInfo
+    ) -> dict[str, MappedFile]:
+        # A field validator, so the refusal names the field. The message names the rule
+        # only, because a map value can hold a secret. A bad workspace_url fails by itself.
+        workspace_url = info.data.get("workspace_url")
+        if workspace_url is not None and any(
+            not mapped.permalink.startswith(f"{workspace_url}/files/") for mapped in files.values()
+        ):
+            raise ValueError("a file permalink is not in the map's workspace")
+        return files
 
     @classmethod
     def load(cls, path: Path) -> SeedMap | None:
@@ -502,16 +516,6 @@ def channel_of(seed_map: SeedMap, key: str) -> str | None:
     """The Slack channel id of a mapped world message, or None when the key is absent."""
     message = seed_map.messages.get(key)
     return None if message is None else message.channel
-
-
-def files_of(seed_map: SeedMap, key: str) -> list[tuple[str, str]]:
-    """(name, permalink) per file of a mapped world message, in map order; [] when none."""
-    prefix = f"{key}/"
-    return [
-        (name.removeprefix(prefix), mapped.permalink)
-        for name, mapped in seed_map.files.items()
-        if name.startswith(prefix)
-    ]
 
 
 def placeholder_file(name: str) -> bytes:

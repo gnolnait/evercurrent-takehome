@@ -106,15 +106,13 @@ def slack_digest(
     links: SeedMap | None,
     authors: Mapping[str, str],
     threaded: bool = True,
-    reader_in_header: bool = False,
 ) -> list[dict[str, Any]]:
     """The digest as a top message and, when the thread holds items, one thread reply.
 
     Each message is {"text": str, "blocks": list}. `authors` maps a world message key
     (`<channel>:<ts>`) to the user id who posted it. `threaded=False` gives the webhook
-    wording, where the reply is a second plain message. `reader_in_header=True` adds the
-    reader's first name and role to the header, for a destination that gets the digests
-    of several readers.
+    wording, where the reply is a second plain message. The header names the reader,
+    because one destination gets the digests of several readers.
     """
     inputs = _inputs(world, selection, links, authors)
     kept = _fold(inputs)
@@ -142,7 +140,7 @@ def slack_digest(
     )
     summary = count if gate is None else f"{_gate_line(inputs, gate)}\n{count}"
     blocks: list[dict[str, Any]] = [
-        _header(world, selection, reader_in_header),
+        _header(world, selection),
         _context("\n".join(_escape(line) for line in context_lines(world, selection))),
         _section(summary),
     ]
@@ -338,13 +336,11 @@ def _notification(inputs: _Inputs, gate: Gate | None, top: list[_Kept], must: in
     return _escape(_shorten(text, MAX_NOTIFICATION, lambda part: len(_escape(part))))
 
 
-def _header(world: World, selection: Selection, reader_in_header: bool) -> dict[str, Any]:
+def _header(world: World, selection: Selection) -> dict[str, Any]:
     # plain_text shows `<` and `&` as typed, so the header needs no escape and no token cut.
-    header = f"{world.program}{SEPARATOR}{_date_text(selection.day)}"
-    if reader_in_header:
-        profile = selection.profile
-        header += f"{SEPARATOR}{profile.name.split()[0]} ({_role_text(profile.role)})"
-    header = _flatten(header)
+    profile = selection.profile
+    reader = f"{profile.name.split()[0]} ({_role_text(profile.role)})"
+    header = _flatten(SEPARATOR.join([world.program, _date_text(selection.day), reader]))
     if len(header) > MAX_HEADER_TEXT:
         header = header[: MAX_HEADER_TEXT - 1] + ELLIPSIS
     return {"type": "header", "text": {"type": "plain_text", "text": header}}

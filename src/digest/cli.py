@@ -175,7 +175,6 @@ def post(
             links=links,
             authors=authors,
             threaded=False,
-            reader_in_header=True,
         )
         for selection in selections
     ]
@@ -264,7 +263,6 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
             links=links,
             authors=authors,
             threaded=True,
-            reader_in_header=True,
         )
         for selection in selections
     ]
