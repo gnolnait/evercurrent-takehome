@@ -58,7 +58,7 @@ class DailyPriors(Frozen):
     min_score: float = Field(default=0.15, ge=0)  # a ranked line below this is left out
     window: WindowPriors = WindowPriors()
     recent_activity: RecentActivityPriors = RecentActivityPriors()
-    terms_off: frozenset[TermName] = frozenset()  # set by the ablation only; each is 1
+    terms_off: frozenset[TermName] = frozenset()  # set by the ablation only (SPEC section 7)
 
 
 class AblationPriors(Frozen):

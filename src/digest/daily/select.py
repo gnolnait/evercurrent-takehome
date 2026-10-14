@@ -239,8 +239,9 @@ def _ranked_line(
     """Score the item as importance * role_prior * personal_relevance (plan B5.4).
 
     An item that is neither owned nor in the reader's role gets the recent-activity relevance
-    when it shares an entity with `active`. A term in `priors.daily.terms_off` is 1, and the
-    reason shows it as `<term>=1.0 (off)` (the ablation, SPEC section 7).
+    when it shares an entity with `active`. For the ablation (SPEC section 7), a factor in
+    `priors.daily.terms_off` is 1 and the reason shows `<term>=1.0 (off)`; `recent_activity`
+    there removes only the lift, with no marker.
     """
     off = priors.daily.terms_off
     importance = TYPE_WEIGHTS[item.type] * SEVERITY_WEIGHTS[item.severity]
