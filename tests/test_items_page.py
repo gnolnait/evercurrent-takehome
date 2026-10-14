@@ -273,6 +273,24 @@ def test_search_filters_and_form(items_room: ItemsFakeRoom, ignored: str) -> Non
         assert options & {"", "any"}
 
 
+def test_search_form_preserves_submitted_filters(items_room: ItemsFakeRoom) -> None:
+    """Setup all filters / Action GET items / Assert text and selected options retain values."""
+    owner = next(p.user_id for p in items_room.state().world.personas if p.kind == "human")
+    filters = {"text": "thermal", "type": "ask", "status": "open", "owner": owner}
+    with TestClient(create_app(items_room)) as client:
+        response = client.get("/items", params=filters)
+    assert response.status_code == 200
+    page = Page(response.text)
+    form = next(f for f in page.find("form") if f.attrs.get("action") == "/items")
+    text_input = next(n for n in form.nodes() if n.tag == "input" and n.attrs.get("name") == "text")
+    assert text_input.attrs.get("value") == "thermal"
+    for name in ("type", "status", "owner"):
+        select = next(n for n in form.nodes() if n.tag == "select" and n.attrs.get("name") == name)
+        selected = [n for n in select.nodes() if n.tag == "option" and "selected" in n.attrs]
+        assert len(selected) == 1
+        assert selected[0].attrs.get("value") == filters[name]
+
+
 @pytest.mark.parametrize(
     ("filters", "minimum"),
     [({"text": "thermal"}, 1), ({"owner": "U0ME01"}, 1), ({"status": "open"}, 21)],
