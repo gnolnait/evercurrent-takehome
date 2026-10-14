@@ -1,16 +1,21 @@
 # Plan: M5 core, the delivery record (exposure on Slack's acceptance)
 
-Status: v0.2, 2026-10-13. Process stage 1 (`docs/process.md`). Not reviewed yet. Source:
-SPEC section 5 step 9 (Delivery), section 9 ("M5. Core: exposure recorded on Slack's
-acceptance"), D7 (amended 2026-10-11) and D26 ("Ledger and exposure"). This is "Delivery
-records" (`docs/later.md`, Next steps 5). Size: one night of work. v0.2 fixes the stack
-order, keys absences by the bot unit's `Episode`, and decides when recording is on.
+Status: v0.3, 2026-10-13. Process stage 1 (`docs/process.md`). Source: SPEC section 5
+step 9 (Delivery), section 9 ("M5. Core: exposure recorded on Slack's acceptance"), D7
+(amended 2026-10-11) and D26 ("Ledger and exposure"). This is "Delivery records"
+(`docs/later.md`, Next steps 5). Size: one night of work. v0.2 fixed the stack order,
+keyed absences by the bot unit's `Episode`, and decided when recording is on. v0.3
+applies the Codex plan review: claims only for displayed text (I4, I5), the two record
+writes attempted one by one (I7), a Slack rejection apart from a missing `ts` (I7), the
+opt-in wording (Goal), and Q1 before the tests (Before tests). It keeps the
+`_open_store` refusal (Commands).
 
 Stack: layout, then bot, then this unit. This unit builds on the layout unit
 (`docs/plans/m5-layout.md` v0.4, `slack_digest`) and the bot unit
-(`docs/plans/m5-bot.md` v0.4 with 06c2651: `--db`, `--interactive`, the I8 run id and
-metadata, `digest/feedback.py` with `Episode` and `episode()`). It is rebased onto `main`
-after both merge.
+(`docs/plans/m5-bot.md` v0.5, b077e8b: `--db`, `--interactive`, the I8 run id and
+metadata, `posted_messages`, `digest/feedback.py` with `Episode` and `episode()`). The bot
+unit's v0.5 changes the listener only (ack first, one serial worker), not the posting
+path or `posted_messages`. This unit is rebased onto `main` after both merge.
 
 ## Open questions
 
@@ -26,7 +31,8 @@ stable: the subject of a checklist absence is its task id, and the subject of an
 absence is the ask item id (today the absence's `item_id` without
 `ASK_ABSENCE_PREFIX`). An explicit ask id from the split must map to that ask item id.
 The user confirms this reading of the trigger, or the split becomes a prerequisite and
-this unit waits.
+this unit waits. The user settles Q1 before the tests start (Before tests). This unit
+does not include the split.
 
 Q2. A partial post. A digest has one or two parts: the top message and, when the thread
 holds items, the thread reply. When Slack accepts the top message and refuses the reply,
@@ -58,8 +64,16 @@ record holds a snapshot of each shown claim's fields (I4). The ledger unit can m
 snapshot to claim ids later.
 
 Q8. Folded members. The layout unit folds a related item into a kept item as a member
-(layout plan 4.3). Is a member "shown"? Proposed: yes, when the kept item's line is in
-the part, because the member leaves its own section and the kept line carries it.
+(layout plan 4.3). Is a member "shown"? Proposed, in two parts:
+
+- The member's item id: yes. When the kept item's line is in the part, each member's
+  item id goes in `items`, because the member leaves its own section and the kept line
+  stands for it.
+- The member's claims: only when the message displays the member's title or body. Layout
+  plan 4.3 decides this. A kept ask item shows the title of its first member. A kept
+  checklist absence shows the body of its best member. A kept ask absence shows no member
+  text. Any other member's text is not displayed, so its claims are not recorded (D26:
+  "the claims shown").
 
 ## Goal
 
@@ -69,6 +83,10 @@ the absence episodes and the claims of the lines in that part. One read function
 reader's last delivered digest day. With an explicit `--db`, `digest post` takes the
 window of each digest from that read, so the window starts where the reader's last
 delivered digest ended (SPEC section 5 step 9).
+
+This unit is an opt-in prerequisite for M5 core. It records only when the operator asks
+for it (Commands). M5 core ("exposure recorded on Slack's acceptance") stays incomplete
+until recording is on by default for every delivery path (Next units 4).
 
 This unit records. It does not change how selection uses exposure: novelty, stale
 beliefs and the seen record read the record in later units (Next units).
@@ -116,7 +134,11 @@ No new option. This unit changes when `digest post` opens the store of the bot u
   still needs `--dm` (bot unit).
 - The command opens the store as the bot unit does: with `_open_store`, after the
   destination checks and before it builds a digest. A refused store exits 1 with today's
-  `_open_store` text, and nothing is sent.
+  `_open_store` text, and nothing is sent. The text does not change. It prints the
+  operator's own `--db` argument and the SQLite error text or the schema version check.
+  Neither names content of the file, and the schema version is not secret. Every command
+  that opens a writable store (`run`, `absences`, `replay`, `say`, and the bot unit's
+  `post --interactive` and `bot`) uses this refusal.
 - No other command changes. `digest demo`, `digest run`, `digest serve` and `digest bot`
   do not record.
 
@@ -133,23 +155,31 @@ command sends them. Part 0 is the top message. Part 1 is the thread reply on the
 or the second plain message on the webhook path (layout plan 11.2). `parts` is the number
 of messages that `slack_digest` built for that reader's digest: 1 or 2.
 
-I3. **Acceptance, DM path.** Slack accepts a part when `chat.postMessage` returns without
-an exception, `response.get("ok")` is `True`, and `response.get("ts")` is a non-empty
-string. In recording mode a top message with no `ts` is a failure also when the digest
-has no reply, as the bot unit's I10 says for `--interactive` (layout plan 11.1 accepts
-it outside recording mode). After each accepted part, and before the next send, the
-command writes the `deliveries` row, then the bot unit's `posted_messages` row when
-`--interactive` is on. It does not wait for the end of the run, so a later failure keeps
-the earlier rows.
+I3. **Acceptance, DM path.** Three outcomes of one `chat.postMessage`:
+
+- **Rejected:** the call raises, or it returns and `response.get("ok")` is not `True`.
+  Slack did not accept the part, also when the response holds a `ts`. Nothing is recorded
+  for the part (I7).
+- **Accepted without a usable `ts`:** `ok` is `True` and `response.get("ts")` is not a
+  non-empty string. In recording mode this is a failure, also for a top message of a
+  digest with no reply, as the bot unit's I10 says for `--interactive` (layout plan 11.1
+  accepts it outside recording mode). Nothing is recorded for the part (I7).
+- **Accepted:** `ok` is `True` and `ts` is a non-empty string.
+
+After each accepted part, and before the next send, the command attempts the writes of
+I7a. It does not wait for the end of the run, so a later failure keeps the
+earlier rows.
 
 I4. **What a row holds.** `run_id`; `reader` (the persona `user_id` of the digest, never
 the recipient); `part`; `parts`; `day` (the digest day, ISO date); `world` (`kestrel` for
 `digest post`); `path` (`dm` or `webhook`); `recipient` (the `--dm` user id, else null);
 `channel` (the DM channel id from `conversations.open`, else null); `ts` (the response
 `ts`, else null); `accepted_at` (UTC, ISO 8601 with offset, from `_now()`); and `shown`,
-from `part_shown(lines)` (I5) over the lines in that part:
+from `part_shown(lines)` (I5) over the shown lines of that part:
 
-- `items`: the `item_id` of each line that is not an absence, in line order, each once.
+- `items`: the `item_id` of each kept line that is not an absence, then the `item_id` of
+  each of its members (Q8), in line order, each once. A member's id goes in `items` also
+  when the message displays none of its text, and also when its kept line is an absence.
 - `absences`: the `Episode` of each absence line, from `absence_episode(item)`, which
   calls `feedback.episode(source, subject, channel, message_ts)` and nothing else builds
   an episode:
@@ -158,19 +188,30 @@ from `part_shown(lines)` (I5) over the lines in that part:
     absence's `item_id` without `ASK_ABSENCE_PREFIX` (the ask item id).
   - `channel` and `message_ts` are those of the absence's one evidence entry.
   An absence never enters `items`.
-- `claims`: for each line that is not an absence, each claim of the line's item whose
-  `channel_id` is the channel of one of the line's evidence entries. The line's item is
-  the copy that the visibility filter trimmed, so a claim from a channel the reader cannot
-  see is not recorded. Each entry holds `item_id`, `entity`, `attribute`, `value`,
-  `channel_id`, `message_ts` and `authority`, as stored at post time (Q7).
+- `claims`: the claims of displayed content only. A claim is recorded for:
+  - each kept line that is not an absence: the claims of its own item;
+  - each member in the shown line's `displayed` set (I5): the claims of the member's
+    item. Layout plan 4.3 gives the set: the first member of a kept ask item (its title
+    is shown), the best member of a kept checklist absence (its body is shown), and no
+    member of a kept ask absence. Every other member adds no claim.
+
+  Of those items, a claim is recorded only when its `channel_id` is the channel of one of
+  that item's evidence entries. Each item here is the copy that the visibility filter
+  trimmed, so a claim from a channel the reader cannot see is not recorded. Each entry
+  holds `item_id`, `entity`, `attribute`, `value`, `channel_id`, `message_ts` and
+  `authority`, as stored at post time (Q7).
 
 The bot unit's Next units 1 builds an episode at post time for `It happened`. It calls
 the same `absence_episode`, so the two units cannot build different keys for one line.
 
 I5. **The lines in a part.** `slack_digest(..., report=True)` adds one more key, `lines`,
-to each message it returns: the `Line` objects whose item blocks are in that message, in
-block order. A kept item's members are in `lines` with the kept line (Q8). A line past a
-cap is not in `lines`: a must-see line past the five top items is in the reply's
+to each message it returns: one `ShownLine` (Interface) for each kept item whose blocks
+are in that message, in block order. A `ShownLine` holds the kept line, its members in
+selection order (layout plan 4.3), and `displayed`: the item ids of the members whose
+title or body the message shows. The renderer fills `displayed` from the same choice
+that builds the text (the first member of an ask item, the best member of a checklist
+absence, none for an ask absence), so the record and the text cannot differ. A line past
+a cap is not in `lines`: a must-see line past the five top items is in the reply's
 `lines`, and an item that the reply cap leaves out ("<n> more items not shown") is in no
 `lines`. A top message with no item gives an empty `lines`. With `interactive=True` the
 message also holds the bot unit's `items` key. The CLI removes `lines` (and `items`)
@@ -187,14 +228,27 @@ rows already written stay.
 
 | Case | Refusal text |
 |---|---|
-| A send exception or a Slack refusal | the layout unit's text (11.1, 11.2), unchanged; no row for that part |
-| DM response with `ok` not `True` or no string `ts` | `cannot record the digest for <reader>: the message has no ts; its message was sent<note>` |
-| The row write raises `sqlite3.Error` | `cannot record the digest for <reader>: <exception type name>; its message was sent<note>` |
-| The row write returns False (I8) | `cannot record the digest for <reader>: a row with this key exists; its message was sent<note>` |
+| A send exception, or a webhook status other than 200 | the layout unit's text (11.1, 11.2), unchanged; no row for that part |
+| DM response with `ok` not `True` (a Slack rejection, also with a `ts`) | the layout unit's text for a failed send of that part (11.1), with `<failure>` the response's `error` value by the `_slack_failure` rule (a Slack error code, else `SlackApiError`); no row for that part |
+| DM response with `ok` `True` and no string `ts` | `cannot record the digest for <reader>: the message has no ts; its message was sent<note>`; no row for that part |
+| A write of I7a raises `sqlite3.Error` | `cannot record the digest for <reader>: <exception type name>; its message was sent<note>` |
+| `record_delivery` returns False (I8) | `cannot record the digest for <reader>: a row with this key exists; its message was sent<note>` |
 
-`<note>` is as in layout plan 11.1. The second row is the bot unit's I10 text, so the
-two units share one refusal. The exception text is not printed: a path or a value from
-the store can be in it.
+`<note>` is as in layout plan 11.1. The "has no ts" row is the bot unit's I10 text, so
+the two units share one refusal. The exception text is not printed: a path or a value
+from the store can be in it.
+
+I7a. **Two writes, each on its own.** After an accepted DM part, the command attempts
+two writes, in this order, each in its own `try` statement:
+
+1. the `deliveries` row (`record_delivery`);
+2. with `--interactive`, the bot unit's `posted_messages` row (`save_posted`, bot I10).
+
+A failure of the first write does not stop the second. Each write that succeeds stays.
+So an exposure failure never leaves a posted menu without its `posted_messages` row, and
+a click on that message still works (bot I11). When either write failed, the command
+refuses after both attempts (I7), with the reason of the first failed write. On the
+webhook path, and on the DM path without `--interactive`, only the first write runs.
 
 I8. **Idempotency.** The key of a row is `(run_id, reader, part)`. A DM row is also
 unique on `(channel, ts)`. The insert is `INSERT ... ON CONFLICT DO NOTHING`, and
@@ -306,6 +360,11 @@ class ClaimShown(Frozen):
     message_ts: str
     authority: Authority
 
+class ShownLine(Frozen):            # one kept item whose blocks are in a message (I5)
+    line: Line                      # the kept line (the absorber, or a line with no members)
+    members: tuple[Line, ...]       # folded members, in selection order (layout plan 4.3)
+    displayed: frozenset[str]       # item ids of the members whose title or body is shown
+
 class PartShown(Frozen):
     items: tuple[str, ...]
     absences: tuple[Episode, ...]
@@ -327,7 +386,7 @@ class Delivery(Frozen):
 
 def absence_episode(item: Item) -> Episode: ...                                # I4
     # ValueError for an item with no absence; calls feedback.episode only
-def part_shown(lines: Sequence[Line]) -> PartShown: ...                        # I4
+def part_shown(lines: Sequence[ShownLine]) -> PartShown: ...                   # I4
 def record_delivery(store: Store, delivery: Delivery) -> bool: ...             # I8
 def last_delivered(store: Store, *, world: str, reader: str,
                    before: date) -> date | None: ...                           # I9
@@ -357,6 +416,9 @@ def _demo_selections(day: int, *,
   and, after the bot unit, may import `digest.feedback`. The import-linter contract needs
   no change. The implementer checks this with `uv run lint-imports`.
 - `Delivery` validates the null rule of `channel` and `ts`, and `0 <= part < parts`.
+- `ShownLine` validates that `displayed` holds only ids of its `members`. `daily/slack.py`
+  imports `ShownLine` from `daily/exposure.py`; `exposure.py` imports nothing from
+  `slack.py`.
 - An `Episode` is a `NamedTuple`, so the JSON form is written field by field as an object
   with `source`, `subject` and `last_evidence`, and read back with `Episode(**row)`.
 
@@ -371,10 +433,14 @@ the record. Its first post into an empty store is a first digest (I10).
 
 ## Before tests
 
-None. The DM path already reads the `chat.postMessage` response through `.get` in
-`_slack_failure`, and the layout plan (11.1) and bot plan (I10) already rely on the
-response `ts`. The webhook success test (status 200) is today's code. `feedback.episode`
-is a stub of the bot unit with its own tests.
+One decision, no spike. The user settles Q1 (the absence split trigger) before the test
+author starts. If the user puts the split first, this unit waits for it; the split is
+not part of this unit.
+
+No spike is needed. The DM path already reads the `chat.postMessage` response through
+`.get` in `_slack_failure`, and the layout plan (11.1) and bot plan (I10) already rely on
+the response `ts`. The webhook success test (status 200) is today's code.
+`feedback.episode` is a stub of the bot unit with its own tests.
 
 ## Acceptance
 
@@ -391,13 +457,27 @@ default store patches the default path to `tmp_path`.
   `episode("checklist", <task id>, <channel>, <ts>)` and an ask absence gives
   `episode("ask", <ask item id>, <channel>, <ts>)`, compared with values that the test
   builds with `feedback.episode`; `absence_episode` on an item with no absence raises
-  ValueError; a claim whose `channel_id` is not a channel of the line's evidence is left
+  ValueError; a claim whose `channel_id` is not a channel of its item's evidence is left
   out; an empty sequence gives three empty tuples.
+- A1b (I4, Q8, members). Hand-made `ShownLine` values, each member with its own claim:
+  - a kept ask item with three members and `displayed` = the first member: `items` holds
+    the ask id and all three member ids; `claims` holds the ask's claims and the first
+    member's claims only;
+  - a kept checklist absence with two members and `displayed` = the second (the best):
+    `items` holds both member ids; `absences` holds the absence's episode; `claims`
+    holds the second member's claims only;
+  - a kept ask absence with two members and an empty `displayed`: `items` holds both
+    member ids; `claims` is empty.
+  `ShownLine` refuses a `displayed` id that is not one of its members.
 - A2 (I5, renderer). `slack_digest(..., report=True)`: each message holds `lines` in
   block order; a must-see line past the five top items is in the reply's `lines`; with
   more items than the reply cap, an item left out is in no `lines`; a kept item's members
-  are in `lines` with it; each message without `lines` equals the `report=False` message;
-  with `interactive=True` both `lines` and `items` are present.
+  are in its `ShownLine`; `displayed` is the first member of a kept ask item, the best
+  member of a kept checklist absence (must-see first, then the higher score), and empty
+  for a kept ask absence, and in each case the displayed member's title or body is in the
+  message text while no other member's title or body is; each message without `lines`
+  equals the `report=False` message; with `interactive=True` both `lines` and `items`
+  are present.
 - A3 (I8, store). `record_delivery` returns True and writes one row; the same `(run_id,
   reader, part)` again returns False and writes nothing; another run with the same DM
   `(channel, ts)` returns False; two webhook rows with null `channel` and `ts` in two runs
@@ -419,13 +499,25 @@ default store patches the default path to `tmp_path`.
 - A6 (I3, I7, partial). The reply `chat.postMessage` of the first reader raises: the top
   row of that reader stays (part 0 of 2), no row for the others, exit 1, the layout
   unit's refusal text, and `last_delivered` for that reader does not give that day.
-- A7 (I7, no ts). The fake returns `{"ok": True}` for a top message of a digest with no
-  reply: the I7 refusal with its note, no row for that part, earlier rows stay, and
-  nothing more is sent.
-- A8 (I7, write failure). `record_delivery` patched to raise `sqlite3.OperationalError`
-  whose text holds a marker: the refusal names the type, says the message was sent, and
-  the output does not hold the marker; nothing more is sent. `record_delivery` patched to
-  return False gives the "a row with this key exists" refusal.
+- A7 (I3, I7, Slack rejection). The fake returns `{"ok": False, "error":
+  "channel_not_found", "ts": "1700000000.000100"}` for the second reader's top message:
+  the layout unit's send-failure text with `channel_not_found`, no "its message was sent"
+  in the output, no row for that part, the first reader's rows stay, and nothing more is
+  sent.
+- A7b (I3, I7, no ts). The fake returns `{"ok": True}` for a top message of a digest with
+  no reply: the "has no ts" refusal with its note, no row for that part, earlier rows
+  stay, and nothing more is sent.
+- A8 (I7, I7a, write failures). Each case runs with `--interactive` and checks the rows
+  of the failing part, the refusal and that nothing more is sent:
+  - `record_delivery` raises `sqlite3.OperationalError` whose text holds a marker: the
+    `posted_messages` row of that part is written, no `deliveries` row; the refusal
+    names the type and says the message was sent; the output does not hold the marker.
+  - `save_posted` raises `sqlite3.OperationalError`: the `deliveries` row of that part
+    is written, no `posted_messages` row; the same refusal shape.
+  - `record_delivery` returns False: the `posted_messages` row is written; the "a row
+    with this key exists" refusal.
+  Without `--interactive`, a raising `record_delivery` gives the same refusal, and
+  `save_posted` is not called.
 - A9 (I6, webhook). `post --db <tmp>` on the webhook path: one row per accepted message
   with `path` `webhook` and null `recipient`, `channel` and `ts`; a two-part digest gives
   parts 0 and 1. A `FakeResponse(500, ...)` for the second reader's top message: only the
@@ -454,8 +546,9 @@ Each new or changed test is RED-GREEN proven with `prove-test`.
 ## Test seams
 
 - `absence_episode`, `part_shown`, `record_delivery` and `last_delivered` over
-  `Store.open(tmp_path / "d.sqlite")` and hand-made `Line` objects, as
-  `tests/test_daily_render.py` builds them.
+  `Store.open(tmp_path / "d.sqlite")`, and hand-made `Line` and `ShownLine` objects, as
+  `tests/test_daily_render.py` builds lines.
+- `save_posted` and `record_delivery` patched one at a time to fail (A8).
 - `slack_digest(..., report=True)` with hand-made selections, as the layout tests build
   them.
 - The CLI with `CliRunner`, the Slack clients patched (`_slack_web_client`,
