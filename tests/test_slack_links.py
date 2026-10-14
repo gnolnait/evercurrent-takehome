@@ -107,10 +107,6 @@ def seed_map(
     )
 
 
-def section_texts(message: dict[str, Any]) -> list[str]:
-    return [block["text"]["text"] for block in message["blocks"] if block["type"] == "section"]
-
-
 def block_text(message: dict[str, Any]) -> str:
     return "\n".join(
         block["text"]["text"]
@@ -837,3 +833,103 @@ def test_cli_prints_no_unmapped_count_when_every_source_is_mapped(
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
     assert "https://ws.slack.com/files/U1/F9/drawing.step" in delivered
     assert "<#C111>" in delivered
+
+
+@pytest.mark.parametrize(
+    "field, nested",
+    [
+        ("team_id", None),
+        ("workspace_url", None),
+        ("channels", None),
+        ("messages", "channel"),
+        ("messages", "ts"),
+        ("messages", "thread_ts"),
+        ("files", "permalink"),
+    ],
+)
+@pytest.mark.parametrize("delivery", ["webhook", "dm"])
+def test_cli_seed_map_rejects_values_that_can_inject_slack_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    profile: Profile,
+    field: str,
+    nested: str | None,
+    delivery: str,
+) -> None:
+    """A25: reject each unsafe field before Slack sees a call."""
+    content: dict[str, Any] = {
+        "team_id": "T123ABC",
+        "workspace_url": "https://scratch.slack.com",
+        "world": "kestrel",
+        "channels": {"C0ENGME": "C123ABC"},
+        "messages": {
+            "C0ENGME:1760000000.000001": {
+                "channel": "C123ABC",
+                "ts": "1761000000.000001",
+                "thread_ts": "1761000000.000001",
+            }
+        },
+        "files": {
+            "C0ENGME:1760000000.000001/drawing.pdf": {
+                "permalink": "https://scratch.slack.com/files/U1/F1/drawing.pdf"
+            }
+        },
+    }
+    bad = "<!here>unsafe>"
+    if nested is not None:
+        entry = next(iter(content[field].values()))
+        entry[nested] = bad
+    elif field == "channels":
+        content[field]["C0ENGME"] = bad
+    else:
+        content[field] = bad
+    path = tmp_path / "seed-map.json"
+    path.write_text(json.dumps(content), encoding="utf-8")
+    webhook = FakeWebhookClient()
+    client = FakeSlackWebClient(team_id="T123ABC")
+    selected = selection(profile, item(1, (evidence("C0ENGME", "1760000000.000001"),)))
+    prepare_cli(monkeypatch, world, [selected] * 3, webhook)
+    monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
+    monkeypatch.setattr(cli, "_slack_web_client", lambda token: client)
+    arguments = ["post", "--seed-map", str(path)]
+    if delivery == "dm":
+        arguments[1:1] = ["--dm", "U012ABC"]
+    result = runner.invoke(app, arguments)
+    assert result.exit_code == 1, result.output
+    assert field in result.output
+    assert bad not in result.output
+    assert client.calls == []
+    assert webhook.calls == []
+
+
+def test_seed_map_in_real_form_loads(tmp_path: Path) -> None:
+    """A25: valid Slack values load without a change."""
+    content = {
+        "team_id": "T123ABC",
+        "workspace_url": "https://scratch-123.slack.com",
+        "world": "kestrel",
+        "channels": {"C0ENGME": "C123ABC"},
+        "messages": {
+            "C0ENGME:1760000000.000001": {
+                "channel": "C123ABC",
+                "ts": "1761000000.000002",
+                "thread_ts": "1761000000.000001",
+            }
+        },
+        "files": {
+            "C0ENGME:1760000000.000001/drawing.pdf": {
+                "permalink": "https://scratch-123.slack.com/files/U1/F1/drawing_rev-1.2%20final.pdf"
+            }
+        },
+    }
+    path = tmp_path / "seed-map.json"
+    path.write_text(json.dumps(content), encoding="utf-8")
+    loaded = SeedMap.load(path)
+    assert loaded.team_id == content["team_id"]
+    assert loaded.workspace_url == content["workspace_url"]
+    assert loaded.channels == content["channels"]
+    assert {key: value.model_dump() for key, value in loaded.messages.items()} == content[
+        "messages"
+    ]
+    assert {key: value.model_dump() for key, value in loaded.files.items()} == content["files"]

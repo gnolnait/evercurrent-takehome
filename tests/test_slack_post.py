@@ -213,11 +213,11 @@ def test_slack_window_matches_terminal_as_verbatim_section(
     ],
     ids=["first-digest", "previous-digest"],
 )
-def test_slack_fallback_has_escaped_header_then_window(
+def test_slack_notification_and_window_context(
     world: World, profile: Profile, previous: date | None, expected: str
 ) -> None:
     selected = Selection(
-        profile=profile.model_copy(update={"name": "Nadia & <ME>"}),
+        profile=profile,
         day=DAY,
         lines=(),
         hidden=0,
@@ -1012,16 +1012,16 @@ def test_cli_post_build_failure_sends_nothing(
     assert client.calls == []
 
 
-@pytest.mark.parametrize("surface", ["terminal", "slack-block", "slack-fallback"])
+@pytest.mark.parametrize("surface", ["terminal", "slack-block"])
 def test_phase_line_gate_name_is_plain_or_escaped_once(
     world: World, profile: Profile, surface: str
 ) -> None:
-    """PL5 and PL6: flatten the name and escape each Slack line once."""
+    """PL5 and PL6: flatten the gate name and escape the Slack context once."""
     gate = Gate(id="G-NEXT", name="Review & <fit>\n  > release", date=DAY, buffer_days=0)
     world = world.model_copy(
         update={"project": world.project.model_copy(update={"gates": (gate,)})}
     )
-    selected = selection(profile.model_copy(update={"name": "Nadia & <ME>"}))
+    selected = selection(profile)
     plain = "Phase: EVT since 2026-08-03. Next gate: G-NEXT Review & <fit> > release, today."
     escaped = (
         "Phase: EVT since 2026-08-03. Next gate: G-NEXT "
@@ -1033,13 +1033,10 @@ def test_phase_line_gate_name_is_plain_or_escaped_once(
     else:
         message = build_digest(world, selected)[0]
         window = "First digest: the last 5 working days"
-        if surface == "slack-block":
-            assert message["blocks"][1] == {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": window + "\n" + escaped, "verbatim": True}],
-            }
-        else:
-            assert message["text"] == "Nothing new for you."
+        assert message["blocks"][1] == {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": window + "\n" + escaped, "verbatim": True}],
+        }
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-"""Examples from the v0.4 layout contract. A22 needs a live manual check."""
+"""Examples from the v0.5 layout contract. A22 needs a live manual check."""
 
 from copy import deepcopy
 from datetime import UTC, date, datetime, time, timedelta
@@ -8,12 +8,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.slack_response import SlackResponse
 from typer.testing import CliRunner
 
 import digest.cli as cli
 from digest.daily.profile import Profile
 from digest.daily.render import context_lines, render_digest, select_digest
 from digest.daily.select import Line, Section, Selection
+from digest.daily.slack import slack_digest
 from digest.models import AbsenceDetail, Evidence, Item, Role
 from digest.project import ChecklistTask, Gate, PhaseWindow, ProjectConfig
 from digest.seed import MappedFile, MappedMessage, SeedMap
@@ -413,8 +415,9 @@ def test_notification_cut_counts_escaped_characters(world: World, profile: Profi
 
 def test_top_sort_keys_and_overflow_labels(world: World, profile: Profile) -> None:
     """A6: each top key changes a pair. Overflow keeps top order and labels."""
-    world = gates(world, gate(), gate("G-B", offset=3))
+    world = gates(world, gate(), gate("G-B", offset=3), gate("G-PAST", offset=-1))
     lines = [
+        row(10, entities=("G-PAST",)),
         row(9, section="fyi", entities=("G-A",)),
         row(8),
         row(6, entities=("G-B",)),
@@ -438,14 +441,16 @@ def test_top_sort_keys_and_overflow_labels(world: World, profile: Profile) -> No
         ["In #program", "checked: #program threads"],
         ["In #eng-me", "checked: #eng-me threads"],
     ]
-    assert messages[1]["blocks"][0] == section("*Read first* · 4")
+    assert messages[1]["blocks"][0] == section("*Read first* · 5")
     assert [text.splitlines()[0] for text, _ in pairs(messages[1])] == [
         "*Fact 7*",
         "*Fact 6*",
+        "*Fact 10*",
         "*Fact 8*",
         "*Fact 9*",
     ]
     assert [meta.split(" · ")[0] for _, meta in pairs(messages[1])] == [
+        "*Risk*",
         "*Risk*",
         "*Risk*",
         "*Risk*",
@@ -1243,7 +1248,18 @@ class DeliveryClient:
                 raise self.response
             return self.response
         if self.dm:
-            return {"ts": None if number == self.missing_at else f"1800000000.{number:06d}"}
+            return SlackResponse(
+                client=self,
+                http_verb="POST",
+                api_url="https://slack.com/api/chat.postMessage",
+                req_args={},
+                data={
+                    "ok": True,
+                    "ts": None if number == self.missing_at else f"1800000000.{number:06d}",
+                },
+                headers={},
+                status_code=200,
+            )
         return WebhookResponse()
 
     def chat_postMessage(self, **payload: Any) -> Any:
@@ -1527,3 +1543,123 @@ def test_real_day_six_synthetic_map(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             build_digest(world, selected, links=links, authors=authors) for selected in selections
         ]
         assert [len(messages) for messages in payloads] == [2, 2, 2]
+
+
+@pytest.mark.parametrize("ask_section", ["fyi", "needs_you"])
+def test_ask_fold_only_moves_risk_to_an_earlier_section(
+    world: World, profile: Profile, ask_section: Section
+) -> None:
+    """A23: a later FYI ask keeps the risk in Risks with its own title."""
+    ask = row(
+        1,
+        section=ask_section,
+        type="ask",
+        must=False,
+        title="ETA question",
+        entities=("PN-1",),
+        owner="UREADER",
+        evidence=(source(),),
+    )
+    risk = row(2, must=False, title="Shortage", entities=("PN-1",), thread_id=ask.item.thread_id)
+    lines = (risk, ask) if ask_section == "fyi" else (ask, risk)
+    messages = build_digest(world, chosen(profile, *lines), authors={f"CENG:{TS}": "UASKER"})
+    rendered = [pair for message in messages for pair in pairs(message)]
+    if ask_section == "fyi":
+        assert len(rendered) == 2
+        assert [text.splitlines()[0] for text, _ in rendered] == ["*Shortage*", "*ETA question*"]
+        assert [meta.split(" · ")[0] for _, meta in rendered] == ["*Risk*", "*Asked of you*"]
+    else:
+        assert len(rendered) == 1
+        assert rendered[0][0] == "*Shortage*\nGrace asked you: “Can you give an ETA?”"
+        assert rendered[0][1].startswith("*Asked of you*")
+
+
+@pytest.mark.parametrize("reader_in_header", [None, False, True])
+@pytest.mark.parametrize("long_program", [False, True])
+@pytest.mark.parametrize(
+    "role, suffix", [("ME", "Nadia (ME)"), ("supply_chain", "Nadia (supply chain)")]
+)
+def test_header_reader_option_and_150_character_limit(
+    world: World,
+    profile: Profile,
+    reader_in_header: bool | None,
+    long_program: bool,
+    role: Role,
+    suffix: str,
+) -> None:
+    """A24: the reader is optional. A long program still has a cut header."""
+    program = "Kestrel " * 30 if long_program else "Kestrel K2"
+    world = world.model_copy(update={"program": program})
+    profile = profile.model_copy(update={"role": role})
+    options: dict[str, Any] = (
+        {} if reader_in_header is None else {"reader_in_header": reader_in_header}
+    )
+    messages = slack_digest(world, chosen(profile, row()), links=None, authors={}, **options)
+    for index, message in enumerate(messages):
+        check_message(message, None, top=index == 0)
+    header = messages[0]["blocks"][0]["text"]["text"]
+    if long_program:
+        assert len(header) <= 150
+        assert header.endswith("…")
+    else:
+        assert header == "Kestrel K2 · Mon 19 Oct" + (f" · {suffix}" if reader_in_header else "")
+
+
+@pytest.mark.parametrize("dm", [False, True])
+def test_cli_headers_name_each_reader(
+    world: World, profile: Profile, monkeypatch: pytest.MonkeyPatch, dm: bool
+) -> None:
+    """A24: both post paths name each reader in the sent header."""
+    client = DeliveryClient(dm=dm)
+    delivery_setup(monkeypatch, world, profile, client, reply=False)
+    readers = [
+        profile.model_copy(update={"name": name, "role": role})
+        for name, role in [
+            ("Nadia Brenner", "ME"),
+            ("Hamid Rostami", "supply_chain"),
+            ("Grace Chen", "EM"),
+        ]
+    ]
+    monkeypatch.setattr(
+        cli,
+        "_demo_selections",
+        lambda day: (world, [chosen(reader, row()) for reader in readers], {}),
+    )
+    result = CliRunner().invoke(cli.app, ["post", "--dm", "U111"] if dm else ["post"])
+    assert result.exit_code == 0, result.output
+    assert [call["blocks"][0]["text"]["text"] for call in client.calls if "blocks" in call] == [
+        "Kestrel K2 · Mon 19 Oct · Nadia (ME)",
+        "Kestrel K2 · Mon 19 Oct · Hamid (supply chain)",
+        "Kestrel K2 · Mon 19 Oct · Grace (EM)",
+    ]
+
+
+@pytest.mark.parametrize("dm", [False, True])
+@pytest.mark.parametrize("own_question", [False, True])
+def test_cli_forwards_authors_to_ask_body_and_label(
+    world: World, profile: Profile, monkeypatch: pytest.MonkeyPatch, dm: bool, own_question: bool
+) -> None:
+    """A26: both post paths use the stored author for the quote and label."""
+    client = DeliveryClient(dm=dm)
+    delivery_setup(monkeypatch, world, profile, client, reply=False)
+    line = (
+        absence(asker="UASKER", owner="UOTHER")
+        if own_question
+        else row(type="ask", section="needs_you", owner="UREADER", evidence=(source(),))
+    )
+    authors = {f"CENG:{TS}": "UREADER" if own_question else "UASKER"}
+    monkeypatch.setattr(
+        cli, "_demo_selections", lambda day: (world, [chosen(profile, line)] * 3, authors)
+    )
+    result = CliRunner().invoke(cli.app, ["post", "--dm", "U111"] if dm else ["post"])
+    assert result.exit_code == 0, result.output
+    sent = [call for call in client.calls if "blocks" in call]
+    assert len(sent) == 3
+    for message in sent:
+        text, meta = pairs(message)[0]
+        assert (
+            "You asked: “Can you give an ETA?”"
+            if own_question
+            else "Grace asked you: “Can you give an ETA?”"
+        ) in text
+        assert meta.startswith("*Your question*" if own_question else "*Asked of you*")
