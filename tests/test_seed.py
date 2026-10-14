@@ -738,6 +738,35 @@ def test_b11_six_rate_limits_stop_before_first_write_and_leave_no_map(
     assert not map_path.exists()
 
 
+def test_b15_join_client_error_before_first_post_leaves_no_map(
+    tmp_path: Path, world: World
+) -> None:
+    map_path = tmp_path / "seed.json"
+    available = slack_channels(world)
+    index = next(i for i, channel in enumerate(available) if channel.name == "eng-mech")
+    available[index] = SlackChannel("S-C0ENGME", "eng-mech", False, False)
+    client = FakeSlackSeedClient(
+        world,
+        channels=available,
+        failures={("join", 1): RuntimeError("join stopped")},
+    )
+
+    with pytest.raises(RuntimeError, match="join stopped"):
+        seed(
+            world,
+            [post()],
+            client,
+            map_path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+        )
+
+    assert not calls(client, "post")
+    assert not calls(client, "upload")
+    assert not map_path.exists()
+
+
 def test_b11_exhausted_upload_retries_keep_the_acknowledged_post(
     tmp_path: Path, world: World
 ) -> None:
