@@ -1,8 +1,10 @@
 """M3 unit 10: message changes, corpus copies, and reseed controls."""
 
 import json
+import logging
 import re
 import shutil
+import tempfile
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -248,6 +250,7 @@ def test_same_log_gives_equal_states_and_reset_restarts_stamp(
     cassette_copy: Path,
     offline_responses: list[LLMRequest],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rooms = [Room(base, cassettes=cassette_copy) for _ in range(2)]
     change = edit_message(corpus[0])
@@ -257,7 +260,9 @@ def test_same_log_gives_equal_states_and_reset_restarts_stamp(
         room.apply(POST)
     assert rooms[0].state() == rooms[1].state()
     assert rooms[0].state().message_changes == 2
-    copies = [room.save(tmp_path / f"copy-{i}") for i, room in enumerate(rooms)]
+    with monkeypatch.context() as patch:
+        patch.chdir(tmp_path)
+        copies = [room.save(tmp_path / ".room" / f"copy-{i}") for i, room in enumerate(rooms)]
     assert snapshot(copies[0]) == snapshot(copies[1])
     rows = saved_events(copies[0])
     edited = next(e for e in rows if (e.channel_id, e.ts) == (change.channel_id, change.ts))
@@ -519,19 +524,22 @@ def test_save_preserves_untouched_lines_and_committed_corpus(
     cassette_copy: Path,
     offline_responses: list[LLMRequest],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    committed = snapshot(WORLD_DIR)
+    world_dir = WORLD_DIR.resolve()
+    committed = snapshot(world_dir)
     room = Room(base, cassettes=cassette_copy)
     room.apply(D2)
     change = edit_message(corpus[0])
     room.apply(change)
     room.apply(POST)
+    monkeypatch.chdir(tmp_path)
     destination = tmp_path / ".room" / "kestrel"
     assert room.save(destination) == destination
     first = snapshot(destination)
     assert room.save(destination) == destination
     assert snapshot(destination) == first
-    assert snapshot(WORLD_DIR) == committed
+    assert snapshot(world_dir) == committed
     for name, content in committed.items():
         if name != "events.jsonl":
             assert first[name] == content, name
@@ -568,10 +576,11 @@ def test_failed_save_keeps_previous_copy_and_removes_temporary_folder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     room = Room(base)
-    destination = tmp_path / "copy"
+    monkeypatch.chdir(tmp_path)
+    destination = tmp_path / ".room" / "copy"
     room.save(destination)
     before = snapshot(destination)
-    siblings = set(tmp_path.iterdir())
+    siblings = set(destination.parent.iterdir())
     room.apply(D2)
 
     with monkeypatch.context() as patch:
@@ -580,7 +589,123 @@ def test_failed_save_keeps_previous_copy_and_removes_temporary_folder(
             room.save(destination)
 
     assert snapshot(destination) == before
-    assert set(tmp_path.iterdir()) == siblings
+    assert set(destination.parent.iterdir()) == siblings
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "data/world",
+        "data/world/kestrel",
+        ".",
+        "..",
+        "../copy",
+        ".room",
+        ".room/..",
+        ".room/../copy",
+        ".room/nested/..",
+        ".room-other/copy",
+    ],
+)
+@pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
+def test_save_refuses_paths_outside_room_before_any_write(
+    base: RoomBase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination: str,
+    absolute: bool,
+) -> None:
+    room = Room(base)
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / destination if absolute else Path(destination)
+
+    def refuse_write(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Save attempted a file system write before refusing the path")
+
+    with monkeypatch.context() as patch:
+        for name in ("mkdir", "open", "rename", "rmdir", "unlink"):
+            patch.setattr(Path, name, refuse_write)
+        patch.setattr(tempfile, "mkdtemp", refuse_write)
+        patch.setattr(shutil, "copytree", refuse_write)
+        patch.setattr(shutil, "rmtree", refuse_write)
+        with pytest.raises(ValueError):
+            room.save(path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_save_warns_when_previous_copy_cannot_be_deleted(
+    base: RoomBase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    room = Room(base)
+    monkeypatch.chdir(tmp_path)
+    destination = tmp_path / ".room" / "copy"
+    room.save(destination)
+    before = snapshot(destination)
+    room.apply(D2)
+    expected = snapshot(room.save(tmp_path / ".room" / "expected"))
+    assert expected != before
+    remove = shutil.rmtree
+    leftovers: list[Path] = []
+
+    def fail_delete(path: Path, ignore_errors: bool = False) -> None:
+        path = Path(path)
+        if path.parent == destination.parent and snapshot(path) == before:
+            leftovers.append(path)
+            raise PermissionError("previous copy is locked")
+        remove(path, ignore_errors=ignore_errors)
+
+    with monkeypatch.context() as patch, caplog.at_level(logging.WARNING):
+        patch.setattr(shutil, "rmtree", fail_delete)
+        assert room.save(destination) == destination
+
+    assert snapshot(destination) == expected
+    assert len(leftovers) == 1
+    assert snapshot(leftovers[0]) == before
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].getMessage() == "room_folder_left"
+    assert Path(warnings[0].__dict__["path"]) == leftovers[0]
+
+
+def test_save_keeps_both_copies_when_install_and_restore_fail(
+    base: RoomBase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room = Room(base)
+    monkeypatch.chdir(tmp_path)
+    destination = tmp_path / ".room" / "copy"
+    room.save(destination)
+    before = snapshot(destination)
+    room.apply(D2)
+    expected = snapshot(room.save(tmp_path / ".room" / "expected"))
+    assert expected != before
+    rename = Path.rename
+    attempts: list[Path] = []
+
+    def fail_rename(path: Path, target: Path) -> Path:
+        if target == destination:
+            attempts.append(path)
+            raise PermissionError("install or restore is locked")
+        return rename(path, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "rename", fail_rename)
+        with pytest.raises(OSError) as error:
+            room.save(destination)
+
+    assert len(attempts) == 2
+    staging, previous = attempts
+    assert staging != previous
+    assert not destination.exists()
+    assert snapshot(staging) == expected
+    assert snapshot(previous) == before
+    assert str(staging) in str(error.value)
+    assert str(previous) in str(error.value)
 
 
 def test_messages_cover_day_six_and_count_changes_since_reset(
