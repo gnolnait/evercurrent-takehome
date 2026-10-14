@@ -58,3 +58,18 @@ store rule without checking the tests that pin it.
 
 Change. Before a brief changes the behaviour of a module outside the unit, grep the
 tests that pin that module and name them in the brief.
+
+## M3 unit 11, failures become refusals (2026-10-14)
+
+Caught. The plan review found that a failed reset dropped the room's message changes,
+because `Room.reset` cleared them before it rebuilt; the test for it now saves after the
+failure. The adversarial pass found that a gateway reply of valid JSON in the wrong
+shape still crashed `digest extract` with a raw error, the same symptom the unit set out
+to remove. Seven wrong-shape cases now become one refusal.
+
+Missed. The second-model lane ran out of quota near the end; the local lens panel took
+the final review. Three proofs needed manual RED runs, because a blank-line break cannot
+widen an `except` clause or reorder two assignments.
+
+Change. When a unit wraps a parser's errors, list every field the code reads after the
+parse and give each a wrong-shape case in the first test commit.

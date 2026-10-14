@@ -1,6 +1,7 @@
 # Plan: M3 unit 11, failures become refusals (model calls and the room page)
 
-Status: v0.2, 2026-10-14, 00:10 PT. Process stage 1 (`docs/process.md`), the full
+Status: v0.2.5, 2026-10-14, 04:20 PT (v0.2 and five amendments from the reviews and the
+adversarial pass). Process stage 1 (`docs/process.md`), the full
 process the user set for the overnight units: both review lanes on the plan, the tests
 and the code, the secondary lens panel on the code, an adversarial pass, a retro entry.
 Stacked on unit 10 (branch `m3-room-edits`, PR #81).
