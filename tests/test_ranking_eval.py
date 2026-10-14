@@ -119,6 +119,7 @@ SUPPLIER_NOISE = "C0SUPCH:1792082700.010050#1792082700.010050#0"
 DOC_PACK = "C0PLMFD:1791822000.010003#1791822000.010003#0"
 SCHEDULE_SYNC = "C0PLMFD:1791820500.010002#1791820500.010002#0"
 PAYLOAD = "C0KPROG:1792166100.010066#1792166100.010066#0"
+DVT1_RESOLVED = "C0DVT1B:1792428300.010092#1792428300.010092#0"
 LOT_BLOCK = "C0DVT1B:1792510200.010093#1792510200.010093#0"
 BUILD_D1 = "C0DVT1B:1792769400.010121#1792769400.010121#0"
 ASK_SAF_ABSENCE = f"absence:ask:{ASK_SAF}"
@@ -1050,9 +1051,9 @@ def test_each_ablation_verdict_follows_from_the_configuration_values(base_run: R
 # only item 5 delivers a fact. recall = 1 / 1. nDCG = (3 / log2 6) / 3 = 0.38685. C0's digest
 # drops the S14-LTB item for FW (its score is below the threshold); send-everything shows it.
 #
-# The other days, same method. The two ways to read "every item" (open items only, or also
-# resolved ones) give the same grades for this reader; resolved items come after the five
-# lines or change no grade.
+# The other days, same method. Send-everything takes items of every status (plan R2). On days
+# 5 and 6 a resolved item comes first; it delivers no fact in the set, so it scores 0 and
+# changes no grade.
 #   day  top-5 grades   fact grades      recall  nDCG
 #   1    [1,0,0,0]      [1,0,0,0]        none    1
 #   2    [0,0,0,0,2]    [2,0,0,0]        1 / 1   1 / log2 6
@@ -1072,8 +1073,9 @@ SEND_FW_TOP5: dict[int, list[str]] = {
     2: [LIDAR, THM_RUN1, LTB_REPLY, ON_HAND_ASK, LTB],
     3: [ASK_SAF, SLIP, EMC, PO],
     4: [PO_AMEND_ASK, SUPPLIER_NOISE, BOM_11034, DROP_IN_ASK, MLCC],
-    5: [PAYLOAD, FAI],
-    6: [ASK_SAF_ABSENCE, HARNESS, HARNESS_ASK, UN383, BUFFER],
+    # Days 5 and 6 start with a resolved item: send-everything takes every status (plan R2).
+    5: [PO_AMEND_ASK, PAYLOAD, FAI],
+    6: [ASK_SAF_ABSENCE, DVT1_RESOLVED, HARNESS, HARNESS_ASK, UN383],
     7: [ASK_SAF_ABSENCE, FLAG_ASK, BRACKET, TEXTURE, LOT_BLOCK],
     8: [ASK_SAF_ABSENCE, BENCH_ASK, FILTER, DEBOUNCE],
     9: [ASK_SAF_ABSENCE, GO],
