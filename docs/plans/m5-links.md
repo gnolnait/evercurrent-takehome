@@ -28,6 +28,10 @@ digest post [--day N] [--dm USER_ID] [--seed-map PATH]
   not check.
 - Without `--seed-map`, `digest post` does exactly what it does today, and makes no
   `auth.test` call.
+- A refusal never prints a value read from the map file: a map that does not parse or
+  validate is reported by the field and the error message only (no input values), and a
+  world or workspace mismatch says which check failed without the map's value. So a wrong
+  path, such as `.env`, cannot put a token into the output.
 
 ## Behaviours
 
