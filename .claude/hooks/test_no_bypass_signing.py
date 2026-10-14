@@ -583,20 +583,19 @@ _SEAM_COMMANDS = [
 ]
 
 
-def test_seam_wrapper_verdict_matches_parser_direct():
+@pytest.mark.parametrize("cmd", _SEAM_COMMANDS)
+def test_seam_wrapper_verdict_matches_parser_direct(cmd):
     """The wrapper must never reach a verdict the parser wouldn't: for every
     command already exercised in this suite, the full pipeline (stdin JSON ->
     wrapper -> parser) agrees with the parser invoked directly. Mechanically
     forbids reintroducing a bash-side fast-allow that diverges from the parser.
+    One case per command, so xdist spreads the process launches.
     """
-    def parser_direct(cmd):
-        rc = subprocess.run(
-            [PYTHON, str(CLI_SHIM), cmd], capture_output=True, text=True
-        ).returncode
-        return "BLOCK" if rc == 2 else "ALLOW" if rc == 0 else "ERROR(%d)" % rc
-
-    for cmd in _SEAM_COMMANDS:
-        assert _verdict(cmd) == parser_direct(cmd), cmd
+    rc = subprocess.run(
+        [PYTHON, str(CLI_SHIM), cmd], capture_output=True, text=True
+    ).returncode
+    parser_direct = "BLOCK" if rc == 2 else "ALLOW" if rc == 0 else "ERROR(%d)" % rc
+    assert _verdict(cmd) == parser_direct, cmd
 
 
 def test_blocked_message_content_on_stderr():

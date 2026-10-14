@@ -5,13 +5,24 @@
 # crash, malformed payload).
 set -u
 # Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
-# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
-# PATH but only print an install hint and exit non-zero, so they are skipped.
+# python (Git Bash tries python first: there python3 is usually only the
+# Store alias, and each lookup below forks). The Windows Store alias stubs
+# (.../WindowsApps/python3.exe) sit on PATH but only print an install hint
+# and exit non-zero, so they are skipped.
 # Nothing found -> a name that cannot resolve, so the launch below exits 127
 # and the fence blocks.
+# This script's directory, without a `$(dirname)` fork. On Windows `$0` can
+# hold backslashes.
+_here=${0%/*}
+case $_here in "$0") _here=. ;; esac
+case ${0##*/} in *\\*) _here=${0%\\*} ;; esac
 PY="${CLAUDE_HOOK_PYTHON:-}"
 if [ -z "$PY" ]; then
-  for _c in python3 python; do
+  case "${OSTYPE:-}" in
+    msys* | cygwin*) _cands="python python3" ;;
+    *) _cands="python3 python" ;;
+  esac
+  for _c in $_cands; do
     _p="$(command -v "$_c" 2>/dev/null)" || continue
     case "$_p" in *WindowsApps*) continue ;; esac
     PY="$_p"
@@ -19,5 +30,5 @@ if [ -z "$PY" ]; then
   done
 fi
 [ -n "$PY" ] || PY="python-interpreter-not-found"
-"$PY" "$(dirname "$0")/prove_test_track_edit.py" || :
+"$PY" "$_here/prove_test_track_edit.py" || :
 exit 0

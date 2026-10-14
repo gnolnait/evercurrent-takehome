@@ -42,8 +42,8 @@ arg-wrapper option that takes a separate non-numeric value (`timeout -s TERM
 trigger fails CLOSED.
 
 Interpreter: the bash fences resolve one (CLAUDE_HOOK_PYTHON, else python3, else
-python, skipping the Windows Store alias stub). This module is stdlib-only, so
-any Python 3.10+ works. Mirrors no-merge-pr.py.
+python, python first under Git Bash, skipping the Windows Store alias stub).
+This module is stdlib-only, so any Python 3.10+ works. Mirrors no-merge-pr.py.
 """
 import re
 import shlex

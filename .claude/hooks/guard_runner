@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# guard_runner - single-spawn PreToolUse dispatch for the three git guards
-# (no-bypass-signing, no-merge-pr, no-commit-to-main). Replaces three
-# bash-wrapper + python-parser spawns with ONE python process.
+# guard_runner - single-spawn PreToolUse dispatch for the git and PR guards
+# (no-bypass-signing, no-merge-pr, no-commit-to-main, no-unreviewed-pr). It
+# replaced one bash-wrapper + python-parser spawn per guard with ONE python
+# process.
 #
 # This wrapper is a pure fail-closed rc FENCE and nothing else: it runs the
 # python dispatcher as a CHILD and coerces any non-verdict exit to a block.
@@ -21,13 +22,24 @@
 # it around the child so every exit routes through the fence below.
 set -u
 # Resolve a real interpreter: CLAUDE_HOOK_PYTHON if set, else python3, else
-# python. The Windows Store alias stubs (.../WindowsApps/python3.exe) sit on
-# PATH but only print an install hint and exit non-zero, so they are skipped.
+# python (Git Bash tries python first: there python3 is usually only the
+# Store alias, and each lookup below forks). The Windows Store alias stubs
+# (.../WindowsApps/python3.exe) sit on PATH but only print an install hint
+# and exit non-zero, so they are skipped.
 # Nothing found -> a name that cannot resolve, so the launch below exits 127
 # and the fence blocks.
+# This script's directory, without a `$(dirname)` fork. On Windows `$0` can
+# hold backslashes.
+_here=${0%/*}
+case $_here in "$0") _here=. ;; esac
+case ${0##*/} in *\\*) _here=${0%\\*} ;; esac
 PY="${CLAUDE_HOOK_PYTHON:-}"
 if [ -z "$PY" ]; then
-  for _c in python3 python; do
+  case "${OSTYPE:-}" in
+    msys* | cygwin*) _cands="python python3" ;;
+    *) _cands="python3 python" ;;
+  esac
+  for _c in $_cands; do
     _p="$(command -v "$_c" 2>/dev/null)" || continue
     case "$_p" in *WindowsApps*) continue ;; esac
     PY="$_p"
@@ -36,7 +48,7 @@ if [ -z "$PY" ]; then
 fi
 [ -n "$PY" ] || PY="python-interpreter-not-found"
 set +e
-"$PY" "$(dirname "$0")/guard_runner.py"
+"$PY" "$_here/guard_runner.py"
 rc=$?
 set -e
 case "$rc" in
