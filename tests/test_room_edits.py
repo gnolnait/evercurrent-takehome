@@ -383,6 +383,104 @@ def test_curated_edits_replay_first_after_reset(base: RoomBase) -> None:
             assert any(m.posted for m in state.messages), entry["name"]
 
 
+@pytest.fixture
+def thermal_review() -> PostMessage:
+    entries = yaml.safe_load(CURATED.read_text(encoding="utf-8"))
+    entry = next(entry for entry in entries if entry["name"] == "thermal-review-closed")
+    return PostMessage.model_validate(entry["edit"])
+
+
+def test_fresh_curated_edit_replaces_scenario_and_keeps_world_edit(
+    base: RoomBase, thermal_review: PostMessage
+) -> None:
+    room = Room(base)
+    scenario = next(m for m in room.apply(D2).messages if m.posted)
+    world_state = room.apply(ROLE, fresh=True)
+    assert scenario in world_state.messages
+    assert world_state.message_changes == 1
+
+    room.apply(thermal_review, fresh=True)
+
+    state = room.state()
+    assert state.message_changes == 1
+    assert state.edits == (ROLE, thermal_review)
+    assert next(p.role for p in state.world.personas if p.user_id == ROLE.user_id) == "EM"
+    posted = [m for m in state.messages if m.posted]
+    assert [m.text for m in posted] == [thermal_review.text]
+    zone = ZoneInfo(base.world.timezone)
+    assert datetime.fromtimestamp(float(posted[0].ts), zone) == datetime(
+        2026, 10, 19, 18, 1, tzinfo=zone
+    )
+    as_of = datetime(2026, 10, 19, 23, 59, 59, tzinfo=zone)
+    assert room._store is not None
+    with Store.open_readonly(room._store) as store:
+        curated_thread = store.events_in_thread(
+            f"{thermal_review.channel_id}:{thermal_review.thread_ts}", as_of
+        )
+        scenario_thread = store.events_in_thread(
+            f"{scenario.channel_id}:{scenario.thread_ts}", as_of
+        )
+    assert any(e.text == thermal_review.text and e.ts == posted[0].ts for e in curated_thread)
+    assert not any(e.ts == scenario.ts for e in scenario_thread)
+
+
+def test_curated_edit_without_fresh_after_scenario_is_not_recorded(
+    base: RoomBase, thermal_review: PostMessage
+) -> None:
+    room = Room(base)
+    room.apply(D2)
+    room.apply(ROLE)
+    before = room.state()
+    assert before.message_changes == 1
+
+    with pytest.raises(ValueError, match="not recorded"):
+        room.apply(thermal_review)
+
+    assert room.state() == before
+
+
+def test_curated_and_scenario_forms_apply_fresh(
+    base: RoomBase, thermal_review: PostMessage
+) -> None:
+    room = Room(base)
+    scenario = next(m for m in room.apply(D2).messages if m.posted)
+    entries = yaml.safe_load(CURATED.read_text(encoding="utf-8"))
+    labels = {entry["name"] for entry in entries} | {f"Run {D2.name}", f"Run {D3.name}"}
+    with TestClient(create_app(room)) as client:
+        page = Page(client.get("/").text)
+        forms = {
+            button.text().strip(): form
+            for form in page.find("form")
+            for button in form.nodes()
+            if button.tag == "button" and button.text().strip() in labels
+        }
+        assert forms.keys() == labels
+        for label, form in forms.items():
+            assert form.attrs.get("method") == "post", label
+            assert form.attrs.get("action") == "/edit", label
+            assert any(
+                node.tag == "input"
+                and node.attrs.get("type") == "hidden"
+                and node.attrs.get("name") == "fresh"
+                and node.attrs.get("value") == "true"
+                for node in form.nodes()
+            ), label
+        fields = {
+            str(node.attrs["name"]): node.attrs.get("value") or ""
+            for node in forms["thermal-review-closed"].nodes()
+            if node.tag == "input" and "name" in node.attrs
+        }
+
+        result = client.post("/edit", data=fields, follow_redirects=False)
+
+        assert result.status_code == 303
+        page = Page(client.get(result.headers["location"]).text)
+    messages = {node.text() for node in page.find("p") if node.attrs.get("class") == "msg-text"}
+    assert thermal_review.text in messages
+    assert scenario.text not in messages
+    assert room.state().message_changes == 1
+
+
 def test_world_edit_after_scenario_builds_no_model_request(
     base: RoomBase,
     monkeypatch: pytest.MonkeyPatch,
