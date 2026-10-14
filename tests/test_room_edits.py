@@ -1165,7 +1165,8 @@ def test_message_text_and_file_names_are_escaped_without_external_references(
         filename in (n.attrs.get("value") or "") for n in page.root.nodes()
     )
     assert escape("<script>") in response.text
-    assert not page.find("a")
+    # Only the room's own pages are links; the message text adds none.
+    assert [n.attrs.get("href") for n in page.find("a")] in ([], ["/items"])
     assert not page.find("script")
     for node in page.root.nodes():
         for name, value in node.attrs.items():
