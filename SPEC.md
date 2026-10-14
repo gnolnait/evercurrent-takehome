@@ -336,7 +336,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    or `absence.builder_reply_cadence_days` have passed since the first message that cites
    it and that message has no reply yet in its thread from anyone but its author. A late
    post or a late reply clears the absence. It is an absence for the
-   document's owner, citing the release; its key is the part and the revision. The
+   document's owner, and its key is the part and the revision. The first case cites the
+   release; the second cites the unanswered message, so it is a new episode (step 8). The
    window before a gate in which
    an absence can fire scales with the task's priority, and an absence that persists
    across days rises in rank and states how many days it has been silent. Never emit an
@@ -438,7 +439,8 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    exposure for that reader only; on a checklist absence it records exposure only,
    section 4), snooze until a date, not mine (reader removed from the
    audience), and, on a contradiction line, confirm (the owner picks a value, which
-   writes an `owner_stated` claim). Absence lines carry `it happened`, with an optional
+   writes an `owner_stated` claim). An ask absence in `needs_you` carries `it happened`
+   in place of done. Absence lines carry `it happened`, with an optional
    permalink to the evidence. The click records two things. A dated feedback event,
    keyed by the absence's own key (D26) and the day shown, is a candidate false-alarm
    label for the evaluation (D27). A suppression hides that absence episode from the

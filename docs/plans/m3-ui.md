@@ -39,7 +39,8 @@ Core, in build order:
 
 Core reads one base store, built once at start and never written. Building it uses only
 the replay client with no backend that `digest demo` uses, which cannot call a model
-(`src/digest/cli.py:610-617`, `src/digest/llm/client.py:37`).
+(`_demo_selections` in `src/digest/cli.py` builds `LLM(None, ..., "replay")`; `LLM.__init__`
+in `src/digest/llm/client.py` drops the backend in replay mode).
 
 Stretch, only after core is green and reviewed, in this order: the two recorded scenarios
 of unit 7 (the CM bracket blocker, the private leads message) as one-click buttons, after

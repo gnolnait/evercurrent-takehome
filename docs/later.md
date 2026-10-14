@@ -4,10 +4,10 @@ Everything here is out of v1 (SPEC.md section 3). Each entry names the trigger t
 would promote it.
 
 - Asks back. One button-answerable question per person per day when a gate-relevant
-  belief has low confidence and exactly one plausible answerer exists. Trigger: ledger
-  precision holds through M3 and days 6 to 7 are free. D27 sets the order: questions
-  come after the `it happened` labels (Interaction section below), and the question
-  appears in the thread of the reader's digest DM.
+  belief has low confidence and exactly one plausible answerer exists. Not in the D27
+  chain: step 3 there is the reader asking, not the system. Trigger:
+  step 2 of the Interaction section below has run. The question appears in the thread
+  of the reader's digest DM.
 - Interactive agent in Slack. Thread equals session keyed on (channel, thread_ts); emoji
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
@@ -132,9 +132,9 @@ In order. Each item names its trigger. Measured numbers are from
    text, by a labeler who does not see the extractor output. The ledger gate becomes the
    key-error rate, with a recall guard and key stability across two recordings.
    Trigger: before the ledger.
-5. Delivery records and a seen record per reader. The digest window is built
-   (`docs/plans/digest-window.md`); today the caller states the previous digest, and an
-   item cut by a score threshold or a section cap on its own day does not come back.
+5. Delivery records. The digest window is built (`docs/plans/digest-window.md`); today
+   the caller states the previous digest. The seen record per reader, which brings back
+   an item that a score threshold or a section cap cut, is Interaction step 1 below.
    Trigger: live delivery (D7).
 6. Stage key records the concrete model id, and a run refuses a mismatch. Today the key
    holds the logical name, so a model change in `config/models.yaml` reuses old runs.
