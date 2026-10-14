@@ -2,8 +2,8 @@
 
 Status: v0.2, 2026-10-13. Process stage 1 (`docs/process.md`), full process: Codex writes
 the tests, an Opus subagent writes the code, every test is RED-GREEN proven, both review
-lanes run. v0.2 folds in the advisor review and an independent Codex plan review. Tests
-start after `docs/plans/ask-audience.md` merges, because both change `select`.
+lanes run. v0.2 folds in the advisor review and an independent Codex plan review. The
+branch builds on `docs/plans/ask-audience.md`, because both change `select`.
 
 ## Goal
 
