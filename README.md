@@ -30,15 +30,13 @@ Part of the mechanical engineer's digest (summaries and sources trimmed):
 Daily digest for Nadia Brenner (ME) - 2026-10-19
 Since your digest of 2026-10-16
 
-Not happened
-- Not happened: Grace Okonkwo asked Ana Folau, no reply for 3 working days
-  EM Grace Okonkwo asks FW owner Ana Folau when TST-SAF-01 will be rerun on the DVT firmware ...
-  source: https://kestrel-k2.slack.com/archives/C0ENGEF/p1791997800010040
-
 Risks
 - PN-11020 chassis base built to stale Rev B drawing pack (PN-11020, V-SUNRISE, DOC-11020-CM, chassis) [must see]
   FAI photos and CMM for PN-11020 show the Rev B hole pattern. Sunrise is building from a stale drawing pack. ...
   source: https://kestrel-k2.slack.com/archives/C0EXTCM/p1792164600010061
+- Top-cover DFM review open and blocking G-DVT1 (G-TR1, PN-51010, G-DVT1) [must see]
+  The top-cover DFM review is still open and waiting on snap detail feedback. ...
+  source: https://kestrel-k2.slack.com/archives/C0KPROG/p1792423800010077
 ```
 
 The run takes about 5 s on a laptop; a test holds it under 60 s. A digest shows the sections that have lines (Needs you,

@@ -115,8 +115,8 @@ In order. Each item names its trigger. Measured numbers are from
    stalls; the report's "false-alarm rate" today is false detections over all detections
    (7 of 23). Score whole episodes, not one row per open task per day, and report the
    delay in days. Then add per-scenario tests on task-link extraction, because silence
-   is counted from links the extractor writes; ask absences go only to the asker and the
-   owner. Trigger: 30% of the detected absences are false.
+   is counted from links the extractor writes. Trigger: 30% of the detected absences are
+   false.
 2. Claim value against the cited text (D5). Check each claim value in the cited message
    after Slack-aware normalization (mentions, links, markup, curly quotes); on a miss,
    search the message for a supporting span and check again before the drop. A verbatim
