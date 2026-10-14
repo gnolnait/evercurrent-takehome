@@ -167,6 +167,13 @@ so that every side effect is safe to repeat.
   it, per the API terms.
 
 In this repo (built): ingest is an upsert on (channel_id, ts) in `src/digest/store.py`,
-so a repeated event is harmless, and stage runs resume after a crash. Designed, not
-built: the Slack client with the retry handlers, the delivery ledger and their tests
-(D7, D13).
+so a repeated event is harmless, and stage runs resume after a crash. `digest post`
+sends through the Slack SDK with its retry handlers: a connection error is retried at
+most once, and for bot DMs a 429 is retried at most once after Slack's `Retry-After`
+time. Any failure stops the run; for bot DMs, `invalid_auth` or `not_authed` also says
+whether the token came from the environment or `.env`. A message that would break Slack's
+limits is cut, not dropped (a section at 3000 characters, at most 50 blocks with a count
+of the lines left out). `digest seed` keeps a map of what it posted, so a rerun resumes,
+and it retries a 429 up to five times after `Retry-After`. Designed, not built: the
+delivery ledger, so that a rerun sends only the missing digests; live ingest with each
+event stored before the ack; and the tests for both (D7, D13).

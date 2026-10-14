@@ -13,7 +13,7 @@ from digest.absence import detect_absences
 from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
-from digest.models import ts_micros
+from digest.models import Item, ts_micros
 from digest.priors import Priors
 from digest.project import ChecklistTask, add_working_days
 from digest.store import Store
@@ -104,47 +104,16 @@ def select_digest(
     without one, the digest is a first digest. An item's newest evidence is the greatest `event_ts` among the stored messages
     its evidence cites, so an edit counts as new evidence.
 
-    Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not
-    exactly the end of `day` in the world's zone, or a store with extract deltas pending.
-    The store keeps only the latest version of each item, so a store replayed past `day`
-    cannot show `day`: its refusal names a fresh store as the remedy. Raise KeyError for an unknown user and ValueError for a bot. The
-    caller checks that the store holds the world: replay stores the world directory name,
-    and `world` does not carry it.
+    Raise ValueError for a store that `check_store_day` refuses. Raise KeyError for an
+    unknown user and ValueError for a bot.
     """
-    zone = ZoneInfo(world.timezone)
-    as_of = datetime.combine(day, time.max, zone).astimezone(UTC)
-    until = store.get_meta("until")
-    if until is None:
-        raise ValueError(f"store {store.path} has no meta key 'until'; run digest replay first")
-    try:
-        replayed = datetime.fromisoformat(until)
-    except ValueError:
-        replayed = None
-    if replayed is None or replayed.tzinfo is None:
-        raise ValueError(
-            f"store {store.path} meta key 'until' is {until!r}, "
-            "not an ISO timestamp with a UTC offset"
-        )
-    if replayed > as_of:
-        raise ValueError(
-            f"store {store.path} is replayed until {until}, past the end of day {day} "
-            f"({as_of.isoformat()}), and keeps no earlier item versions; use a fresh --db, "
-            f"replay it to day {day}, then run digest extract"
-        )
-    if replayed != as_of:
-        raise ValueError(
-            f"store {store.path} is replayed until {until}, before the end of day {day} "
-            f"({as_of.isoformat()}); run digest replay --until {day}, then digest extract"
-        )
-    if store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of):
-        raise ValueError(
-            f"store {store.path} has extract deltas pending as of day {day}; "
-            "run digest extract first"
-        )
+    check_store_day(store, world, day)
     try:
         profile = profile_for(world, user_id)
     except ValueError as error:
         raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
+    zone = ZoneInfo(world.timezone)
+    as_of = datetime.combine(day, time.max, zone).astimezone(UTC)
     items = store.items(as_of)
     absences = detect_absences(store, world.project, priors, as_of, zone)
     # Extract cites only messages of the item's own thread. A cited message the store does not
@@ -178,14 +147,65 @@ def select_digest(
     )
 
 
-def line_parts(
-    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+def replayed_until(store: Store) -> datetime:
+    """The instant in the store's `meta.until`.
+
+    Raise ValueError for a store without `meta.until`, or for a value that is not an ISO
+    timestamp with a UTC offset.
+    """
+    until = store.get_meta("until")
+    if until is None:
+        raise ValueError(f"store {store.path} has no meta key 'until'; run digest replay first")
+    try:
+        replayed = datetime.fromisoformat(until)
+    except ValueError:
+        replayed = None
+    if replayed is None or replayed.tzinfo is None:
+        raise ValueError(
+            f"store {store.path} meta key 'until' is {until!r}, "
+            "not an ISO timestamp with a UTC offset"
+        )
+    return replayed
+
+
+def check_store_day(store: Store, world: World, day: date) -> None:
+    """Refuse a store that cannot show `day`.
+
+    Raise ValueError for a store that `replayed_until` refuses, a store whose `meta.until`
+    is not exactly the end of `day` in the world's zone, or a store with extract deltas
+    pending. The store keeps only the latest version of each item, so a store replayed
+    past `day` cannot show `day`: its refusal names a fresh store as the remedy. The
+    caller checks that the store holds the world: replay stores the world directory name,
+    and `world` does not carry it.
+    """
+    as_of = datetime.combine(day, time.max, ZoneInfo(world.timezone)).astimezone(UTC)
+    replayed = replayed_until(store)
+    until = store.get_meta("until")  # the stored text, so a refusal quotes it as it is
+    if replayed > as_of:
+        raise ValueError(
+            f"store {store.path} is replayed until {until}, past the end of day {day} "
+            f"({as_of.isoformat()}), and keeps no earlier item versions; use a fresh --db, "
+            f"replay it to day {day}, then run digest extract"
+        )
+    if replayed != as_of:
+        raise ValueError(
+            f"store {store.path} is replayed until {until}, before the end of day {day} "
+            f"({as_of.isoformat()}); run digest replay --until {day}, then digest extract"
+        )
+    if store.thread_deltas("extract", EXTRACT_PROMPT_VERSION, "extract", as_of):
+        raise ValueError(
+            f"store {store.path} has extract deltas pending as of day {day}; "
+            "run digest extract first"
+        )
+
+
+def item_parts(
+    item: Item, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
 ) -> tuple[str, str]:
-    """The line's heading and its one-line summary, without "- ", "[must see]" or sources.
+    """The item's heading and its one-line summary, without "- ", "[must see]" or sources.
 
     A checklist absence takes the task text and owner role from the world's checklist.
     """
-    item = line.item
     detail = item.absence
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
@@ -204,6 +224,13 @@ def line_parts(
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
         head = f"Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
     return head, _plain(item.summary)
+
+
+def line_parts(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> tuple[str, str]:
+    """The line's heading and its one-line summary, as `item_parts` gives them."""
+    return item_parts(line.item, names, tasks)
 
 
 def _line(

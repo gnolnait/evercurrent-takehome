@@ -12,18 +12,27 @@ from typing import Any, get_args
 
 import uvicorn
 import yaml
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData
 
-from digest.daily.render import SECTION_TITLES, context_lines, line_parts, window_line
+from digest import queries
+from digest.daily.profile import Profile
+from digest.daily.render import (
+    SECTION_TITLES,
+    context_lines,
+    item_parts,
+    line_parts,
+    window_line,
+)
 from digest.driver import Change, LineView
-from digest.models import Role
+from digest.models import ItemStatus, ItemType, Role
 from digest.room import (
     Edit,
     EditMessage,
+    ItemsRoom,
     PostMessage,
     ReseedLike,
     RoomLike,
@@ -61,6 +70,9 @@ _FIELDS: dict[str, tuple[str, ...]] = {
     "run_scenario": ("name",),
 }
 _BOOLEANS = {"true": True, "false": False}
+# The search fields of the open-items page. An empty value or "any" sets no filter.
+_SEARCH = ("text", "type", "status", "owner")
+_NO_FILTER = ("", "any")
 # Pydantic also reads a Unix time or a datetime as a date; the form allows YYYY-MM-DD only.
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCENARIOS: tuple[str, ...] = get_args(RunScenario.model_fields["name"].annotation)
@@ -72,7 +84,10 @@ _SAVED_NOTE = (
 
 
 def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
-    """Routes: GET /, POST /edit, POST /reset, POST /save; with `reseed`, POST /reseed."""
+    """Routes: GET /, GET /items, POST /edit, POST /reset, POST /save; with `reseed`, POST /reseed.
+
+    GET /items answers 404 for a room that is not an `ItemsRoom`.
+    """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     curated = _curated(Path("data") / "world" / room.state().world.name / "room-edits.yaml")
     # The message changes at the last save; empty before the first save (plan S3).
@@ -110,6 +125,39 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
     @app.get("/")
     async def page() -> HTMLResponse:
         return render()
+
+    @app.get("/items")
+    async def items(request: Request) -> HTMLResponse:
+        """The open-items page (plan m4-items I1 to I4)."""
+        if not isinstance(room, ItemsRoom):
+            raise HTTPException(status_code=404)
+        query = {name: request.query_params.get(name, "") for name in _SEARCH}
+        chosen = {
+            name: None if value in _NO_FILTER else value
+            for name, value in query.items()
+            if name != "text"
+        }
+        state = room.state()
+        sections: list[tuple[str, tuple[queries.ItemView, ...]]] = []
+        refusal = None
+        with room.items_context() as ctx:
+            if query["text"].strip() or any(chosen.values()):
+                try:
+                    results = queries.search_items(
+                        ctx,
+                        query["text"],
+                        type=chosen["type"],
+                        status=chosen["status"],
+                        owner=chosen["owner"],
+                        limit=50,
+                    )
+                except ValueError as error:
+                    refusal = str(error)
+                else:
+                    sections.append(("Results", results))
+            sections.append(("Open blockers", queries.list_open_blockers(ctx)))
+            sections.append(("Not happened", queries.list_absences(ctx)))
+        return _items_page(state, query, sections, refusal)
 
     @app.post("/edit")
     async def edit(request: Request) -> Response:
@@ -353,6 +401,44 @@ def _page(
         seed=seed,
     )
     return HTMLResponse(html, status_code=200 if refusal is None else status)
+
+
+def _items_page(
+    state: RoomState,
+    query: dict[str, str],
+    sections: Sequence[tuple[str, Sequence[queries.ItemView]]],
+    refusal: str | None,
+) -> HTMLResponse:
+    """The open-items page; a refusal answers 400 and shows its reason.
+
+    Each item names the readers whose current selection holds it.
+    """
+    world = state.world
+    names = {persona.user_id: persona.name for persona in world.personas}
+    tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
+    readers: dict[str, list[Profile]] = {}
+    for selection in state.selections:
+        for item_id in {line.item.item_id for line in selection.lines}:
+            readers.setdefault(item_id, []).append(selection.profile)
+    html = _TEMPLATES.get_template("items.html").render(
+        world=world,
+        query=query,
+        item_types=get_args(ItemType),
+        item_statuses=get_args(ItemStatus),
+        humans=[p for p in world.personas if p.kind == "human"],
+        refusal=refusal,
+        sections=[
+            (
+                title,
+                [
+                    (view, *item_parts(view.item, names, tasks), readers.get(view.item.item_id, []))
+                    for view in views
+                ],
+            )
+            for title, views in sections
+        ],
+    )
+    return HTMLResponse(html, status_code=200 if refusal is None else 400)
 
 
 def _title(
