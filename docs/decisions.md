@@ -571,7 +571,8 @@ an API.
 
 ## D27. Interaction model: inform, ask by button, draft writes, earn authority
 
-Status: designed, 2026-10-13. Built: the digest informs. Nothing else below is built.
+Status: designed, 2026-10-13. Built: the digest posts cited lines. Nothing else below is
+built, including the per-line actions and their feedback events.
 
 Decision.
 - The digest is a briefing that a reader finishes in one scan. It is the morning
@@ -582,13 +583,25 @@ Decision.
 - Ask: at most one open question per user, answerable with a button, only about the
   system's own uncertainty (did this happen, is this yours). Never a free-text prompt,
   and never "what do you want to see?".
-- Act: a write outside the store (a Slack reply, a nudge, a ticket edit) is a draft that
-  the user edits and sends. The system never posts or writes on its own.
-- Earn authority: a line type gets a draft action only when its precision, measured on
-  reader labels, passes a gate. For absence lines the label is `it happened`, and the gate
-  is a false-alarm rate of at most 10% on at least 50 labels (both numbers are a design
-  choice, not a measurement). Today 7 of 23 detected absences on the golden set are false,
-  so absence lines get `it happened`, not a draft.
+- Act: an action on project work (a reply in a project thread, a nudge, a ticket edit)
+  is a draft that the user edits and sends. The system never takes such an action on its
+  own. Digests, real-time alerts and onboarding messages are the product's own messages,
+  not drafts.
+- Earn authority: a line type gets a draft action only when its false rate on labelled
+  lines passes a gate. For absence lines:
+  - Unit: one absence episode per reader (SPEC section 5 step 8), counted once however
+    many days it shows.
+  - Labels: a reviewer labels a sample of shown episodes real or false against the
+    covered sources. An `it happened` click adds its episode to the sample as a candidate
+    false label, which the reviewer confirms. Unlabelled episodes do not count.
+  - Gate: shown-absence false rate (false episodes over labelled episodes) of at most 10%
+    on at least 50 labelled episodes. Both numbers are a design choice, not a
+    measurement. This is not the A6 rate (SPEC section 7), which counts false alarms over
+    the simulator's non-stall silences.
+  - Today: 7 of 23 detected absences on the simulator's golden set are false. That is a
+    different set and metric, but it says absence lines get `it happened`, not a draft.
+  Every other line type needs its own labels and threshold before it gets a draft
+  action; none is defined yet.
 - Order, each step a gate for the next: per-line actions with a seen record; `it happened`
   labels; thread questions answered by the D20 read tools; drafted replies to ask
   absences; drafted ticket edits. The steps are in `docs/later.md`.

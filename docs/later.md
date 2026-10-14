@@ -5,11 +5,14 @@ would promote it.
 
 - Asks back. One button-answerable question per person per day when a gate-relevant
   belief has low confidence and exactly one plausible answerer exists. Trigger: ledger
-  precision holds through M3 and days 6 to 7 are free.
+  precision holds through M3 and days 6 to 7 are free. D27 sets the order: questions
+  come after the `it happened` labels (Interaction section below), and the question
+  appears in the thread of the reader's digest DM.
 - Interactive agent in Slack. Thread equals session keyed on (channel, thread_ts); emoji
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
-  the take-home is submitted.
+  the take-home is submitted. D27 sets the order: questions in the digest's thread come
+  after the per-line actions and labels (Interaction section below).
 - Agentic feature set beyond the v1 MCP server (design sketch, so v1 data structures
   do not block it). The v1 MCP server already lets a user's own assistant read the
   store and act through feedback events; that assistant supplies the agent loop, the
@@ -158,22 +161,27 @@ In order. Each item names its trigger. Measured numbers are from
 
 ## Interaction (D27), after the 2026-10-14 interview
 
-In order. Each step is a gate for the next.
+In order. Each step is a gate for the next. Steps 1 and 2 build what SPEC section 3
+already puts in v1 scope; the other steps are out of v1.
 
-1. Per-line actions in the Slack digest (done, snooze, not mine, `it happened`) and a
-   seen record per item. The seen record also brings back an item that the score
-   threshold or a section cap cut on the day its evidence landed. Trigger: delivery to a
-   real workspace.
-2. `it happened` labels until the absence false-alarm rate is measured on at least 50
-   reader labels. Trigger: step 1.
+1. The v1 per-line actions (SPEC section 5 step 8: done, snooze, not mine, `it happened`)
+   as Slack buttons, the `seen` record of SPEC section 4, and the absence line wording of
+   SPEC section 5 step 7 (today the lines start with "Not happened:"). The seen record
+   also brings back an item that the score threshold or a section cap cut on the day its
+   evidence landed. Trigger: delivery to a real workspace.
+2. Shown-absence labels (D27) until the false rate is measured on at least 50 labelled
+   episodes. Trigger: step 1.
 3. Questions in the digest's thread, answered by the D20 read tools with cited records.
    Trigger: the reader-scoped server exists.
 4. Drafted replies to ask absences, which the reader edits and sends. Trigger: the
-   absence false-alarm rate passes the D27 gate.
-5. A phase-shaped digest inside a gate buffer: days to the gate, open blockers, and
-   checklist tasks with no evidence first. `Project.phase_on` exists and nothing calls it
-   yet. Trigger: a reader asks for gate status in the thread more than once a week.
-6. Drafted ticket edits from a blocker line. Trigger: a tracker connector exists (D25).
+   shown-absence false rate passes the D27 gate.
+5. Drafted ticket edits from a blocker line. Trigger: a tracker connector exists (D25),
+   and blocker lines pass their own labelled gate (D27), which is not defined yet.
+
+Not in the chain: a phase-shaped digest inside a gate buffer, with days to the gate, open
+blockers and checklist tasks with no evidence first. `ProjectConfig.phase_on` exists, and
+no production code calls it yet. Trigger: a reader asks for gate status in the thread
+more than once a week.
 
 ## Structure (D26), after the 2026-10-14 interview
 
