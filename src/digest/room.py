@@ -398,6 +398,16 @@ class RoomLike(Protocol):
 
 
 @runtime_checkable
+class FreshRoom(RoomLike, Protocol):
+    """A room that applies a message change as the first one after a reset.
+
+    The web app calls `apply` with `fresh` only for a curated or scenario form.
+    """
+
+    def apply(self, edit: Edit, *, fresh: bool = False) -> RoomState: ...
+
+
+@runtime_checkable
 class SavingRoom(RoomLike, Protocol):
     """A room that writes its corpus copy (plan m3-room-edits S1)."""
 
@@ -446,16 +456,26 @@ class Room:
         self._changed: dict[tuple[str, str], Event] = {}  # events the message changes wrote
         self._state = self._build((), None, {}, None)
 
-    def apply(self, edit: Edit) -> RoomState:
-        """Apply the edit; on a refusal raise ValueError and keep the state unchanged."""
-        edits = (*self._state.edits, edit)
+    def apply(self, edit: Edit, *, fresh: bool = False) -> RoomState:
+        """Apply the edit; on a refusal raise ValueError and keep the state unchanged.
+
+        With `fresh`, a message change drops every earlier message change since the last
+        reset, keeps the world edits and applies as the first message change, so a
+        curated edit replays from its recorded cassettes. A world edit ignores `fresh`.
+        """
         if not isinstance(edit, _MESSAGE_KINDS):
+            edits = (*self._state.edits, edit)
             self._state = self._build(edits, self._store, self._changed, self._store)
             return self._state
-        # A scenario starts the room store again from the base store (plan M4).
-        scenario = isinstance(edit, RunScenario)
-        source = self._base.store_path if scenario or self._store is None else self._store
-        changed = {} if scenario else dict(self._changed)
+        earlier = self._state.edits
+        if fresh:
+            earlier = tuple(e for e in earlier if not isinstance(e, _MESSAGE_KINDS))
+        edits = (*earlier, edit)
+        # A scenario or a fresh change starts the room store again from the base store
+        # (plan M4).
+        restart = fresh or isinstance(edit, RunScenario)
+        source = self._base.store_path if restart or self._store is None else self._store
+        changed = {} if restart else dict(self._changed)
         stamp = dt.datetime.combine(self._base.day, _STAMP) + dt.timedelta(
             minutes=sum(isinstance(e, _MESSAGE_KINDS) for e in edits)
         )

@@ -361,14 +361,14 @@
 <p class="hint">A message change runs extraction again for day {{ day }} on a copy of the store. It replays from the recorded cassettes; a change with no cassette is refused unless digest serve runs with --record. Message changes since the last reset: {{ message_changes }}.</p>
 <div class="actions">
   <span class="label">Scenarios</span>
-{% for name in scenarios %}  <form method="post" action="/edit"><input type="hidden" name="kind" value="run_scenario"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="outline">Run {{ name }}</button></form>
+{% for name in scenarios %}  <form method="post" action="/edit"><input type="hidden" name="kind" value="run_scenario"><input type="hidden" name="fresh" value="true"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="outline">Run {{ name }}</button></form>
 {% endfor %}  <form method="post" action="/save"><button type="submit">Save the corpus copy</button></form>
 </div>
 <p class="hint">A scenario drops the message changes before it and posts its script line at the script's own time.</p>
 {% if curated %}
 <h3 class="label">Curated edits</h3>
 <ul class="curated">
-{% for entry in curated %}  <li><form method="post" action="/edit">{% for name, value in entry.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}<button type="submit" class="outline">{{ entry.name }}</button></form><span>{{ entry.description }}</span></li>
+{% for entry in curated %}  <li><form method="post" action="/edit">{% for name, value in entry.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}<input type="hidden" name="fresh" value="true"><button type="submit" class="outline">{{ entry.name }}</button></form><span>{{ entry.description }}</span></li>
 {% endfor %}</ul>
 {% endif %}
 <details class="channel"><summary>Post a new message</summary>
