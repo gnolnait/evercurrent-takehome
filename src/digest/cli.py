@@ -266,7 +266,8 @@ def _load_seed_map(path: Path) -> SeedMap:
     """The seed map at `path`. A missing or unreadable map, or one for another world, exits 1.
 
     A refusal prints no value read from the file, because a wrong path such as `.env` can
-    hold a token. A validation error shows the location and message of each problem only.
+    hold a token. A validation error shows the top-level field and the message of each
+    problem only, each line once.
     """
     # Each refusal comes after its try statement, so no exception chains to it.
     failure: str | None = None
@@ -277,9 +278,12 @@ def _load_seed_map(path: Path) -> SeedMap:
     except UnicodeDecodeError as error:
         failure = f"{path}: not a seed map: {error}"
     except ValidationError as error:
+        # A deeper `loc` part can be a dictionary key from the file, so show the top field only.
         problems = "; ".join(
-            f"{'.'.join(str(part) for part in problem['loc']) or 'map'}: {problem['msg']}"
-            for problem in error.errors(include_input=False, include_url=False)
+            dict.fromkeys(
+                f"{problem['loc'][0] if problem['loc'] else 'map'}: {problem['msg']}"
+                for problem in error.errors(include_input=False, include_url=False)
+            )
         )
         failure = f"{path}: not a seed map: {problems}"
     if failure is not None:
