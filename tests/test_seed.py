@@ -2637,11 +2637,11 @@ def test_rs9_cli_reads_selected_corpora_and_applies_until_day_to_both(
     removed = event(ts=removed_ts, text="removed")
     later = event(ts=later_ts, text="old day two")
     second_removed = event(ts=second_removed_ts, text="also removed")
-    reference_events = [second_removed, later, root, removed]
+    reference_events = [root, removed, second_removed, later]
     edited_events = [
-        later.model_copy(update={"text": "new day two"}),
-        event(ts=reply_ts, thread_ts=root_ts, text="new reply"),
         root.model_copy(update={"text": "new <@U0ME01>"}),
+        event(ts=reply_ts, thread_ts=root_ts, text="new reply"),
+        later.model_copy(update={"text": "new day two"}),
     ]
     client = FakeSlackSeedClient(world)
     prepare_cli(monkeypatch, client)
@@ -2690,8 +2690,8 @@ def test_rs9_cli_reads_selected_corpora_and_applies_until_day_to_both(
     if mode != "events-only":
         suffix.extend(
             [
-                f"not deleted: {second_removed.channel_id}:{second_removed.ts}",
                 f"not deleted: {removed.channel_id}:{removed.ts}",
+                f"not deleted: {second_removed.channel_id}:{second_removed.ts}",
             ]
         )
     assert result.output.splitlines()[-len(suffix) :] == suffix
