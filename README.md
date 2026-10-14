@@ -89,8 +89,8 @@ Seeding needs the bot scopes `chat:write.customize`, `channels:read`, `channels:
 
 ## Change who reads what
 
-`uv run python -m digest serve` opens a page on 127.0.0.1:8000 (about 10 s to build the
-day-6 store from the cassettes). It shows the three digests side by side; the presenter
+`uv run python -m digest serve` builds the day-6 store from the cassettes, then serves a
+page at http://127.0.0.1:8000; open that URL in a browser. The page shows the three digests side by side; the presenter
 changes a reader's role, a channel's membership or private flag, an entity's owner role,
 a gate date or a task's owner role, and the page shows each reader's new digest and what
 changed, with the reason for each line. Reset returns to the recorded world. An edit
