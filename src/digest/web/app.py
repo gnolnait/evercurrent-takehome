@@ -13,7 +13,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData
 
-from digest.daily.render import SECTION_TITLES, line_parts, window_line
+from digest.daily.render import SECTION_TITLES, context_lines, line_parts, window_line
 from digest.driver import Change, LineView
 from digest.models import Role
 from digest.room import (
@@ -138,6 +138,7 @@ def _page(state: RoomState, refusal: str | None) -> HTMLResponse:
             {
                 "selection": selection,
                 "window": window_line(selection),
+                "context": context_lines(world, selection),
                 "sections": [(title, rows) for title, rows in sections if rows],
                 "diff": diff,
                 "added": [(view, _title(view, headings, ids, names)) for view in diff.added],

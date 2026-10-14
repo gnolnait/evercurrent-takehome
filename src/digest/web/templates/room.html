@@ -251,7 +251,7 @@
 {% for reader in readers %}{% set profile = reader.selection.profile %}
 <section class="card">
   <div class="reader-head"><h3>{{ profile.name }}</h3><span class="pill role">{{ profile.role }}</span></div>
-  <p class="reader-window">{{ reader.window }}</p>
+  {% for text in reader.context %}<p class="reader-window">{{ text }}</p>{% endfor %}
   {% for title, rows in reader.sections %}
   <div class="section">
   <h4 class="label">{{ title }}</h4>

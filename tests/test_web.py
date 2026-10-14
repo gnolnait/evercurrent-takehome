@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import date
+from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from digest.daily.profile import Profile
-from digest.daily.render import line_parts
+from digest.daily.render import context_lines, line_parts
 from digest.daily.select import Selection
 from digest.driver import Change, LineView, ReaderDiff
 from digest.room import (
@@ -313,6 +314,59 @@ def test_page_shows_world_digests_forms_and_escapes_text(state: RoomState) -> No
         urlparse(node.attrs.get("href") or "").netloc != workspace for node in page.find("a")
     )
     assert NO_CHANGE not in text
+
+
+def test_page_shows_each_readers_context_lines_in_order_and_escapes_text(
+    state: RoomState,
+) -> None:
+    world = state.world.model_copy(
+        update={
+            "project": state.world.project.model_copy(
+                update={
+                    "gates": tuple(
+                        gate.model_copy(update={"name": "Review <script>gate</script> & inspect"})
+                        for gate in state.world.project.gates
+                    )
+                }
+            )
+        }
+    )
+    state = state.model_copy(update={"world": world})
+
+    with TestClient(create_app(FakeRoom(state))) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    page = Page(response.text)
+    assert not page.find("script")
+    digests = next(
+        node
+        for node in page.find("section")
+        if any(
+            child.tag == "h2" and child.text() == "Digests"
+            for child in node.children
+            if isinstance(child, Element)
+        )
+    )
+    for selection in state.selections:
+        card = next(
+            node
+            for node in digests.nodes()
+            if node.tag == "section"
+            and any(
+                heading.tag == "h3" and heading.text() == selection.profile.name
+                for heading in node.nodes()
+            )
+            and node is not digests
+        )
+        expected = context_lines(world, selection)
+        assert len(expected) == 2
+        text = card.text()
+        for context in expected:
+            assert context in text
+            assert escape(context) in response.text
+        positions = [text.index(context) for context in expected]
+        assert positions == sorted(positions)
 
 
 VALID_EDITS: list[tuple[dict[str, str], Edit]] = [

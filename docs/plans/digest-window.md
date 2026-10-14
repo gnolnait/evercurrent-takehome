@@ -97,6 +97,9 @@ digest.
   - the header and the window block are fixed blocks: the overflow check becomes
     `2 + len(body) + len(footer) > MAX_BLOCKS` and the kept slice
     `MAX_BLOCKS - 3 - len(footer)`; orphan-title removal and the footer stay.
+  - Amended 2026-10-13 (`docs/plans/phase-line.md`): `context_lines` returns the window
+    line and the phase line. The window block and the `text` fallback hold both, and the
+    block arithmetic does not change.
 
 ## Acceptance
 
