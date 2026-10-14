@@ -509,14 +509,21 @@ class Room:
         the edit flag and the stamp.
 
         `path` must be a folder strictly inside `<working directory>/.room/`; any other
-        path is refused with ValueError before any write. The copy is built in a temporary
+        path is refused with ValueError before any write, and so are a `.room` that is a
+        link or a junction and a path inside `data/world`. The copy is built in a temporary
         folder beside `path`, which replaces `path` only when every file is written. On a
         failure the previous copy stays as it was and the temporary folder is removed.
         """
-        root = (Path.cwd() / ".room").resolve()
+        cwd = Path.cwd().resolve()
+        root = cwd / ".room"
+        # A link at .room could point the copy at the committed corpus.
+        if root.is_symlink() or root.is_junction() or root.resolve() != root:
+            raise ValueError(f"cannot save the room: {root} is a link or resolves elsewhere")
         target = path.resolve()
         if target == root or not target.is_relative_to(root):
             raise ValueError(f"the room saves only into a folder inside {root}, not {path}")
+        if target.is_relative_to(cwd / "data" / "world"):
+            raise ValueError(f"cannot save the room inside the committed worlds: {path}")
         if target.exists() and not target.is_dir():
             raise ValueError(f"cannot save the room over {path}: it is not a folder")
         events = dict(self._corpus)
