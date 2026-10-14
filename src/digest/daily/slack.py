@@ -22,6 +22,22 @@ ELLIPSIS = "\N{HORIZONTAL ELLIPSIS}"
 _PARTIAL_TOKEN = re.compile(r"<[^>]*$|&[a-z]*$")
 
 
+def slack_digest(
+    world: World,
+    selection: Selection,
+    *,
+    links: SeedMap | None,
+    authors: Mapping[str, str],
+    threaded: bool = True,
+) -> list[dict[str, Any]]:
+    """The digest as a top message and, when the thread holds items, one thread reply.
+
+    Each message is {"text": str, "blocks": list}. `threaded=False` gives the webhook
+    wording. See docs/plans/m5-layout.md; not built yet.
+    """
+    raise NotImplementedError
+
+
 def slack_message(
     world: World, selection: Selection, links: SeedMap | None = None
 ) -> dict[str, Any]:
