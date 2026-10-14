@@ -592,8 +592,11 @@ def serve(
 class _RoomReseed:
     """The room's reseed (plan m3-room-edits S2): the seeder over a saved corpus copy.
 
-    It plans the copy's posts and the committed posts as the reference, and calls the
-    seeder with them. It returns the seeder's lines and a summary line as text.
+    The reference is the corpus that Slack holds now: the last pushed corpus at
+    `.room/pushed-<world>.jsonl` when that file exists, else the committed corpus. After a
+    real run that ends without an error, the copy's corpus becomes the pushed corpus. A dry
+    run or an error never writes that file. It returns the seeder's lines and a summary
+    line as text.
     """
 
     def __init__(self, client: SlackSeedClient, world_dir: Path) -> None:
@@ -607,11 +610,14 @@ class _RoomReseed:
                 "the seeder cannot update messages yet: digest.seed.seed takes no reference"
             )
         world = load_world(self._world_dir / "world.yaml")
-        copy = list(read_events(copy_dir / "events.jsonl", world.workspace_url))
-        committed = list(read_events(self._world_dir / "events.jsonl", world.workspace_url))
+        copy_path = copy_dir / "events.jsonl"
+        copy = list(read_events(copy_path, world.workspace_url))
+        pushed = Path(".room") / f"pushed-{world.name}.jsonl"
+        source = pushed if pushed.is_file() else self._world_dir / "events.jsonl"
+        reference = list(read_events(source, world.workspace_url))
         # The seeder adds `reference` in a later change; the dict keeps this call valid until then.
         options: dict[str, Any] = {
-            "reference": plan_seed(world, committed, None),
+            "reference": plan_seed(world, reference, None),
             "pace": 1.2,
             "sleep": sleep,
             "dry_run": dry_run,
@@ -628,13 +634,31 @@ class _RoomReseed:
         # _slack_failure only.
         except Exception as error:
             raise ValueError(_slack_failure(error)) from None
+        if not dry_run:
+            _replace_file(pushed, copy_path.read_bytes())
+        # The seeder adds `updated` to its report in a later change.
+        updated = getattr(report, "updated", None)
+        counts = "" if updated is None else f"updated {updated}; "
         summary = (
-            f"dry run: complete {report.complete}"
+            f"dry run: {counts}complete {report.complete}"
             if dry_run
-            else f"seeded {report.posts} posts and {report.files} files in {report.channels} "
-            f"channels; map {report.map_path}"
+            else f"{counts}seeded {report.posts} posts and {report.files} files in "
+            f"{report.channels} channels; map {report.map_path}"
         )
         return f"{lines.getvalue()}{summary}"
+
+
+def _replace_file(path: Path, content: bytes) -> None:
+    """Write `content` to `path` atomically: a temporary file in the same directory, then
+    a replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as handle:
+        handle.write(content)
+    try:
+        os.replace(handle.name, path)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 @app.command("eval")
