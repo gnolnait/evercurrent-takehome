@@ -374,6 +374,7 @@ def test_get_item_ask_absence(ctx: QueryContext) -> None:
     assert actual is not None
     assert actual.item == expected
     people = {p.user_id: p.name for p in ctx.world.personas}
+    assert expected.owner is not None  # an ask absence names the person asked
     assert actual.owner_name == people[expected.owner]
 
 
