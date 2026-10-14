@@ -14,6 +14,7 @@ import logging
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn, Protocol, assert_never, runtime_checkable
 from zoneinfo import ZoneInfo
@@ -30,6 +31,7 @@ from digest.llm.client import LLM, from_settings
 from digest.models import Event, Frozen, Role, micros_since_epoch
 from digest.priors import Priors
 from digest.project import ChecklistTask, Gate, add_working_days
+from digest.queries import QueryContext
 from digest.replay import read_events
 from digest.settings import Settings
 from digest.store import Store
@@ -407,6 +409,13 @@ class SavingRoom(RoomLike, Protocol):
     def save(self, path: Path) -> Path: ...
 
 
+@runtime_checkable
+class ItemsRoom(RoomLike, Protocol):
+    """A room that the open-items page reads (plan m4-items I4)."""
+
+    def items_context(self) -> AbstractContextManager[QueryContext]: ...
+
+
 class ReseedLike(Protocol):
     """The seed owner's reseed of a saved corpus copy (plan m3-room-edits S2)."""
 
@@ -499,6 +508,10 @@ class Room:
 
     def state(self) -> RoomState:
         return self._state
+
+    def items_context(self) -> AbstractContextManager[QueryContext]:
+        """Open the current room store read-only and yield its query context (plan I4)."""
+        raise NotImplementedError
 
     def save(self, path: Path) -> Path:
         """Write the corpus copy with the room's message changes (plan S1); return `path`.

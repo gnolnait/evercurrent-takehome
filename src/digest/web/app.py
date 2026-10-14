@@ -111,6 +111,11 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
     async def page() -> HTMLResponse:
         return render()
 
+    @app.get("/items")
+    async def items(request: Request) -> HTMLResponse:
+        """The open-items page (plan m4-items I1 to I4)."""
+        raise NotImplementedError
+
     @app.post("/edit")
     async def edit(request: Request) -> Response:
         # A refusal is a ValueError (a bad form field here, an R3 check in the room) and

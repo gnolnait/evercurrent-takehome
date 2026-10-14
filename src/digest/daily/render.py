@@ -13,7 +13,7 @@ from digest.absence import detect_absences
 from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
-from digest.models import ts_micros
+from digest.models import Item, ts_micros
 from digest.priors import Priors
 from digest.project import ChecklistTask, add_working_days
 from digest.store import Store
@@ -197,6 +197,13 @@ def check_store_day(store: Store, world: World, day: date) -> None:
             f"store {store.path} has extract deltas pending as of day {day}; "
             "run digest extract first"
         )
+
+
+def item_parts(
+    item: Item, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> tuple[str, str]:
+    """The item's heading and its one-line summary, as `line_parts` gives them (plan m4-items I1a)."""
+    raise NotImplementedError
 
 
 def line_parts(
