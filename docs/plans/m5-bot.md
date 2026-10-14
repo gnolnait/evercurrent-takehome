@@ -124,7 +124,10 @@ An event is **live** when it is not an `undo` and no `undo` event names it. So a
 removes the effect of exactly its target.
 
 `active(store, reader, day) -> FeedbackState` reads the event log only, never the
-`items` table. It reads the live events whose `day` is at or before `day`:
+`items` table. When the store has no `feedback_events` table (a store built before
+this slice, opened with `Store.open_readonly`, which runs no schema script), `active`
+returns the empty state and `shown_marks` returns an empty dict. The check reads
+`sqlite_master`; it writes nothing. It reads the live events whose `day` is at or before `day`:
 
 - `resolved`: the `item_id` of each live `done` with `resolution: owner`, of any reader.
   It applies to every reader.
@@ -522,6 +525,8 @@ otherwise.
   `day` does not count. An undo of an owner's done removes it from `resolved`; an undo of
   a snooze removes it from `snoozed`; each undo leaves the other events in effect.
   `suppressed` is empty. The result is the same with the `items` table empty or full.
+  A store built without `feedback_events` and opened with `Store.open_readonly` gives the
+  empty state and an empty `shown_marks`, and the file does not change.
 - A6 (I6). The same idempotency key twice: one row, the second call returns None, also for
   undo and also when the second call would raise. Two clicks with the same action ts and
   block id on two messages are two keys. `shown_marks` gives the newest live event per
