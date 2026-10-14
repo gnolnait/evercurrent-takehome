@@ -7,7 +7,9 @@ The labels come from the world script, and the personas are simulated.
 
 import math
 import statistics
-from collections.abc import Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Literal
@@ -15,20 +17,20 @@ from zoneinfo import ZoneInfo
 
 from digest.daily.profile import Profile, can_see, profile_for
 from digest.daily.render import newest_evidence, select_digest
-from digest.daily.select import Line, Selection, window_start
+from digest.daily.select import Selection, window_start
 from digest.eval.extraction import (
     _absence_key,
     _AbsenceKey,
-    _pairs,
+    _qualifies,
+    _row,
     _run_days,
-    _table,
     _thread_of,
 )
 from digest.llm.client import LLM
 from digest.models import Frozen, Item, micros_since_epoch
 from digest.priors import Priors, TermName
 from digest.store import Store
-from digest.world.golden import Golden, read_golden
+from digest.world.golden import Golden, GoldenItem, read_golden
 from digest.world.load import load_world
 from digest.world.manifest import load_manifest
 from digest.world.schema import World
@@ -45,12 +47,17 @@ CONFIGS: tuple[tuple[str, frozenset[TermName]], ...] = (
     ("role-only", frozenset({"importance", "personal_relevance"})),
 )
 SEND_EVERYTHING = "send-everything"
+NAMES = (*(name for name, _ in CONFIGS), SEND_EVERYTHING)
 METRICS = ("overall recall", "overall nDCG", "ranked-lane recall", "ranked-lane nDCG")
 
 # A golden item's event id, or the key of a golden absence.
 _FactKey = str | _AbsenceKey
 # One persona-day: overall recall and nDCG, then ranked-lane recall and nDCG.
 _DayValues = tuple[float | None, float | None, float | None, float | None]
+# Item ids of the overall top 5 and of the ranked-lane top 5.
+_Top5 = tuple[tuple[str, ...], tuple[str, ...]]
+# The facts an item can deliver, in golden order.
+_Candidates = Callable[[Item], list[_FactKey]]
 
 
 class Scores(Frozen):
@@ -134,80 +141,63 @@ def verdict(
     c0: Mapping[str, float | None],
     off: Mapping[str, float | None],
     min_effect: float,
+    *,
+    moved: Mapping[str, int] | None = None,
 ) -> AblationRow:
-    """Keep, remove or no vote for one term, from each metric's relative drop (plan R8)."""
+    """Keep, remove or no vote for one term, from each metric's relative drop (plan R8).
+
+    `moved` holds, per metric, the persona-days whose value differs from C0 (plan R8a).
+    """
     drops: dict[str, float | None] = {}
     for metric, base in c0.items():
         value = off[metric]
         drops[metric] = None if not base or value is None else (base - value) / base
     votes = [drop >= min_effect for drop in drops.values() if drop is not None]
     result: Verdict = "no vote" if not votes else "keep" if any(votes) else "remove"
-    return AblationRow(term=term, drops=drops, verdict=result)
+    return AblationRow(term=term, drops=drops, moved=dict(moved or {}), verdict=result)
 
 
 def write_ranking_section(report: RankingReport) -> str:
-    """The "Ranking" section of the eval report, as Markdown (plan R9)."""
-    metrics = ("recall", "nDCG", "ranked-lane recall", "ranked-lane nDCG")
-    counts = ("n", "without", "personas")
-    unchanged = [
-        f"`{config.name}` changes no top 5 on this world, so it cannot move any metric."
-        for config in report.configs[1:]
-        if not config.changed_days
-    ]
-    c0 = report.configs[0]
+    """The "Ranking" section of the eval report, as Markdown (plan R9 to R11)."""
     return "\n".join(
         [
-            *_table(
-                "Ranking",
-                (
-                    "configuration",
-                    *(cell for metric in metrics for cell in (metric, *counts)),
-                    "changed days",
-                ),
-                [
-                    (
-                        config.name,
-                        *_score_cells(config.overall, personas=True),
-                        *_score_cells(config.ranked_lane, personas=True),
-                        str(config.changed_days),
-                    )
-                    for config in report.configs
-                ],
-            ),
+            "## Ranking",
+            "",
+            *_config_grid(report.configs),
             "Must-see recall at 5 and nDCG at 5 per persona per day, against the golden labels."
             " A value is the mean over personas of each persona's mean over its days with a"
             " value. `n` counts the persona-days with a value, `without` the persona-days with"
             " none, and `personas` the personas in the mean.",
             "",
             "The ranked lane leaves out the must-see lines. Its facts leave out the facts that"
-            " the must-see lane of `full` delivers. `changed days` counts the persona-days whose"
+            " the must-see lane of `full` delivers, and before the cut at five it leaves out"
+            " the lines that deliver one of them. `changed days` counts the persona-days whose"
             " top 5 or ranked-lane top 5 differs from `full`. `send-everything` has no must-see"
-            " lane, so its ranked lane is the whole list.",
+            " lane, so its ranked lane is the whole list without those lines.",
             "",
-            *(line for text in unchanged for line in (text, "")),
+            *_unchanged(report.configs),
             "The must-see rule shows every checklist absence to the EM. The golden audience of a"
             " checklist absence is the role of the task owner, so these EM lines have grade 0."
             " This is a disagreement between the labels and the must-see rule.",
             "",
-            *_table(
-                "Ranking ablation",
-                ("term", *(f"{metric} drop" for metric in METRICS), "verdict"),
-                [
-                    (row.term, *(_number(drop) for drop in row.drops.values()), row.verdict)
-                    for row in report.ablation
-                ],
-            ),
+            "## Ranking ablation",
+            "",
+            *_ablation_grid(report.ablation),
             f"Keep rule: a term stays when a metric drops by at least {report.min_effect} of"
             " its value with the term on.",
             "",
-            "A drop is (full - off) / full. A metric whose `full` value is 0 or n/a gives no vote.",
+            "A drop is (full - off) / full. A metric whose `full` value is 0 or n/a gives no"
+            " vote. `moved` counts the persona-days whose value with the term off differs from"
+            " `full`. The verdict is descriptive: `min_effect` is an effect size, not a test of"
+            " uncertainty.",
             "",
-            *_table(
-                "Ranking per persona (full)",
+            "## Ranking per persona (full)",
+            "",
+            *_grid(
                 (
                     "persona",
                     "role",
-                    *(cell for metric in metrics for cell in (metric, "n")),
+                    *(cell for metric in _COLUMNS for cell in (metric, "n")),
                     "must-see facts, must-see lane",
                     "must-see facts, ranked lane",
                 ),
@@ -220,13 +210,87 @@ def write_ranking_section(report: RankingReport) -> str:
                         str(row.must_see_lane_facts),
                         str(row.ranked_lane_facts),
                     )
-                    for row in c0.per_persona
+                    for row in report.configs[0].per_persona
                 ],
             ),
+            "## With min_score 0 (admission fixed)",
+            "",
+            "The configured rows mix admission with order; these rows fix admission and show"
+            " order only.",
+            "",
+            *_config_grid(report.zero_threshold),
+            *_unchanged(report.zero_threshold),
+            *_ablation_grid(report.zero_ablation),
+            f"## Must-see facts below min_score {report.min_score}",
+            "",
+            *_grid(
+                ("type", "severity", "count"),
+                [(row.type, row.severity, str(row.count)) for row in report.below_threshold],
+            ),
+            f"`full` at min_score 0: the ranked-lane lines of grade 2 whose score is below"
+            f" {report.min_score}, by item type and severity. The readers' sets hold"
+            f" {report.must_see_facts} must-see facts over all persona-days.",
+            "",
             "Labels come from the world script; personas are simulated.",
             "",
         ]
     )
+
+
+_COLUMNS = ("recall", "nDCG", "ranked-lane recall", "ranked-lane nDCG")
+
+
+def _config_grid(configs: Sequence[ConfigScores]) -> list[str]:
+    return _grid(
+        (
+            "configuration",
+            *(cell for metric in _COLUMNS for cell in (metric, "n", "without", "personas")),
+            "changed days",
+        ),
+        [
+            (
+                config.name,
+                *_score_cells(config.overall, personas=True),
+                *_score_cells(config.ranked_lane, personas=True),
+                str(config.changed_days),
+            )
+            for config in configs
+        ],
+    )
+
+
+def _ablation_grid(rows: Sequence[AblationRow]) -> list[str]:
+    return _grid(
+        ("term", *(cell for metric in METRICS for cell in (f"{metric} drop", "moved")), "verdict"),
+        [
+            (
+                row.term,
+                *(
+                    cell
+                    for metric in METRICS
+                    for cell in (_number(row.drops[metric]), str(row.moved[metric]))
+                ),
+                row.verdict,
+            )
+            for row in rows
+        ],
+    )
+
+
+def _unchanged(configs: Sequence[ConfigScores]) -> list[str]:
+    return [
+        line
+        for config in configs[1:]
+        if not config.changed_days
+        for line in (
+            f"`{config.name}` changes no top 5 on this world, so it cannot move any metric.",
+            "",
+        )
+    ]
+
+
+def _grid(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
+    return [_row(header), _row(["---"] * len(header)), *(_row(row) for row in rows), ""]
 
 
 def _score_cells(scores: Scores, *, personas: bool) -> list[str]:
@@ -244,120 +308,207 @@ def _number(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}"
 
 
+@dataclass
+class _Tally:
+    """The day values, changed days and C0 lane facts of one threshold, per reader."""
+
+    readers: Sequence[str]
+    days: dict[str, dict[str, list[_DayValues]]] = field(default_factory=dict)
+    changed: dict[str, int] = field(default_factory=dict)
+    lane_facts: dict[str, list[int]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.days = {name: {user: [] for user in self.readers} for name in NAMES}
+        self.changed = dict.fromkeys(NAMES, 0)
+        self.lane_facts = {user: [0, 0] for user in self.readers}
+
+    def add(
+        self,
+        user: str,
+        lists: Mapping[str, Sequence[tuple[Item, bool]]],
+        facts: Mapping[_FactKey, int],
+        candidates: _Candidates,
+    ) -> None:
+        """Score one persona-day of every configuration; `lists` holds (item, must_see) lines."""
+        c0 = lists["full"]
+        delivered = _deliveries([item for item, _ in c0], candidates)
+        removed = {
+            fact
+            for (_, must_see), fact in zip(c0, delivered, strict=True)
+            if must_see and fact is not None and fact in facts
+        }
+        for (_, must_see), fact in zip(c0, delivered, strict=True):
+            if fact is not None and facts.get(fact) == 2:
+                self.lane_facts[user][0 if must_see else 1] += 1
+        lane_set = {key: grade for key, grade in facts.items() if key not in removed}
+        views = {
+            name: _view(lines, facts, lane_set, removed, candidates)
+            for name, lines in lists.items()
+        }
+        for name, (values, top5) in views.items():
+            self.days[name][user].append(values)
+            self.changed[name] += top5 != views["full"][1]
+
+    def configs(
+        self, personas: Mapping[str, str], profiles: Mapping[str, Profile]
+    ) -> tuple[ConfigScores, ...]:
+        terms = dict(CONFIGS)
+        configs: list[ConfigScores] = []
+        for name in NAMES:
+            rows = tuple(
+                PersonaScores(
+                    user_id=user,
+                    name=personas[user],
+                    role=profiles[user].role,
+                    overall=_persona_scores([(d[0], d[1]) for d in self.days[name][user]]),
+                    ranked_lane=_persona_scores([(d[2], d[3]) for d in self.days[name][user]]),
+                    must_see_lane_facts=self.lane_facts[user][0],
+                    ranked_lane_facts=self.lane_facts[user][1],
+                )
+                for user in self.readers
+            )
+            configs.append(
+                ConfigScores(
+                    name=name,
+                    terms_off=tuple(sorted(terms.get(name, frozenset()))),
+                    overall=_mean_scores([row.overall for row in rows]),
+                    ranked_lane=_mean_scores([row.ranked_lane for row in rows]),
+                    changed_days=self.changed[name],
+                    per_persona=rows,
+                )
+            )
+        return tuple(configs)
+
+    def ablation(
+        self, configs: Sequence[ConfigScores], min_effect: float
+    ) -> tuple[AblationRow, ...]:
+        c0 = _metric_values(configs[0])
+        return tuple(
+            verdict(
+                config.name,
+                c0,
+                _metric_values(config),
+                min_effect,
+                moved={
+                    metric: sum(
+                        full[index] != off[index]
+                        for user in self.readers
+                        for full, off in zip(
+                            self.days["full"][user], self.days[config.name][user], strict=True
+                        )
+                    )
+                    for index, metric in enumerate(METRICS)
+                },
+            )
+            for config in configs[1:5]
+        )
+
+
 def run_ranking_eval(world_dir: Path, llm: LLM, priors: Priors, store_path: Path) -> RankingReport:
-    """Run the world day by day in a fresh store and score every configuration (plan R1 to R7b)."""
+    """Run the world day by day in a fresh store and score every configuration (plan R1 to R11).
+
+    Each configuration is selected twice: with the configured `min_score`, and with 0.
+    """
     world = load_world(world_dir / "world.yaml")
     manifest = load_manifest(world_dir / "manifest.json")
     golden = read_golden(world_dir / "golden.jsonl")
     asks = {_thread_of(item): item.event_id for item in golden.items if item.type == "ask"}
     cited = {row.cites: manifest.threads[row.cites].channel_id for row in golden.absences}
+    by_thread: dict[str, list[GoldenItem]] = {}
+    for fact in golden.items:
+        by_thread.setdefault(_thread_of(fact), []).append(fact)
     readers = [persona.user_id for persona in world.personas if persona.role is not None]
     profiles = {user: profile_for(world, user) for user in readers}
-    names = [name for name, _ in CONFIGS] + [SEND_EVERYTHING]
-    config_priors = {
-        name: priors.model_copy(
-            update={"daily": priors.daily.model_copy(update={"terms_off": off})}
+    # The configured min_score, then 0 (plan R10).
+    runs = [
+        (
+            _Tally(readers),
+            {
+                name: priors.model_copy(
+                    update={
+                        "daily": priors.daily.model_copy(
+                            update={"terms_off": off, "min_score": min_score}
+                        )
+                    }
+                )
+                for name, off in CONFIGS
+            },
         )
-        for name, off in CONFIGS
-    }
-    days: dict[str, dict[str, list[_DayValues]]] = {
-        name: {user: [] for user in readers} for name in names
-    }
-    changed = dict.fromkeys(names, 0)
-    lane_facts = {user: [0, 0] for user in readers}
+        for min_score in (priors.daily.min_score, 0)
+    ]
+    below: Counter[tuple[str, str]] = Counter()
+    must_see_facts = 0
     zone = ZoneInfo(world.timezone)
 
     with Store.open(store_path) as store:
 
         def score_day(day: int, today: date, as_of: datetime) -> None:
+            nonlocal must_see_facts
             previous = world.date_of(day - 1) if day > 1 else None
             items = store.items(as_of)
-            by_thread: dict[str, list[Item]] = {}
-            for item in items:
-                by_thread.setdefault(item.thread_id, []).append(item)
-            event_of = {
-                item.item_id: event_id for event_id, item in _pairs(golden.items, by_thread).items()
-            }
             newest = newest_evidence(store, items, as_of)
+            start = window_start(priors.daily.window, today, previous)
 
-            def fact_key(item: Item) -> _FactKey | None:
+            def candidates(item: Item) -> list[_FactKey]:
                 if item.absence is not None:
-                    return _absence_key(day, item, asks)
-                return event_of.get(item.item_id)
+                    return [_absence_key(day, item, asks)]
+                return [
+                    fact.event_id
+                    for fact in by_thread.get(item.thread_id, [])
+                    if _qualifies(fact, item)
+                ]
 
             for user in readers:
                 profile = profiles[user]
-                start = window_start(priors.daily.window, today, previous)
                 facts = _facts(golden, world, profile, cited, start, today)
-                selections = {
-                    name: select_digest(
-                        store, world, config_priors[name], user, today, previous_digest=previous
+                must_see_facts += sum(1 for grade in facts.values() if grade == 2)
+                for zero, (tally, config_priors) in enumerate(runs):
+                    selections = {
+                        name: select_digest(
+                            store,
+                            world,
+                            config_priors[name],
+                            user,
+                            today,
+                            previous_digest=previous,
+                        )
+                        for name, _ in CONFIGS
+                    }
+                    send = _send_everything(
+                        world, profile, items, newest, selections["full"], start, today, zone
                     )
-                    for name, _ in CONFIGS
-                }
-                keys = {
-                    name: [(fact_key(line.item), line.must_see) for line in selection.lines]
-                    for name, selection in selections.items()
-                }
-                full = keys["full"]
-                grades = _grades([key for key, _ in full], facts)
-                for (_, must_see), grade in zip(full, grades, strict=True):
-                    if grade == 2:
-                        lane_facts[user][0 if must_see else 1] += 1
-                lane_set = {
-                    key: grade
-                    for key, grade in facts.items()
-                    if key not in {key for key, must_see in full if must_see}
-                }
-                full_ids = _top5_ids(selections["full"].lines)
-                for name, selection in selections.items():
-                    days[name][user].append(_day_values(keys[name], facts, lane_set))
-                    changed[name] += _top5_ids(selection.lines) != full_ids
-                send = _send_everything(
-                    world, profile, items, newest, selections["full"], start, today, zone
-                )
-                days[SEND_EVERYTHING][user].append(
-                    _day_values([(fact_key(item), False) for item in send], facts, lane_set)
-                )
-                send5 = tuple(item.item_id for item in send[:5])
-                changed[SEND_EVERYTHING] += send5 != full_ids[0] or send5 != full_ids[1]
+                    lists = {
+                        **{
+                            name: [(line.item, line.must_see) for line in selection.lines]
+                            for name, selection in selections.items()
+                        },
+                        SEND_EVERYTHING: [(item, False) for item in send],
+                    }
+                    tally.add(user, lists, facts, candidates)
+                    if zero:
+                        below.update(_below(selections["full"], facts, candidates, priors))
 
         _run_days(store, world, world_dir, llm, priors, asks, after_extract=score_day)
 
-    personas = {persona.user_id: persona for persona in world.personas}
-    terms = dict(CONFIGS)
-    configs: list[ConfigScores] = []
-    for name in names:
-        rows = tuple(
-            PersonaScores(
-                user_id=user,
-                name=personas[user].name,
-                role=profiles[user].role,
-                overall=_persona_scores([(d[0], d[1]) for d in days[name][user]]),
-                ranked_lane=_persona_scores([(d[2], d[3]) for d in days[name][user]]),
-                must_see_lane_facts=lane_facts[user][0],
-                ranked_lane_facts=lane_facts[user][1],
-            )
-            for user in readers
-        )
-        configs.append(
-            ConfigScores(
-                name=name,
-                terms_off=tuple(sorted(terms.get(name, frozenset()))),
-                overall=_mean_scores([row.overall for row in rows]),
-                ranked_lane=_mean_scores([row.ranked_lane for row in rows]),
-                changed_days=changed[name],
-                per_persona=rows,
-            )
-        )
-    c0 = _metric_values(configs[0])
+    names = {persona.user_id: persona.name for persona in world.personas}
+    (configured, _), (zero, _) = runs
+    configs = configured.configs(names, profiles)
+    zero_configs = zero.configs(names, profiles)
+    min_effect = priors.ablation.min_effect
     return RankingReport(
-        configs=tuple(configs),
-        ablation=tuple(
-            verdict(config.name, c0, _metric_values(config), priors.ablation.min_effect)
-            for config in configs[1:5]
+        configs=configs,
+        ablation=configured.ablation(configs, min_effect),
+        min_effect=min_effect,
+        min_score=priors.daily.min_score,
+        zero_threshold=zero_configs,
+        zero_ablation=zero.ablation(zero_configs, min_effect),
+        below_threshold=tuple(
+            BelowThreshold(type=kind, severity=severity, count=count)
+            for (kind, severity), count in sorted(
+                below.items(), key=lambda entry: (-entry[1], *entry[0])
+            )
         ),
-        min_effect=priors.ablation.min_effect,
+        must_see_facts=must_see_facts,
     )
 
 
@@ -388,39 +539,69 @@ def _facts(
     return facts
 
 
-def _grades(keys: Sequence[_FactKey | None], facts: Mapping[_FactKey, int]) -> list[int]:
-    """Each line's grade: its fact's grade on the first line that delivers it, else 0 (plan R3)."""
-    seen: set[_FactKey] = set()
-    grades: list[int] = []
-    for key in keys:
-        grades.append(0 if key is None or key in seen else facts.get(key, 0))
-        if key is not None:
-            seen.add(key)
-    return grades
+def _deliveries(items: Sequence[Item], candidates: _Candidates) -> list[_FactKey | None]:
+    """The fact each line delivers: its first candidate no earlier line delivered (plan R3)."""
+    used: set[_FactKey] = set()
+    delivered: list[_FactKey | None] = []
+    for item in items:
+        match = next((fact for fact in candidates(item) if fact not in used), None)
+        delivered.append(match)
+        if match is not None:
+            used.add(match)
+    return delivered
 
 
-def _day_values(
-    lines: Sequence[tuple[_FactKey | None, bool]],
+def _grades(
+    items: Sequence[Item], facts: Mapping[_FactKey, int], candidates: _Candidates
+) -> list[int]:
+    """Each line's grade: the grade of the fact it delivers in `facts`, else 0 (plan R3)."""
+    return [0 if fact is None else facts.get(fact, 0) for fact in _deliveries(items, candidates)]
+
+
+def _view(
+    lines: Sequence[tuple[Item, bool]],
     facts: Mapping[_FactKey, int],
     lane_set: Mapping[_FactKey, int],
-) -> _DayValues:
-    """Overall and ranked-lane recall and nDCG of one persona-day (plan R5, R6 and R6a)."""
-    overall = _grades([key for key, _ in lines], facts)
-    ranked = _grades([key for key, must_see in lines if not must_see], lane_set)
-    return (
-        recall_at_5(overall, list(facts.values())),
-        ndcg_at_5(overall, list(facts.values())),
-        recall_at_5(ranked, list(lane_set.values())),
-        ndcg_at_5(ranked, list(lane_set.values())),
+    removed: set[_FactKey],
+    candidates: _Candidates,
+) -> tuple[_DayValues, _Top5]:
+    """One configuration's day values and top-5 ids (plan R5, R6 and R6a).
+
+    The ranked lane drops, before the cut at five, the lines that deliver a fact of `removed`.
+    """
+    overall = [item for item, _ in lines]
+    ranked = [item for item, must_see in lines if not must_see]
+    ranked = [
+        item
+        for item, fact in zip(ranked, _deliveries(ranked, candidates), strict=True)
+        if fact is None or fact not in removed
+    ]
+    overall_grades = _grades(overall, facts, candidates)
+    ranked_grades = _grades(ranked, lane_set, candidates)
+    values = (
+        recall_at_5(overall_grades, list(facts.values())),
+        ndcg_at_5(overall_grades, list(facts.values())),
+        recall_at_5(ranked_grades, list(lane_set.values())),
+        ndcg_at_5(ranked_grades, list(lane_set.values())),
+    )
+    return values, (
+        tuple(item.item_id for item in overall[:5]),
+        tuple(item.item_id for item in ranked[:5]),
     )
 
 
-def _top5_ids(lines: Sequence[Line]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Item ids of the overall top 5 and of the ranked-lane top 5, in digest order."""
-    ranked = [line for line in lines if not line.must_see]
-    return (
-        tuple(line.item.item_id for line in lines[:5]),
-        tuple(line.item.item_id for line in ranked[:5]),
+def _below(
+    full: Selection, facts: Mapping[_FactKey, int], candidates: _Candidates, priors: Priors
+) -> Counter[tuple[str, str]]:
+    """Grade-2 ranked-lane lines whose score is below the configured min_score (plan R11)."""
+    delivered = _deliveries([line.item for line in full.lines], candidates)
+    return Counter(
+        (line.item.type, line.item.severity)
+        for line, fact in zip(full.lines, delivered, strict=True)
+        if not line.must_see
+        and fact is not None
+        and facts.get(fact) == 2
+        and line.score < priors.daily.min_score
     )
 
 
