@@ -1524,9 +1524,9 @@ def _persona_mean(
     means = []
     for user in sorted({user for user, _ in days}):
         values = [
-            row[metric]
+            value
             for (reader, _), row in days.items()
-            if reader == user and row[metric] is not None
+            if reader == user and (value := row[metric]) is not None
         ]
         if values:
             means.append(sum(values) / len(values))
@@ -1577,7 +1577,7 @@ def test_zero_threshold_selects_all_configs_and_reports_order_only(
         for index, metric in enumerate(METRIC_NAMES):
             c0 = _persona_mean(expected["full"], index)
             off = _persona_mean(expected[row.term], index)
-            drops[metric] = (c0 - off) / c0 if c0 else None
+            drops[metric] = (c0 - off) / c0 if c0 and off is not None else None
         assert row.drops == pytest.approx(drops)
         votes = [drop >= priors.ablation.min_effect for drop in drops.values() if drop is not None]
         assert row.verdict == ("keep" if any(votes) else "remove" if votes else "no vote")
