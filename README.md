@@ -79,7 +79,8 @@ workspace `kestrel-k2.slack.com`, which does not exist.
 - Other lines are ranked by importance (type and severity) times the role's interest in
   the item type times personal relevance (1.0 for an owned entity, 0.8 for the reader's
   role, else 0.4). A line needs a score of at least 0.15, and each section shows at most
-  5 ranked lines (3 for Not happened).
+  5 ranked lines. Not happened holds only absences, which are must-see for the readers
+  they name and are not ranked.
 
 ## How well extraction works
 

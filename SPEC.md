@@ -341,7 +341,7 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    release; the second cites the unanswered message, so it is a new episode (step 8). The
    window before a gate in which
    an absence can fire scales with the task's priority, and an absence that persists
-   across days rises in rank and states how many days it has been silent. Never emit an
+   across days states how many days it has been silent. Never emit an
    absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
@@ -383,9 +383,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    `conditions`, is not compared with it. An item not in `seen` is also 1 when it has no
    compared claim or carries a current claim that is not compared. For any item in `seen`, it is also 1 when its
    `last_updated` is later than its `seen` time. Otherwise it is a floor (default 0.3). Novelty is held at 1 for
-   absences, open blockers, unanswered asks, stale-belief items, open contradictions and
-   items that carry a `pending` claim, because these stay true until someone acts and
-   their rank rises with age (section 5 step 5). Stretch term
+   open blockers, stale-belief items, open contradictions and items that carry a
+   `pending` claim, because these stay true until someone acts and their rank rises with
+   age. Absences are must-see for their audience and are not ranked (step 6). Stretch term
    `last_to_know`: rises when every other reader in the fact's audience has been exposed
    to it and this reader has not. Stretch term `window_recency`: when the window (from
    its start, step 9, to `as_of`) is longer than 36 hours, the term falls linearly with
