@@ -11,14 +11,15 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx2
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
-from digest.llm import LLMRequest, LLMResponse
+from digest.llm import LLMRequest, LLMResponse, load_model_ids
 from digest.llm.anthropic_api import AnthropicBackend
-from digest.llm.cassette import CassetteMiss, request_key
+from digest.llm.cassette import CassetteMiss, Cassettes, request_key
 from digest.llm.client import LLM
 from digest.llm.openrouter import OpenRouterBackend
 from digest.models import Event
@@ -31,9 +32,11 @@ from digest.room import (
     PostMessage,
     Room,
     RoomBase,
+    RoomState,
     RunScenario,
     SetRole,
 )
+from digest.settings import Settings
 from digest.store import Store
 from digest.web.app import create_app
 from digest.world.load import load_world
@@ -406,6 +409,79 @@ def thermal_review() -> PostMessage:
     entries = yaml.safe_load(CURATED.read_text(encoding="utf-8"))
     entry = next(entry for entry in entries if entry["name"] == "thermal-review-closed")
     return PostMessage.model_validate(entry["edit"])
+
+
+def test_record_transport_failure_refuses_change_and_keeps_state(
+    base: RoomBase,
+    cassette_copy: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup a record room with a failed gateway / Action post / Assert refusal and no change."""
+    room = Room(base, record=True, cassettes=cassette_copy)
+    before = room.state().model_copy(deep=True)
+    folder = Path(room._tmp.name)
+    files = set(folder.iterdir())
+    calls: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        calls.append(request)
+        raise httpx2.ConnectError("BODY-SENTINEL sk-test-SENTINEL-KEY", request=request)
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend("sk-test-SENTINEL-KEY", load_model_ids(), client=client)
+
+        def gateway(settings: Settings) -> LLM:
+            assert settings.mode == "record"
+            assert settings.backend == "openrouter"
+            return LLM(backend, Cassettes(cassette_copy), "record")
+
+        monkeypatch.setattr("digest.room.from_settings", gateway)
+        with pytest.raises(ValueError) as caught:
+            room.apply(POST)
+
+    assert calls
+    assert (
+        "the live model call failed (a network failure, an auth or rate-limit refusal, "
+        "another HTTP error, or output that did not validate)"
+    ) in str(caught.value)
+    assert room.state() == before
+    assert set(folder.iterdir()) == files
+
+
+def test_failed_reset_preserves_curated_change_in_saved_corpus(
+    base: RoomBase,
+    thermal_review: PostMessage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup a curated change / Action fail reset then save / Assert the change survives."""
+    room = Room(base)
+    before = room.apply(thermal_review).model_copy(deep=True)
+    posted = next(message for message in before.messages if message.posted)
+    build = Room._build
+    calls = 0
+
+    def fail_once(self: Room, *args: Any, **kwargs: Any) -> RoomState:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("reset build failed")
+        return build(self, *args, **kwargs)
+
+    monkeypatch.setattr(Room, "_build", fail_once)
+    with pytest.raises(RuntimeError, match=r"^reset build failed$"):
+        room.reset()
+    monkeypatch.chdir(tmp_path)
+    rows = saved_events(room.save(tmp_path / ".room" / "copy"))
+
+    assert calls == 1
+    assert room.state() == before
+    assert room.state().message_changes == 1
+    assert [
+        event.text
+        for event in rows
+        if (event.channel_id, event.ts) == (posted.channel_id, posted.ts)
+    ] == [thermal_review.text]
 
 
 def test_fresh_curated_edit_replaces_scenario_and_keeps_world_edit(

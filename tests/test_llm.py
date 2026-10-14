@@ -526,7 +526,7 @@ def test_extract_retries_backend_output_error_once(
     assert backend.requests == [sent, sent]
 
 
-def test_extract_does_not_retry_transport_error(
+def test_extract_does_not_retry_status_error(
     tmp_path: Path,
     llm_request: LLMRequest,
     response: LLMResponse,
@@ -543,6 +543,72 @@ def test_extract_does_not_retry_transport_error(
     assert caught.value.raw == "body"
     assert backend.requests == [sent]
     assert cassettes.get(request_key(sent)) is None
+
+
+@pytest.mark.parametrize(
+    "error_class", [httpx2.ConnectError, httpx2.ReadTimeout, httpx2.DecodingError]
+)
+def test_openrouter_request_error_becomes_safe_refusal(
+    llm_request: LLMRequest,
+    models: ModelIds,
+    caplog: pytest.LogCaptureFixture,
+    error_class: type[httpx2.RequestError],
+) -> None:
+    """Setup a gateway request error / Action complete / Assert a safe refusal and log."""
+    key = "sk-test-SENTINEL-KEY"
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise error_class(f"BODY-SENTINEL {key}", request=request)
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend(key, models, client=client)
+        with caplog.at_level(logging.INFO), pytest.raises(LLMOutputError) as caught:
+            backend.complete(llm_request)
+
+    assert str(caught.value) == f"openrouter unreachable: {error_class.__name__}"
+    assert caught.value.raw == ""
+    assert caught.value.__suppress_context__ is True
+    assert caught.value.__cause__ is None
+    records = [r for r in caplog.records if r.getMessage() == "llm_unreachable"]
+    assert len(records) == 1
+    assert records[0].__dict__["backend"] == "openrouter"
+    assert records[0].__dict__["error_class"] == error_class.__name__
+    for record in caplog.records:
+        for value in vars(record).values():
+            assert "BODY-SENTINEL" not in str(value)
+            assert key not in str(value)
+
+
+def test_openrouter_type_error_propagates_unchanged(
+    llm_request: LLMRequest, models: ModelIds
+) -> None:
+    """Setup a gateway TypeError / Action complete / Assert the same error propagates."""
+    error = TypeError("BODY-SENTINEL sk-test-SENTINEL-KEY")
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise error
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend("sk-test-SENTINEL-KEY", models, client=client)
+        with pytest.raises(TypeError) as caught:
+            backend.complete(llm_request)
+    assert caught.value is error
+
+
+def test_openrouter_non_json_reply_becomes_refusal(
+    llm_request: LLMRequest, models: ModelIds
+) -> None:
+    """Setup a non-JSON 200 reply / Action complete / Assert the exact refusal and body."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, text="not json")
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
+        backend = OpenRouterBackend("sk-test-SENTINEL-KEY", models, client=client)
+        with pytest.raises(LLMOutputError) as caught:
+            backend.complete(llm_request)
+    assert str(caught.value) == "openrouter reply is not JSON"
+    assert caught.value.raw == "not json"
 
 
 def test_strict_schema_preserves_existing_additional_properties() -> None:

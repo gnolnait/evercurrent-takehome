@@ -1,5 +1,6 @@
 """M3 unit 9: the page contract, with no room implementation or network."""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from html import escape
@@ -513,6 +514,82 @@ def test_zero_effect_edit_shows_exact_notice(state: RoomState) -> None:
         page = Page(client.get("/").text)
     assert response.status_code == 303
     assert NO_CHANGE in page.texts()
+
+
+@pytest.mark.parametrize("route", ["/edit", "/reset"])
+def test_rebuild_failure_returns_page_and_safe_log(
+    state: RoomState,
+    route: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Setup a room RuntimeError / Action post / Assert a safe 500 page, log, and later GET."""
+    room = FakeRoom(state)
+
+    def fail(*args: Any, **kwargs: Any) -> RoomState:
+        raise RuntimeError("ROOM-SENTINEL C:/secret")
+
+    monkeypatch.setattr(room, "apply" if route == "/edit" else "reset", fail)
+    with TestClient(create_app(room), raise_server_exceptions=False) as client:
+        with caplog.at_level(logging.INFO):
+            response = client.post(route, data=ROLE_FORM, follow_redirects=False)
+        later = client.get("/")
+
+    assert response.status_code == 500
+    page = Page(response.text)
+    assert [
+        n.text() for n in page.find("p") if "refusal" in (n.attrs.get("class") or "").split()
+    ] == ["The room could not apply this change (RuntimeError); the room is unchanged."]
+    assert any(n.attrs.get("action") == "/edit" for n in page.find("form"))
+    assert "Digests" in {n.text() for n in page.find("h2")}
+    assert "ROOM-SENTINEL" not in response.text
+    assert "C:/secret" not in response.text
+    records = [r for r in caplog.records if r.getMessage() == "room_rebuild_failed"]
+    assert len(records) == 1
+    assert records[0].__dict__["route"] == route
+    assert records[0].__dict__["error_class"] == "RuntimeError"
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
+    assert records[0].exc_info[2] is not None
+    for record in caplog.records:
+        for field_name, value in vars(record).items():
+            if field_name not in {"exc_info", "exc_text"}:
+                assert "ROOM-SENTINEL" not in str(value)
+    assert later.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("route", "error_class"),
+    [("/edit", ValueError), ("/reset", ValueError), ("/save", OSError), ("/save", ValueError)],
+)
+def test_expected_room_error_keeps_400_refusal(
+    state: RoomState,
+    route: str,
+    error_class: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Setup a known room error / Action post / Assert a 400 refusal and no rebuild log."""
+    room = FakeRoom(state)
+
+    def fail(*args: Any, **kwargs: Any) -> RoomState:
+        raise error_class("bad field")
+
+    method = {"/edit": "apply", "/reset": "reset", "/save": "save"}[route]
+    monkeypatch.setattr(room, method, fail, raising=route != "/save")
+    with (
+        TestClient(create_app(room), raise_server_exceptions=False) as client,
+        caplog.at_level(logging.INFO),
+    ):
+        response = client.post(route, data=ROLE_FORM, follow_redirects=False)
+
+    assert response.status_code == 400
+    page = Page(response.text)
+    assert [
+        n.text() for n in page.find("p") if "refusal" in (n.attrs.get("class") or "").split()
+    ] == ["The save failed: bad field" if route == "/save" else "bad field"]
+    assert any(n.attrs.get("action") == "/edit" for n in page.find("form"))
+    assert not any(r.getMessage() == "room_rebuild_failed" for r in caplog.records)
 
 
 def test_refused_edit_shows_verbatim_reason_and_preserves_digest(state: RoomState) -> None:
