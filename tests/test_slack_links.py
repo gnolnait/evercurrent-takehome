@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import traceback
 from datetime import date
@@ -149,18 +150,24 @@ class FakeSlackWebClient:
         *,
         team_id: str = "T-MAPPED",
         auth_error: Exception | None = None,
+        events: list[str] | None = None,
     ) -> None:
         self.team_id = team_id
         self.auth_error = auth_error
+        self.events = events
         self.calls: list[dict[str, Any]] = []
 
     def auth_test(self) -> dict[str, str]:
+        if self.events is not None:
+            self.events.append("auth_test")
         self.calls.append({"method": "auth_test"})
         if self.auth_error is not None:
             raise self.auth_error
         return {"team_id": self.team_id}
 
     def conversations_open(self, *, users: str) -> dict[str, dict[str, str]]:
+        if self.events is not None:
+            self.events.append("conversations_open")
         self.calls.append({"method": "conversations_open", "users": users})
         return {"channel": {"id": DM_CHANNEL}}
 
@@ -171,6 +178,8 @@ class FakeSlackWebClient:
         text: str,
         blocks: list[dict[str, Any]],
     ) -> None:
+        if self.events is not None:
+            self.events.append("chat_postMessage")
         self.calls.append(
             {"method": "chat_postMessage", "channel": channel, "text": text, "blocks": blocks}
         )
@@ -460,6 +469,44 @@ def test_cli_rejects_invalid_seed_map_before_build_or_send(
     assert sends.calls == []
 
 
+@pytest.mark.parametrize("delivery", ["webhook", "dm"])
+@pytest.mark.parametrize("map_case", ["dotenv", "invalid-field"])
+def test_cli_invalid_seed_map_never_discloses_file_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    delivery: str,
+    map_case: str,
+) -> None:
+    path = tmp_path / "seed-map.json"
+    if map_case == "dotenv":
+        content = f"BOT_TOKEN={BOT_TOKEN}"
+    else:
+        content_value = seed_map().model_dump(mode="json")
+        content_value["version"] = BOT_TOKEN
+        content = json.dumps(content_value)
+    path.write_text(content, encoding="utf-8")
+    builds: list[int] = []
+    webhook = FakeWebhookClient()
+    client = FakeSlackWebClient()
+    monkeypatch.setattr(cli, "_demo_selections", lambda day: builds.append(day))
+    monkeypatch.setattr(cli, "_webhook_url", lambda: WEBHOOK_URL)
+    monkeypatch.setattr(cli, "_webhook_client", lambda url: webhook)
+    monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
+    monkeypatch.setattr(cli, "_slack_web_client", lambda token: client)
+    arguments = ["post", "--seed-map", str(path)]
+    if delivery == "dm":
+        arguments[1:1] = ["--dm", "U012ABC"]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1, result.output
+    assert BOT_TOKEN not in result.output
+    assert BOT_TOKEN not in "".join(traceback.format_exception(result.exception))
+    assert builds == []
+    assert client.calls == []
+    assert webhook.calls == []
+
+
 def test_cli_dm_rejects_seed_map_for_other_team_before_open_or_send(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -479,6 +526,29 @@ def test_cli_dm_rejects_seed_map_for_other_team_before_open_or_send(
     assert result.exit_code == 1, result.output
     reason = result.output.lower()
     assert "team" in reason or ("t-other" in reason and "t-actual" in reason)
+    assert client.calls == [{"method": "auth_test"}]
+    assert webhook.calls == []
+
+
+def test_cli_dm_team_mismatch_never_discloses_map_team_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    profile: Profile,
+) -> None:
+    selected = selection(profile, item(1, (evidence("C0ENGME", "1760000000.000001"),)))
+    path = save_map(tmp_path, seed_map(team_id=BOT_TOKEN))
+    client = FakeSlackWebClient(team_id="T-ACTUAL")
+    webhook = FakeWebhookClient()
+    prepare_cli(monkeypatch, world, [selected] * 3, webhook)
+    monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
+    monkeypatch.setattr(cli, "_slack_web_client", lambda token: client)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC", "--seed-map", str(path)])
+
+    assert result.exit_code == 1, result.output
+    assert "team" in result.output.lower()
+    assert BOT_TOKEN not in result.output
     assert client.calls == [{"method": "auth_test"}]
     assert webhook.calls == []
 
@@ -637,6 +707,61 @@ def test_cli_counts_every_unmapped_occurrence_before_the_block_cut_and_send(
     cut_payload = block_text(webhook.calls[2])
     assert "https://world.slack.com/late-5" not in cut_payload
     assert "https://world.slack.com/late-6" not in cut_payload
+
+
+def test_cli_dm_reports_three_unmapped_sources_before_destination_and_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    world: World,
+    profile: Profile,
+) -> None:
+    selections = [
+        selection(
+            profile,
+            item(
+                number,
+                (
+                    evidence(
+                        "C0ENGME",
+                        f"1760000000.00000{number}",
+                        f"https://world.slack.com/missing-{number}",
+                    ),
+                ),
+            ),
+        )
+        for number in range(1, 4)
+    ]
+    path = save_map(tmp_path, seed_map(team_id="T-ACTUAL"))
+    events: list[str] = []
+    client = FakeSlackWebClient(team_id="T-ACTUAL", events=events)
+    webhook = FakeWebhookClient()
+    prepare_cli(monkeypatch, world, selections, webhook)
+    monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
+    monkeypatch.setattr(cli, "_slack_web_client", lambda token: client)
+    original_echo = cli.typer.echo
+
+    def record_echo(message: object = None, **kwargs: Any) -> None:
+        events.append(str(message))
+        original_echo(message, **kwargs)
+
+    monkeypatch.setattr(cli.typer, "echo", record_echo)
+
+    result = runner.invoke(app, ["post", "--dm", "U012ABC", "--seed-map", str(path)])
+
+    assert result.exit_code == 0, result.output
+    count_line = "3 source links are not in the seed map"
+    assert result.output.count(count_line) == 1
+    destination = next(event for event in events if "sending" in event.lower())
+    assert events.index(count_line) < events.index(destination)
+    assert events.index(count_line) < events.index("conversations_open")
+    assert [call["method"] for call in client.calls] == [
+        "auth_test",
+        "conversations_open",
+        "chat_postMessage",
+        "chat_postMessage",
+        "chat_postMessage",
+    ]
+    assert webhook.calls == []
 
 
 def test_cli_prints_no_unmapped_count_when_every_source_is_mapped(
