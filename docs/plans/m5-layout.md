@@ -1,9 +1,6 @@
 # Plan: M5 slice, the Slack digest layout (v6)
 
-Status: v0.4, 2026-10-13 (second plan review applied: header scan scope, ts only for a
-reply, a synthetic map for the real-data row, two ask-absence titles). Process stage 1
-(`docs/process.md`). Stacked on PR #73 (`digest post --seed-map`, branch `m5-links`);
-rebased onto `main` after #73 merges. The design comes from a design pass on the real day-6
+Status: v0.5, 2026-10-13. Process stage 1 (`docs/process.md`). The design comes from a design pass on the real day-6
 payloads; three readers' mock payloads (v6) were posted to the user's DM in Scratch on
 2026-10-13 and approved ("looks good"). This unit is one day of work. Section 15 lists what
 it does not do.
@@ -60,7 +57,11 @@ Terms used in every section below:
 Block order with at least one item:
 
 1. `header`, plain_text: `<program> · <Day d Mon>` of `selection.day`. Example:
-   `Kestrel K2 · Mon 19 Oct`.
+   `Kestrel K2 · Mon 19 Oct`. With `reader_in_header=True`, the header adds
+   ` · <first name> (<role text>)` of the reader, for example `Kestrel K2 · Mon 19 Oct ·
+   Nadia (ME)`. `digest post` passes True on both paths, because each path sends the
+   digests of several readers to one destination (one DM, or one webhook channel). A
+   delivery to each reader's own DM passes False.
 2. `context`: the lines of `render.context_lines(world, selection)`, word for word, joined
    by a newline: the window line (`Since your digest of 2026-10-16` or `First digest: the
    last 5 working days`), then the phase line when the world has a phase window on the
@@ -188,8 +189,9 @@ Nadia starts with the DFM review (G-TR1, tomorrow) before the chassis base (no g
 
 Fold before every count and every order. Only two pair types fold. Walk the lines in
 selection order. An **absorbable** line is a line in section `risks` whose item has no
-absence. For each absorbable line R, the **absorber** is the first line X in selection
-order that meets one rule:
+absence. For each absorbable line R, the **absorber** is the first line X before R in
+selection order that meets one rule (a line after R never absorbs it, so a fold never
+moves an item to a later section; an `fyi` ask in R's thread stays a separate line):
 
 - (a) X is a checklist absence, and an entity id of R occurs in the text of X's task. The id
   occurs when it is in the text with no letter, digit or `-` directly before or after it.
@@ -491,6 +493,13 @@ tokens below.
 - Only these go inside `<...>`: constructed message permalinks (`<url|Thread>`,
   `<url|Message>`), seed-map file permalinks (`<url|name>`), and channel ids
   (`<#C...>`, matching `<#C[A-Z0-9]+>`).
+- `SeedMap` checks every value that goes inside `<...>` when it loads, so no later code
+  needs to: `team_id` matches `T[A-Z0-9]+`; `workspace_url` matches
+  `https://[a-z0-9-]+\.slack\.com`; each `channels` value and each message `channel`
+  matches `C[A-Z0-9]+`; each message `ts` and `thread_ts` matches `[0-9]+\.[0-9]+`; each
+  file `permalink` matches `https://[a-z0-9-]+\.slack\.com/files/[A-Za-z0-9_.%/-]+`. A
+  value that does not match makes the map fail to load: `--seed-map` exits 1 with the
+  field name only (the refusal of `docs/plans/m5-links.md`), before any Slack call.
 - No buttons, no overflow menus, no `actions` blocks, no accessories. A URL button still
   sends an interaction payload, and the bot has no handler.
 
@@ -660,7 +669,21 @@ covers.
   `notes/research/slack-layout/v6-*.json` is a manual check recorded in the PR (that folder
   is local scratch; the test builds from the store). Expected differences from v6: the
   absence titles (D6), `checked: #<channel> threads` on each checklist absence, and Grace's
-  TST-THM-02 gate task linking its own thread (D12). Block counts do not change.
+  TST-THM-02 gate task linking its own thread (D12). Selection changes after the mocks
+  (the ask audience of #74, and the new score order) change the reply block counts; the
+  top messages keep their counts (10, 14 and 14 on 2026-10-13).
+- A23 (4.3, fold direction). An `fyi` ask in the thread of a `risks` line that shares a
+  non-gate entity with it does not absorb it: the risk stays in `risks`, the ask stays in
+  `fyi`. A `needs_you` ask in the same position still absorbs the risk.
+- A24 (2, header reader). `reader_in_header=False` (the default) gives today's header;
+  `True` adds ` · <first name> (<role text>)`; the 150 cut still holds. `digest post` and
+  `digest post --dm` each send headers that name their reader.
+- A25 (9.2, seed map). For each field of the 9.2 list, a map whose value does not match
+  fails to load: `digest post --seed-map` exits 1, the output names the field, does not
+  hold the bad value, and no Slack call is made. A real-form map loads.
+- A26 (12, authors). `digest post` and `digest post --dm`, with `_demo_selections`
+  returning a non-empty authors map for an ask item, send the asker quote prefix and the
+  `Asked of you` or `Your question` label that the authors decide.
 - A22 (live, manual, recorded in the PR). `digest post --dm <member> --seed-map <map>` in
   Scratch; the user checks the three digests and their threads.
 
