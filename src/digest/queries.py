@@ -160,6 +160,8 @@ _NOTE = (
     "The claims are as stated. The claim ledger is not built, so there is no supersession: "
     "a later claim does not replace an earlier one."
 )
+# The limit on the text and BLOB cells of a query result, in lengths as SQLite returns them.
+_RESULT_BYTES = 8_000_000
 # The authorizer actions that a read needs. FTS5 also reads PRAGMA data_version.
 _READ_ACTIONS = frozenset(
     {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
@@ -210,7 +212,9 @@ def search_items(
     if entity is not None:
         wanted = _entity(ctx.world, entity)
         if wanted is None:
-            return ()
+            raise ValueError(f"entity {entity!r} is not an entity id or alias")
+    if owner is not None and owner not in _names(ctx.world):
+        raise ValueError(f"owner {owner!r} is not a persona user id")
     zone = ZoneInfo(ctx.world.timezone)
     names = {e.id: (e.id, *e.aliases) for e in ctx.world.entities}
     hits: dict[tuple[str, str], int] = {}
@@ -396,8 +400,10 @@ def query(
 ) -> QueryResult:
     """Run one read-only SQL statement under an authorizer, a row cap and a timeout (plan Q9).
 
-    Raise ValueError for a limit out of range, a refused or failed statement (with
-    SQLite's message), and a statement that runs past `timeout_s`.
+    Raise ValueError for a limit out of range, an empty statement, a refused or failed
+    statement (with SQLite's message), a statement that runs past `timeout_s`, and a
+    result whose text and BLOB cells pass `_RESULT_BYTES`. The timeout also applies
+    while the rows are fetched and converted.
     """
     if not 1 <= row_cap <= 1000:
         raise ValueError(f"row_cap {row_cap} is not from 1 to 1000")
@@ -420,21 +426,35 @@ def query(
         connection.set_authorizer(_authorize)
         connection.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
         connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 1_000_000)
+        connection.setlimit(sqlite3.SQLITE_LIMIT_COLUMN, 100)
         connection.set_progress_handler(stop, 1000)
         cursor = connection.execute(sql)
-        fetched = cursor.fetchmany(row_cap + 1)
-        columns = tuple(column[0] for column in cursor.description or ())
+        # The authorizer allows only reads, and each read has a column. A statement
+        # without columns is blank or only a comment.
+        if cursor.description is None:
+            raise ValueError("one SQL statement is required")
+        columns = tuple(column[0] for column in cursor.description)
+        rows: list[tuple[Cell, ...]] = []
+        size = 0
+        truncated = False
+        for row in cursor:  # one row at a time, so the size check comes before the next row
+            if len(rows) == row_cap:
+                truncated = True
+                break
+            size += sum(len(value) for value in row if isinstance(value, str | bytes))
+            if size > _RESULT_BYTES:
+                raise ValueError("query result is too large")
+            rows.append(tuple(_cell(value) for value in row))
+            # The progress handler stops SQLite only. This check stops the Python work.
+            if perf_counter() > deadline:
+                raise ValueError("query timed out")
     except sqlite3.Error as error:
         if timed_out:
             raise ValueError("query timed out") from error
         raise ValueError(str(error)) from error
     finally:
         connection.close()
-    return QueryResult(
-        columns=columns,
-        rows=tuple(tuple(_cell(value) for value in row) for row in fetched[:row_cap]),
-        truncated=len(fetched) > row_cap,
-    )
+    return QueryResult(columns=columns, rows=tuple(rows), truncated=truncated)
 
 
 def schema_text() -> str:
