@@ -60,14 +60,15 @@ through Python instead: `uv run python -m digest demo`.
 
 - As direct messages from the app's bot: `uv run digest post --dm <member id>`. Put the
   bot token in `.env` as `SLACK_BOT_TOKEN=xoxb-...`; the app needs the bot scopes
-  `chat:write` and `im:write`. All three readers' digests go to that one person, each
-  headed by its reader.
+  `chat:write` and `im:write`. All three readers' digests go to that one person. Each
+  digest is a top message with the items to read first, and a reply in its thread with
+  the rest. Each header names its reader.
 - To one channel through an incoming webhook: `uv run digest post`, with
   `SLACK_WEBHOOK_URL=https://hooks.slack.com/...` in `.env`.
 
 Add `--day N` for another world day. The command prints no token or URL, and it stops at
-the first message Slack refuses. Without a seed map, the source links point to the
-synthetic workspace `kestrel-k2.slack.com`, which does not exist.
+the first message Slack refuses. Without a seed map, a source has no link: the digest
+names only its channel.
 
 To make the links open real messages, seed the corpus into the same workspace first:
 

@@ -100,6 +100,10 @@ digest.
   - Amended 2026-10-13 (`docs/plans/phase-line.md`): `context_lines` returns the window
     line and the phase line. The window block and the `text` fallback hold both, and the
     block arithmetic does not change.
+  - Amended 2026-10-13 (`docs/plans/m5-layout.md`): `slack_digest` replaces
+    `slack_message`. The window and phase lines are one `context` block after the header,
+    and the `text` fallback is the phone notification (layout 3.4), not the header and
+    window line.
 
 ## Acceptance
 

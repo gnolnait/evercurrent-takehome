@@ -212,7 +212,10 @@ cassette exits 1 with the `CassetteMiss` message; an extract run with a failed t
 exits 1 naming the failed-thread count, before any digest is built. The golden-implied
 overlap target of SPEC A1 is M3 proper.
 
-B6.4 `digest post` (added 2026-10-12 so the demo can be seen in Slack): it builds the
+B6.4 `digest post` (added 2026-10-12 so the demo can be seen in Slack). Amended 2026-10-13:
+the message layout below is replaced by `docs/plans/m5-layout.md` (a top message and a
+reply, sent as two webhook messages; source links are `<permalink|Thread>` or
+`<permalink|Message>` with a seed map, and the channel name only without one). It builds the
 same three digests as `digest demo`, from the same day (`--day`, default 6), and posts one
 Slack message per reader, in reader order, to the incoming webhook in the environment
 variable `SLACK_WEBHOOK_URL` (also read from `.env`). It is the only command that sends
@@ -255,7 +258,9 @@ reader directly). It builds the same three messages as B6.4 and sends each as a 
 message from the app's bot to the Slack user `USER_ID`, in reader order: it opens the DM
 with `conversations.open` and posts with `chat.postMessage` (scopes `chat:write`,
 `im:write`). The demo workspace has one real person, so all three readers' digests go to
-that user; each message's header names its reader. The bot token comes from
+that user; each message's header names its reader. Amended 2026-10-13
+(`docs/plans/m5-layout.md`): each digest is a top message plus one reply in its thread,
+and the header is `<program> · <Day d Mon> · <first name> (<role>)`. The bot token comes from
 `SLACK_BOT_TOKEN` (environment, then `.env`, read as in B6.4) and must start with
 `xoxb-`; `USER_ID` must match `[UW][A-Z0-9]+`. Either check fails with exit 1 before any
 build, naming the variable or the option and never the token. A Slack API error exits 1
