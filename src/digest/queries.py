@@ -8,7 +8,7 @@ writes the store.
 from datetime import date
 from typing import Literal
 
-from pydantic import SkipValidation
+from pydantic import ConfigDict, SkipValidation
 
 from digest.daily.select import Section
 from digest.models import Attribute, Authority, Frozen, Item, Role
@@ -22,6 +22,9 @@ TaskState = Literal["done", "in progress", "no evidence"]
 
 class QueryContext(Frozen):
     """The store, the world and the window that every query function reads (plan Q0)."""
+
+    # Store is a plain class; pydantic needs leave to hold it.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     store: SkipValidation[Store]
     world: SkipValidation[World]
