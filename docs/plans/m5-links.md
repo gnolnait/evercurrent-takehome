@@ -38,9 +38,10 @@ the link points at the Slack message:
 `?thread_ts=<thread_ts>&cid=<channel>` when the message is a reply (its `ts` differs from
 its `thread_ts`). The link text stays `source`.
 
-L2. **Channel link.** After a mapped source link, the line adds ` in <#<slack channel>>`,
-once per distinct channel of the line's mapped sources, so Slack shows the channel name
-as a link.
+L2. **Channel link.** After the line's last source (and its file links), the line adds
+` in ` and then one `<#<slack channel>>` per distinct channel of the line's mapped
+sources, in source order, separated by one space: ` in <#C1> <#C2>`. Slack shows each
+channel name as a link. A line with no mapped source adds nothing.
 
 L3. **File links.** For each mapped source message, every map `files` entry whose key
 starts with `<message key>/` adds a link `<permalink|<file name>>` after that source, in
