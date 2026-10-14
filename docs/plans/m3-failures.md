@@ -27,7 +27,9 @@ unchanged:
 - F1. `OpenRouter.complete` turns any `httpx2.RequestError` from `self.client.post`
   (transport, timeout, decoding and redirect errors) into
   `LLMOutputError("openrouter unreachable: <ExceptionClass>", raw="")`, raised
-  `from None`, so no traceback carries the request, the key or a chained message. A
+  `from None`, so no traceback carries the request, the key or a chained message. It
+  first logs one event `llm_unreachable` with fields `backend` and `error_class`, so the
+  transport class reaches the log (`extract_failed` logs only `LLMOutputError`). A
   success reply whose body is not JSON becomes
   `LLMOutputError("openrouter reply is not JSON", raw=response.text)`. `run_extract` counts
   either as a failed thread (it catches `LLMOutputError`), and the wrapper does not retry
@@ -40,12 +42,14 @@ unchanged:
   later save still holds them.
 - F4. In `digest/web/app.py`, `POST /edit` and `POST /reset` catch any `Exception` other
   than `ValueError`, log one event `room_rebuild_failed` with fields `route` and
-  `error_class` (per `.claude/rules/logging.md`), and answer status 500 with the full page
+  `error_class` (per `.claude/rules/logging.md`) and `exc_info`, so the server log keeps
+  the traceback that a bare 500 logs today, and answer status 500 with the full page
   and the refusal "The room could not apply this change (<ErrorClass>); the room is
   unchanged." The page renderer gains a keyword `status` for this; every other refusal
   keeps 400. `ValueError` keeps its 400 and its message.
-- F5. The F4 refusal and log event name the exception class only, never its message: an
-  exception message can hold a path, a token or a model reply.
+- F5. The F4 refusal on the page names the exception class only, never its message: an
+  exception message can hold a path, a token or a model reply. The traceback goes only to
+  the local server log.
 
 ## Behaviours
 
@@ -53,7 +57,7 @@ B11.1 The gateway backend over an `httpx2.MockTransport` whose handler raises
 `httpx2.ConnectError`, one that raises `httpx2.ReadTimeout`, and one that raises
 `httpx2.DecodingError` raises `LLMOutputError` with the F1 message, `raw == ""`,
 `__cause__` and `__context__` suppressed (`__suppress_context__` true), and neither the
-API key nor the request body in the message.
+API key nor the request body in the message; one `llm_unreachable` record is logged.
 B11.2 A 200 reply with a body that is not JSON raises `LLMOutputError("openrouter reply
 is not JSON")`.
 B11.3 A record-mode room whose gateway raises a transport error (seam: `from_settings`
@@ -66,7 +70,7 @@ a following `save` writes a corpus that holds the curated change.
 B11.5 `POST /edit` and `POST /reset` with a fake room that raises `RuntimeError("secret
 path C:/x")` answer 500 with the page and the F4 refusal; the page does not contain the
 exception's message; one `room_rebuild_failed` record with `route` and `error_class` is
-logged; a following `GET /` answers 200.
+logged with `exc_info`; a following `GET /` answers 200.
 B11.6 `ValueError` refusals keep their 400 and their message (unit 9 and 10 tests stay
 green unchanged).
 
