@@ -1,6 +1,6 @@
 # Plan: M4 unit 12a, the query function layer (D20)
 
-Status: v0.2.1, 2026-10-14, 00:55 PT. Process stage 1 (`docs/process.md`), the full process
+Status: v0.2.2, 2026-10-14, 03:50 PT (code review: result size, unknown filters, empty SQL). Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Builds on `main`. Unit 12b (the MCP server) and
 unit 13 (the web preview's open-items page) are thin adapters over this layer.
 
@@ -63,7 +63,8 @@ items of `detect_absences` for the day; absences are computed, never stored.
 - Q1 `search_items`: the items that match every given filter. `text` matches the
   title, the summary, an entity id or alias, or an evidence message (`Store.search_events`,
   FTS5); the other text tests are case-insensitive substring tests. `entity` takes an id
-  or an alias. `owner` takes a user id. `updated_since` keeps items whose `last_updated`
+  or an alias, and an unknown one is refused with `ValueError`. `owner` takes the user id
+  of a persona, else `ValueError`. `updated_since` keeps items whose `last_updated`
   falls on or after that day in the world's zone. `type` and `status` take the model's
   literals, else `ValueError`. At least one filter or a text is required, else
   `ValueError`. Order: items with an FTS hit first in FTS order, then by `last_updated`
@@ -100,11 +101,16 @@ items of `detect_absences` for the day; absences are computed, never stored.
     `SQLITE_RECURSIVE`, and `SQLITE_PRAGMA` for `data_version` with no argument (FTS5
     reads it); it denies the rest, so `VACUUM INTO`, `ATTACH`, temp tables and every
     other pragma (`hard_heap_limit` changes the whole process) are refused;
-  - `SQLITE_LIMIT_ATTACHED` 0 and `SQLITE_LIMIT_LENGTH` 1,000,000 bytes;
+  - `SQLITE_LIMIT_ATTACHED` 0, `SQLITE_LIMIT_LENGTH` 1,000,000 bytes and
+    `SQLITE_LIMIT_COLUMN` 100;
   - a progress handler that stops it after `timeout_s` (0.1 to 10) with
     `ValueError("query timed out")`;
-  - at most `row_cap` rows (1 to 1000), fetched with `fetchmany(row_cap + 1)`, and a
-    `truncated` flag.
+  - at most `row_cap` rows (1 to 1000) and a `truncated` flag. Rows are fetched one at a
+    time; when the cells fetched so far (text and BLOB lengths, as returned) pass
+    8,000,000 bytes, the query stops with `ValueError("query result is too large")`.
+    The timeout also applies while rows are fetched and converted.
+  - an empty statement (blank or only a comment) is refused with
+    `ValueError("one SQL statement is required")`.
 
   An authorizer refusal or an SQL error becomes `ValueError` with SQLite's message. Cells
   are `str | int | float | None`; a BLOB becomes its hex text. The connection is closed
