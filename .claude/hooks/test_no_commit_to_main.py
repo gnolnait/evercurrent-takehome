@@ -153,6 +153,8 @@ def test_allows_git_exe_as_an_argument_on_main(repos):
         pytest.param("pwsh -c 'git commit -m update'", id="pwsh"),
         pytest.param('cmd //c "git commit -m update"', id="cmd"),
         pytest.param('powershell -Command "GIT commit -m update"', id="powershell-upper-case-program"),
+        # An encoded command cannot be read, so it is unreadable on main.
+        pytest.param("powershell -EncodedCommand ZwBpAHQAIABjAG8AbQBtAGkAdAA=", id="powershell-encoded"),
     ],
 )
 def test_blocks_windows_shell_wrapped_commit_on_main(cmd, repos):

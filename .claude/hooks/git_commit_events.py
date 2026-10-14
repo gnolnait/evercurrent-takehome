@@ -6,7 +6,7 @@ import re
 import shlex
 import sys
 
-from shell_segments import WINDOWS_SHELLS, command_name
+from shell_segments import WINDOWS_SHELLS, command_name, windows_shell_text
 
 # Bash's literal close marker for any delimiter outside these forms — an embedded
 # backslash-escape, an unquoted `$`/backtick that extends the word, a mid-word line
@@ -555,6 +555,9 @@ def process_segment(toks, effdir, piped=(), lead=0):
         payload = " ".join(rest)
         if not any(re.match(r"-\w*c$", t) for t in rest):
             payload += " " + stdin_code
+        if hb in WINDOWS_SHELLS and windows_shell_text(hb, rest) is None:
+            print("__AMBIGUOUS__")  # an encoded PowerShell command cannot be read
+            return None
         if names_git_write(payload):
             print("__AMBIGUOUS__")
         return None

@@ -71,7 +71,7 @@ shells quote, escape, comment and chain commands by rules unlike POSIX shell
 (`'` is plain text in cmd, a backtick joins lines in PowerShell, `call` runs a
 command), so a POSIX parse misses real commands. `windows_shell_text` gives each
 guard the whole text, and the guard blocks when the text names what it guards
-against: a merge, a bypass flag, or git and commit on a protected branch. Text
+against: a merge, a bypass flag, or a git write verb on a protected branch. Text
 that only prints those words blocks too. That is the safe direction.
 """
 

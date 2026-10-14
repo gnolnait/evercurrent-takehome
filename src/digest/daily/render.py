@@ -134,10 +134,10 @@ def select_digest(
     return select(world, profile, items, absences, priors, day, previous_digest, newest_evidence)
 
 
-def _line(
+def line_parts(
     line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
-) -> str:
-    """One line, then its indented summary and source links.
+) -> tuple[str, str]:
+    """The line's heading and its one-line summary, without "- ", "[must see]" or sources.
 
     A checklist absence takes the task text and owner role from the world's checklist.
     """
@@ -146,26 +146,32 @@ def _line(
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
         owner = f" - owner {names.get(item.owner, item.owner)}" if item.owner else ""
-        head = f"- {_plain(item.title)}{entities}{owner}"
-        body = [f"  {_plain(item.summary)}"]
+        head = f"{_plain(item.title)}{entities}{owner}"
     elif detail.source == "checklist":
         task = tasks.get((detail.gate or "", detail.task or ""))
         what = f"{task.task} ({task.owner})" if task else detail.task
         head = (
-            f"- Not happened: {what} for {detail.gate} - "
+            f"Not happened: {what} for {detail.gate} - "
             f"{_days(detail.days_silent)} silent, "
             f"{detail.buffer_consumed}/{detail.buffer_days} buffer days used"
         )
-        body = [f"  {_plain(item.summary)}"]
     else:
         asker = names.get(detail.asker, detail.asker) if detail.asker else "someone"
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
-        head = f"- Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
-        body = [f"  {_plain(item.summary)}"]
+        head = f"Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
+    return head, _plain(item.summary)
+
+
+def _line(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> str:
+    """One line, then its indented summary and source links."""
+    heading, summary = line_parts(line, names, tasks)
+    head = f"- {heading}"
     if line.must_see:
         head += " [must see]"
-    sources = [f"  source: {entry.permalink}" for entry in item.evidence]
-    return "\n".join([head, *body, *sources])
+    sources = [f"  source: {entry.permalink}" for entry in line.item.evidence]
+    return "\n".join([head, f"  {summary}", *sources])
 
 
 def _days(count: int) -> str:
