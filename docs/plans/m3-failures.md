@@ -70,7 +70,8 @@ exactly `"openrouter reply is not JSON"`.
 B11.3 A record-mode room whose gateway raises a transport error (seam: `from_settings`
 in `digest.room` patched to return an `LLM` over the B11.1 backend) refuses an unrecorded
 message change with a `ValueError` whose text holds the F2 cause "a network failure",
-keeps its state and leaves no new store file in the room's folder.
+and keeps its state (a store file left by a Windows handle is tolerated, as
+`_remove_store` does).
 B11.4 A room with a curated message change applied, whose next build raises
 `RuntimeError`: `reset` raises, the room's state and message changes are unchanged, and
 a following `save` writes a corpus that holds the curated change (`save` does not
