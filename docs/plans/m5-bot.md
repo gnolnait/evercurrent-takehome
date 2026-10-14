@@ -417,6 +417,16 @@ starts. A result that differs changes the plan first.
    phone, and `views.open` with the I13 modal opens within the 3-second `trigger_id`
    limit.
 
+Results, 2026-10-13 (Scratch):
+- Item 3: `slack_sdk.socket_mode.SocketModeClient` with `SLACK_APP_TOKEN` connected
+  (`is_connected()` true) and closed cleanly. Interactivity in the app settings is not
+  verified by this spike; the live row (A-live) checks it.
+- Item 2: a message posted with `metadata`, then updated with `chat.update` and no
+  `metadata`, still held the same metadata when read back with `include_all_metadata`.
+- Items 1 and 4 need a person to click. Until then the bot reads reader, day, run id and
+  world from the `posted_messages` row first (the fallback of item 1 is the design), and
+  uses the payload metadata only as a cross-check. Item 4 is part of the live row.
+
 ## Acceptance
 
 Each row is tested offline with a temporary store, hand-made `PostedMessage` rows, a fake
