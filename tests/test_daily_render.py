@@ -855,8 +855,12 @@ def test_phase_line_bundled_phase_boundary(world: World, day: int, expected: str
 
 @pytest.mark.parametrize(
     ("gate_date", "when"),
-    [(date(2026, 10, 19), "in 1 working day"), (date(2026, 10, 20), "in 2 working days")],
-    ids=["Friday-to-Monday", "Friday-to-Tuesday"],
+    [
+        (date(2026, 10, 19), "in 1 working day"),
+        (date(2026, 10, 20), "in 2 working days"),
+        (date(2026, 10, 17), "in 1 working day"),
+    ],
+    ids=["Friday-to-Monday", "Friday-to-Tuesday", "Friday-to-Saturday"],
 )
 def test_phase_line_counts_working_days(world: World, gate_date: date, when: str) -> None:
     """PL2: cross a weekend and use the singular or plural noun."""
