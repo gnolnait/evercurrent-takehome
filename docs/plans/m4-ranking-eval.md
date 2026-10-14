@@ -83,7 +83,10 @@ Configurations:
   C0's. A term whose row is 0
   cannot move any metric on this world, and the table says so.
 - R7b. A day that `select_digest` refuses (for example extract deltas left pending by a
-  failed extraction) stops the eval with that refusal. On cassettes no day is refused.
+  failed extraction) stops `run_ranking_eval` with that refusal. `digest eval` then
+  writes the extraction report without the Ranking section and names the refusal in the
+  report's "Not run" table, so a failed extraction still yields a report (an existing
+  eval test pins that). On cassettes no day is refused.
 
 - R8. The verdict for each term C1 to C4, per metric (overall recall, overall nDCG,
   ranked-lane recall, ranked-lane nDCG): the relative drop is `(c0 - off) / c0`. A metric
