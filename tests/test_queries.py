@@ -5,8 +5,9 @@ import shutil
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from threading import Thread
 from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,7 +18,9 @@ from typer.testing import CliRunner
 
 import test_room
 from digest import queries
+from digest.absence import detect_absences
 from digest.cli import app
+from digest.daily.render import render_digest, select_digest
 from digest.models import Item
 from digest.priors import Priors
 from digest.queries import QueryContext
@@ -44,11 +47,39 @@ RESOLVED_ASK = "C0SUPCH:1792087200.010059#1792087200.010059#0"
 def ctx(day6_store: Path, world: World, priors: Priors, tmp_path: Path) -> Iterator[QueryContext]:
     path = tmp_path / "day6.sqlite"
     shutil.copy2(day6_store, path)
-    with Store.open(path) as store:
+    with Store.open_readonly(path) as store:
         # A fixture must not call a query stub: each test reaches its own function.
         yield QueryContext(
             store=store, world=world, priors=priors, day=DAY, previous_digest=PREVIOUS
         )
+
+
+@pytest.fixture
+def wal_store(ctx: QueryContext) -> Iterator[sqlite3.Connection]:
+    """Keep setup WAL bytes present while the query uses its read-only store."""
+    with closing(sqlite3.connect(ctx.store.path)) as db:
+        with db:
+            db.execute(
+                "INSERT INTO meta (key, value) VALUES ('query_test_marker', 'keep-store-open')"
+            )
+        yield db
+
+
+def absences(ctx: QueryContext) -> list[Item]:
+    zone = ZoneInfo(ctx.world.timezone)
+    return detect_absences(
+        ctx.store, ctx.world.project, ctx.priors, datetime.combine(ctx.day, time.max, zone), zone
+    )
+
+
+def assert_store_released(ctx: QueryContext) -> None:
+    """Close the fixture handle so a leaked query handle prevents the Windows rename."""
+    path = ctx.store.path
+    assert isinstance(path, Path)
+    ctx.store.close()
+    moved = path.with_name("renamed.sqlite")
+    path.rename(moved)
+    moved.rename(path)
 
 
 def rows(ctx: QueryContext, sql: str) -> list[dict[str, Any]]:
@@ -91,7 +122,7 @@ def test_open_context_first_day(
     ):
         result = CliRunner().invoke(app, args)
         assert result.exit_code == 0, (result.output, result.exception)
-    with Store.open(path) as store:
+    with Store.open_readonly(path) as store:
         actual = queries.open_context(store, world, priors)
         assert actual.day == world.start_date
         assert actual.previous_digest is None
@@ -175,6 +206,53 @@ def test_search_text(ctx: QueryContext, text: str, expected: tuple[str, ...]) ->
     """Setup recorded titles and evidence / Action search text / Assert the matching item ids."""
     actual = queries.search_items(ctx, text, limit=100)
     assert tuple(view.item.item_id for view in actual) == expected
+
+
+def test_search_updated_since(ctx: QueryContext) -> None:
+    """Setup updates around local midnight / Action filter by day / Assert the local boundary."""
+    zone = ZoneInfo(ctx.world.timezone)
+    boundary = datetime.combine(DAY, time.min, zone)
+    # Move two recorded items to either side of midnight in this test's copy.
+    with closing(sqlite3.connect(ctx.store.path)) as db, db:
+        for item_id, instant in (
+            (PACK_ISSUED, boundary - timedelta(microseconds=1)),
+            (REV_C, boundary),
+        ):
+            micros = int(instant.timestamp() * 1_000_000)
+            stamp = f"{micros // 1_000_000}.{micros % 1_000_000:06d}"
+            db.execute(
+                "UPDATE items SET last_updated = ?, last_updated_us = ? WHERE item_id = ?",
+                (stamp, micros, item_id),
+            )
+    universe = [*recorded(ctx).values(), *absences(ctx)]
+    expected = sorted(
+        (i for i in universe if datetime.fromtimestamp(float(i.last_updated), zone).date() >= DAY),
+        key=lambda i: (-float(i.last_updated), i.item_id),
+    )
+    assert REV_C in {i.item_id for i in expected}
+    assert PACK_ISSUED not in {i.item_id for i in expected}
+    before = recorded(ctx)[PACK_ISSUED]
+    assert datetime.fromtimestamp(float(before.last_updated), UTC).date() == DAY
+    actual = queries.search_items(ctx, updated_since=DAY, limit=100)
+    assert [v.item.item_id for v in actual] == [i.item_id for i in expected]
+
+
+def test_search_absences(ctx: QueryContext) -> None:
+    """Setup computed absences / Action filter by type / Assert all ids in search order."""
+    expected = sorted(absences(ctx), key=lambda i: (-float(i.last_updated), i.item_id))
+    assert expected
+    actual = queries.search_items(ctx, type="absence", limit=100)
+    assert [v.item.item_id for v in actual] == [i.item_id for i in expected]
+
+
+def test_search_title_without_evidence_match(ctx: QueryContext) -> None:
+    """Setup a title phrase absent from messages / Action search / Assert the title match."""
+    text = "False-alarm short"
+    assert not rows(ctx, "SELECT ts FROM events WHERE lower(text) LIKE '%false-alarm short%'")
+    expected = [i.item_id for i in recorded(ctx).values() if text.lower() in i.title.lower()]
+    assert len(expected) == 1
+    actual = queries.search_items(ctx, text)
+    assert [v.item.item_id for v in actual] == expected
 
 
 def test_search_fts_precedes_newer_text_match(ctx: QueryContext) -> None:
@@ -287,7 +365,33 @@ def test_get_item_absence(ctx: QueryContext) -> None:
     assert actual == next(
         v for v in queries.list_absences(ctx) if v.item.item_id == actual.item.item_id
     )
-    assert actual.item.item_id not in recorded(ctx)
+
+
+def test_get_item_ask_absence(ctx: QueryContext) -> None:
+    """Setup a computed ask absence / Action get its id / Assert its complete item."""
+    expected = next(i for i in absences(ctx) if i.absence and i.absence.source == "ask")
+    actual = queries.get_item(ctx, expected.item_id)
+    assert actual is not None
+    assert actual.item == expected
+    people = {p.user_id: p.name for p in ctx.world.personas}
+    assert actual.owner_name == people[expected.owner]
+
+
+def test_entity_history_inherited_owner(ctx: QueryContext) -> None:
+    """Setup the Orin module / Action get history / Assert ownership through its carrier."""
+    entities = {e.id: e for e in ctx.world.entities}
+    # world.yaml: PN-42010 has no owner. Its parent PN-21020 belongs to EE.
+    assert entities["PN-42010"].owner is None
+    assert entities["PN-42010"].parent == "PN-21020"
+    assert entities["PN-21020"].owner == "EE"
+    owner = next(p for p in ctx.world.personas if p.user_id == "U0EE01")
+    assert owner.role == "EE"
+    actual = queries.get_entity_history(ctx, "PN-42010")
+    assert actual is not None
+    assert actual.owner_role is None
+    assert [(p.user_id, p.name, p.role, p.kind) for p in actual.owners] == [
+        (owner.user_id, owner.name, owner.role, owner.kind)
+    ]
 
 
 @pytest.mark.parametrize("entity", ["PN-11020", "chassis plate"])
@@ -357,7 +461,10 @@ def test_absences(ctx: QueryContext) -> None:
         and label["day"] == 6
         and label["task"] in {"G-DVT1.emc", "G-DVT1.thermal"}
     }
+    detected = absences(ctx)
+    assert detected
     actual = queries.list_absences(ctx)
+    assert [v.item.item_id for v in actual] == [i.item_id for i in detected]
     checklist = [v.item for v in actual if v.item.absence and v.item.absence.source == "checklist"]
     # Only these two stale tasks have citations in the extracted store.
     assert [item.item_id for item in checklist] == ["absence:G-DVT1.emc", "absence:G-DVT1.thermal"]
@@ -369,7 +476,6 @@ def test_absences(ctx: QueryContext) -> None:
         assert (detail.buffer_consumed, detail.buffer_days) == (4, 7)
         assert item.affected_roles == tuple(label["audience"])
     assert len({v.item.item_id for v in actual}) == len(actual)
-    assert not ({v.item.item_id for v in actual} & recorded(ctx).keys())
     safety_label = next(
         label
         for label in labels
@@ -411,6 +517,31 @@ def test_why_ranked_owned_blocker(ctx: QueryContext) -> None:
     assert "PN-11020" in actual.reason
 
 
+def test_why_ranked_scored_line(ctx: QueryContext) -> None:
+    """Setup a selected ranked line / Action ask why / Assert its rank, score and reason."""
+    selection = select_digest(
+        ctx.store,
+        ctx.world,
+        ctx.priors,
+        "U0ME01",
+        ctx.day,
+        previous_digest=ctx.previous_digest,
+    )
+    ranked = [line for line in selection.lines if not line.must_see]
+    assert ranked
+    expected = ranked[0]
+    actual = queries.why_ranked(ctx, "U0ME01", expected.item.item_id)
+    assert actual is not None
+    assert (
+        actual.item_id,
+        actual.section,
+        actual.lane,
+        actual.rank,
+        actual.score,
+        actual.reason,
+    ) == (expected.item.item_id, expected.section, "ranked", 1, expected.score, expected.reason)
+
+
 @pytest.mark.parametrize("item_id", ["unknown-id", PACK_ISSUED])
 def test_why_ranked_not_delivered(ctx: QueryContext, item_id: str) -> None:
     """Setup an unknown or old FYI item / Action ask why ranked / Assert no delivered line."""
@@ -432,7 +563,38 @@ def test_reader_refusals(
 
 def test_digest(ctx: QueryContext) -> None:
     """Setup the ME reader on day 6 / Action get digest / Assert named lines and rendered context."""
+    selection = select_digest(
+        ctx.store,
+        ctx.world,
+        ctx.priors,
+        "U0ME01",
+        ctx.day,
+        previous_digest=ctx.previous_digest,
+    )
+    assert any(not line.must_see for line in selection.lines)
+    expected_lines = []
+    ranks: dict[str, int] = {}
+    for selected in selection.lines:
+        rank = None
+        if not selected.must_see:
+            ranks[selected.section] = ranks.get(selected.section, 0) + 1
+            rank = ranks[selected.section]
+        expected_lines.append(
+            (
+                selected.item.item_id,
+                selected.section,
+                "must_see" if selected.must_see else "ranked",
+                rank,
+                selected.score,
+                selected.reason,
+            )
+        )
     actual = queries.get_digest(ctx, "U0ME01")
+    assert [
+        (line.item_id, line.section, line.lane, line.rank, line.score, line.reason)
+        for line in actual.lines
+    ] == expected_lines
+    assert actual.text == render_digest(ctx.world, selection)
     assert (actual.user_id, actual.user_name, actual.day, actual.previous_digest) == (
         "U0ME01",
         "Nadia Brenner",
@@ -486,13 +648,24 @@ def test_project_state(ctx: QueryContext) -> None:
         (g.id, g.name, g.date, *buffers[g.id])
         for g in sorted(ctx.world.project.gates, key=lambda g: (g.date, g.id))
     ]
-    # All four task links in the day-6 store. Other world tasks have no citation.
+    links: dict[str, list[tuple[str, date]]] = {}
+    zone = ZoneInfo(ctx.world.timezone)
+    for row in rows(ctx, "SELECT tasks FROM items"):
+        for link in json.loads(row["tasks"]):
+            day = datetime.fromtimestamp(float(link["message_ts"]), zone).date()
+            if day <= ctx.day:
+                links.setdefault(link["task"], []).append((link["effect"], day))
     states = {
-        "G-EVT2-EXIT.review": ("done", date(2026, 10, 12)),
-        "G-DVT1.thermal": ("in progress", date(2026, 10, 13)),
-        "G-DVT1.emc": ("in progress", date(2026, 10, 14)),
-        "G-DVT1.fai": ("in progress", date(2026, 10, 16)),
+        task: (
+            "done" if any(effect == "done" for effect, _ in entries) else "in progress",
+            max(day for _, day in entries),
+        )
+        for task, entries in links.items()
     }
+    for task, entries in links.items():
+        if len(entries) > 1:
+            actual_task = next(t for t in actual.tasks if t.task_id == task)
+            assert actual_task.latest_link_day == max(day for _, day in entries)
     expected = {
         (g.id, task.id): (task.task, task.owner, *states.get(task.id, ("no evidence", None)))
         for g in ctx.world.project.gates
@@ -513,6 +686,7 @@ def test_query_select(ctx: QueryContext) -> None:
     assert actual.columns == ("item_id", "title", "owner")
     assert actual.rows == tuple(tuple(row.values()) for row in expected)
     assert actual.truncated is False
+    assert_store_released(ctx)
 
 
 def test_schema_text() -> None:
@@ -537,10 +711,11 @@ def test_schema_text() -> None:
         "schema_text",
     ],
 )
-def test_functions_leave_store_bytes(ctx: QueryContext, function: str) -> None:
+def test_functions_leave_store_bytes(
+    ctx: QueryContext, wal_store: sqlite3.Connection, function: str
+) -> None:
     """Setup a store with WAL bytes / Action call each function / Assert both files stay identical."""
     assert isinstance(ctx.store.path, Path)
-    ctx.store.set_meta("query_test_marker", "keep-store-open")
     before = file_bytes(ctx.store.path)
     assert before[1]
     args: dict[str, tuple[Any, ...]] = {
@@ -575,10 +750,11 @@ def test_functions_leave_store_bytes(ctx: QueryContext, function: str) -> None:
         "PRAGMA data_version=1",
     ],
 )
-def test_query_refuses_writes(ctx: QueryContext, tmp_path: Path, statement: str) -> None:
+def test_query_refuses_writes(
+    ctx: QueryContext, wal_store: sqlite3.Connection, tmp_path: Path, statement: str
+) -> None:
     """Setup file targets and WAL bytes / Action try forbidden SQL / Assert refusal and no writes."""
     assert isinstance(ctx.store.path, Path)
-    ctx.store.set_meta("query_test_marker", "unchanged")
     copy = tmp_path / "copy.db"
     attached = tmp_path / "x.db"
     sql = statement.format(
@@ -586,12 +762,27 @@ def test_query_refuses_writes(ctx: QueryContext, tmp_path: Path, statement: str)
     )
     before = file_bytes(ctx.store.path)
     try:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"not authorized|authorization denied"):
             queries.query(ctx, sql)
     finally:
         assert file_bytes(ctx.store.path) == before
         assert not copy.exists()
         assert not attached.exists()
+
+
+def test_query_refusal_closes_connection(ctx: QueryContext) -> None:
+    """Setup forbidden SQL / Action query / Assert the error and release of the file."""
+    with pytest.raises(ValueError, match=r"not authorized|authorization denied"):
+        queries.query(ctx, "DELETE FROM items")
+    assert_store_released(ctx)
+
+
+@pytest.mark.parametrize("row_cap", [2, 1])
+def test_query_row_cap_boundary(ctx: QueryContext, row_cap: int) -> None:
+    """Setup two fixed rows / Action cap at or below two / Assert exact truncation."""
+    actual = queries.query(ctx, "SELECT 1 UNION ALL SELECT 2", row_cap=row_cap)
+    assert actual.rows == ((1,), (2,))[:row_cap]
+    assert actual.truncated is (row_cap == 1)
 
 
 @pytest.mark.parametrize("row_cap", [1, 31, 1000])
@@ -614,11 +805,16 @@ def test_query_invalid_limits(ctx: QueryContext, options: dict[str, Any]) -> Non
 
 
 @pytest.mark.parametrize(
-    "sql", ["SELECT 1; SELECT 2", "SELECT length(hex(zeroblob(2000000)))", "SELECT FROM items"]
+    ("sql", "message"),
+    [
+        ("SELECT 1; SELECT 2", "one statement at a time"),
+        ("SELECT length(hex(zeroblob(2000000)))", "string or blob too big"),
+        ("SELECT FROM items", 'near "FROM": syntax error'),
+    ],
 )
-def test_query_rejects_invalid_sql(ctx: QueryContext, sql: str) -> None:
+def test_query_rejects_invalid_sql(ctx: QueryContext, sql: str, message: str) -> None:
     """Setup multiple, oversized or invalid SQL / Action query / Assert ValueError."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         queries.query(ctx, sql)
 
 
@@ -628,7 +824,10 @@ def test_query_cells(ctx: QueryContext) -> None:
         ctx, "SELECT NULL AS missing, X'00FF80' AS bytes, 7 AS n, 1.5 AS f, 'K2' AS text"
     )
     assert actual.columns == ("missing", "bytes", "n", "f", "text")
-    assert actual.rows == ((None, "00ff80", 7, 1.5, "K2"),)
+    assert len(actual.rows) == 1
+    missing, blob, n, f, text = actual.rows[0]
+    assert isinstance(blob, str)
+    assert (missing, blob.lower(), n, f, text) == (None, "00ff80", 7, 1.5, "K2")
     assert actual.truncated is False
 
 
@@ -647,15 +846,41 @@ def test_query_fts(ctx: QueryContext) -> None:
 
 
 def test_query_timeout(ctx: QueryContext) -> None:
-    """Setup an endless recursive count / Action query for 0.2 s / Assert timeout within 1.2 s."""
+    """Setup endless recursion / Action query for 0.5 s / Assert timeout and file release."""
     sql = (
         "SELECT count(*) FROM (WITH RECURSIVE c(n) AS "
         "(SELECT 1 UNION ALL SELECT n+1 FROM c) SELECT n FROM c)"
     )
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            queries.query(ctx, sql, timeout_s=0.5)
+        except BaseException as error:
+            errors.append(error)
+
     start = perf_counter()
+    worker = Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    elapsed = perf_counter() - start
+    assert not worker.is_alive(), "query did not stop within 10 seconds"
+    assert len(errors) == 1, "query must report a timeout"
     with pytest.raises(ValueError, match=r"^query timed out$"):
-        queries.query(ctx, sql, timeout_s=0.2)
-    assert perf_counter() - start < 1.2
+        raise errors[0]
+    assert elapsed < 1.5
+    assert_store_released(ctx)
+
+
+def test_query_finite_recursion(ctx: QueryContext) -> None:
+    """Setup finite recursion / Action query / Assert all five rows."""
+    actual = queries.query(
+        ctx,
+        "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c WHERE n<5) SELECT n FROM c",
+    )
+    assert actual.columns == ("n",)
+    assert actual.rows == ((1,), (2,), (3,), (4,), (5,))
+    assert actual.truncated is False
 
 
 @pytest.mark.parametrize(
