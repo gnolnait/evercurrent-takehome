@@ -83,8 +83,8 @@ To make the links open real messages, seed the corpus into the same workspace fi
   holds now>` updates the seeded messages whose text changed, in place, and deletes
   nothing.
 
-Seeding needs the bot scopes `chat:write.customize`, `channels:join`, `groups:read` and
-`files:write` besides the ones above. The plans are `docs/plans/m5-seed.md`,
+Seeding needs the bot scopes `chat:write.customize`, `channels:read`, `channels:join`,
+`groups:read` and `files:write` besides the ones above. The plans are `docs/plans/m5-seed.md`,
 `docs/plans/m5-links.md` and `docs/plans/m5-reseed.md`.
 
 ## Change who reads what
