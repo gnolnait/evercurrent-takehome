@@ -22,16 +22,16 @@
   p { margin: 0; }
 
   /* Header */
-  .top { margin-bottom: 8px; }
-  .brand { font-weight: 600; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
-  .top h1 { font-weight: 300; font-size: 34px; line-height: 1.15; margin: 4px 0 6px; }
-  .meta { font-size: 15px; }
+  .top { margin-bottom: 4px; }
+  .brand { font-weight: 600; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .top h1 { font-weight: 300; font-size: 30px; line-height: 1.15; margin: 2px 0 4px; }
+  .meta { font-size: 14px; }
   .meta .sep { color: var(--faint); margin: 0 8px; }
-  .top .note { color: var(--muted); margin-top: 6px; max-width: 64rem; }
+  .top .note { color: var(--muted); font-size: 13px; margin-top: 2px; max-width: 64rem; }
 
   /* Panels and cards */
-  .panel { margin-top: 28px; }
-  .panel > h2, .strip-head h2 { font-weight: 300; font-size: 24px; margin-bottom: 12px; }
+  .panel { margin-top: 24px; }
+  .panel > h2 { font-weight: 300; font-size: 24px; margin-bottom: 12px; }
   .card { background: #fff; border-radius: 12px; box-shadow: var(--shadow); padding: 20px 22px; min-width: 0; }
   .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -54,25 +54,43 @@
     border: 1px solid #D9CCC2; border-radius: 8px; padding: 6px 8px;
   }
   select:focus, input:focus, button:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Auto width lets each select fit its longest option; the label column stretches it. */
+  .edit select, .edit input[type="date"] { width: auto; }
 
   /* Edit strip */
-  .strip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  .refusal, .notice { border-radius: 10px; padding: 12px 16px 12px 36px; margin-bottom: 12px; position: relative; }
+  .strip { margin-top: 16px; }
+  .strip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .strip-row > .label { margin-right: 4px; }
+  .strip-row .reset { margin-left: auto; }
+  .edit-pill { position: relative; margin: 0; font-size: 13px; }
+  .edit-pill > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink);
+                         background: #fff; border: 1px solid #E3D3C6; border-radius: 999px; padding: 6px 14px;
+                         box-shadow: 0 1px 2px rgba(11, 28, 32, 0.05); white-space: nowrap; }
+  .edit-pill > summary::-webkit-details-marker { display: none; }
+  .edit-pill > summary::after { content: ""; display: inline-block; margin-left: 8px; vertical-align: 2px;
+                                border: 4px solid transparent; border-top-color: var(--accent-dark); border-bottom: 0; }
+  .edit-pill > summary:hover { border-color: var(--accent); }
+  .edit-pill[open] > summary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .edit-pill[open] > summary::after { border-top-color: #fff; }
+  .edit-pill > form { position: absolute; top: calc(100% + 8px); left: 0; z-index: 10;
+                      width: max-content; min-width: 15rem; max-width: 24rem; }
+  .edit-pill.end > form { left: auto; right: 0; }
+  .refusal, .notice { border-radius: 10px; padding: 12px 16px 12px 36px; margin: 10px 0 0; position: relative; }
   .refusal { background: var(--ink); color: #fff; }
   .refusal::before, .notice::before { content: ""; position: absolute; left: 16px; top: 18px; width: 8px; height: 8px; border-radius: 50%; }
   .refusal::before { background: var(--red); }
   .notice { background: #fff; border: 1px solid var(--line); }
   .notice::before { background: var(--accent); }
-  .made { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .made { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
   .made ol { display: flex; gap: 6px; flex-wrap: wrap; counter-reset: edit; }
-  .made li { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; font-size: 13px; counter-increment: edit; }
+  .made li { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; font-size: 13px; counter-increment: edit; }
   .made li::before { content: counter(edit) "."; color: var(--accent-dark); font-weight: 600; margin-right: 6px; }
-  .made .none { color: var(--muted); }
-  .edit { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
-  .edit h3 { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-dark); }
-  .fields { display: flex; gap: 8px; }
-  .fields label { flex: 1 1 0; min-width: 0; font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
-  .edit button { align-self: flex-start; padding: 5px 16px; }
+  .made .none { color: var(--muted); font-size: 13px; }
+  .edit { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
+          box-shadow: 0 2px 4px rgba(11, 28, 32, 0.08), 0 12px 32px rgba(11, 28, 32, 0.16); }
+  .fields { display: flex; flex-direction: column; gap: 8px; }
+  .fields label { font-size: 11px; font-weight: 600; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .edit button { align-self: flex-start; padding: 6px 18px; }
 
   /* Digest cards */
   .reader-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -89,11 +107,11 @@
   .summary { color: var(--muted); margin-top: 3px; }
   .absent .summary { color: #C4CDCF; }
   .source { margin-top: 4px; font-size: 11px; color: var(--faint); word-break: break-all; }
-  details { margin-top: 6px; font-size: 12px; }
-  details > summary { cursor: pointer; color: var(--accent-dark); font-weight: 600; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
-  .absent details > summary { color: #F2B98A; }
-  details > p { margin-top: 4px; color: var(--muted); }
-  .absent details > p { color: #C4CDCF; }
+  .why { margin-top: 6px; font-size: 12px; }
+  .why > summary { cursor: pointer; color: var(--accent-dark); font-weight: 600; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .absent .why > summary { color: #F2B98A; }
+  .why > p { margin-top: 4px; color: var(--muted); }
+  .absent .why > p { color: #C4CDCF; }
   .hidden { margin-top: 14px; font-size: 12px; color: var(--muted); }
   .empty { color: var(--muted); margin-top: 16px; }
 
@@ -108,7 +126,11 @@
   .removed .t { text-decoration: line-through; }
   .where { color: var(--muted); font-size: 12px; }
   .diff ul.changed > li, .diff ul.reworded > li { padding-left: 0; }
-  .changed .t { font-weight: 600; display: block; margin-bottom: 6px; }
+  .changed .t { font-weight: 600; display: block; }
+  .notes { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .note-pill { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 9px; background: var(--ink); color: #fff; white-space: nowrap; }
+  .reason { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .before .reason .label, .after .reason .label { display: inline; margin: 0 6px 0 0; color: var(--accent-dark); }
   .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
   .before, .after { border-radius: 8px; padding: 8px 10px; font-size: 13px; }
   .before { background: var(--peach); }
@@ -117,7 +139,7 @@
 
   /* World */
   .world details { background: #fff; border-radius: 12px; box-shadow: var(--shadow); padding: 12px 18px; margin: 0 0 10px; font-size: 13px; }
-  .world details > summary { font-size: 13px; letter-spacing: 0.04em; color: var(--ink); }
+  .world details > summary { cursor: pointer; font-weight: 600; font-size: 13px; letter-spacing: 0.04em; color: var(--ink); }
   .wide { overflow-x: auto; margin-top: 10px; }
   table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
@@ -127,8 +149,8 @@
   @media (max-width: 900px) {
     body { padding: 20px 16px 40px; }
     .grid3, .pair { grid-template-columns: minmax(0, 1fr); }
-    .fields { flex-wrap: wrap; }
-    .fields label { flex-basis: 10rem; }
+    .strip-row .reset { margin-left: 0; }
+    .edit-pill > form, .edit-pill.end > form { position: static; margin-top: 8px; max-width: none; }
   }
 </style>
 </head>
@@ -143,10 +165,71 @@
   <p class="note">An edit changes who reads what and what counts as late. It does not change what the model extracted, and it does not show what a reader was last told.</p>
 </header>
 
-<section class="panel">
-<div class="strip-head">
-  <h2>Edits</h2>
-  <form method="post" action="/reset"><button type="submit" class="outline">Reset to the recorded world</button></form>
+<section class="strip">
+<div class="strip-row">
+  <h2 class="label">Edit the world</h2>
+  <details class="edit-pill"><summary>Reader role</summary>
+  <form method="post" action="/edit" class="card edit">
+    <input type="hidden" name="kind" value="set_role">
+    <div class="fields">
+      <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }}</option>{% endfor %}</select></label>
+      <label>Role <select name="role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+    </div>
+    <button type="submit">Set role</button>
+  </form>
+  </details>
+  <details class="edit-pill"><summary>Channel membership</summary>
+  <form method="post" action="/edit" class="card edit">
+    <input type="hidden" name="kind" value="set_membership">
+    <div class="fields">
+      <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }}</option>{% endfor %}</select></label>
+      <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
+      <label>Member <select name="member"><option value="true">true</option><option value="false">false</option></select></label>
+    </div>
+    <button type="submit">Set membership</button>
+  </form>
+  </details>
+  <details class="edit-pill"><summary>Channel private flag</summary>
+  <form method="post" action="/edit" class="card edit">
+    <input type="hidden" name="kind" value="set_private">
+    <div class="fields">
+      <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
+      <label>Private <select name="private"><option value="true">true</option><option value="false">false</option></select></label>
+    </div>
+    <button type="submit">Set private flag</button>
+  </form>
+  </details>
+  <details class="edit-pill"><summary>Entity owner role</summary>
+  <form method="post" action="/edit" class="card edit">
+    <input type="hidden" name="kind" value="set_owner">
+    <div class="fields">
+      <label>Entity <select name="entity_id">{% for e in world.entities %}<option value="{{ e.id }}">{{ e.id }}</option>{% endfor %}</select></label>
+      <label>Owner role <select name="role"><option value="">none</option>{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+    </div>
+    <button type="submit">Set owner role</button>
+  </form>
+  </details>
+  <details class="edit-pill end"><summary>Gate date</summary>
+  <form method="post" action="/edit" class="card edit">
+    <input type="hidden" name="kind" value="set_gate_date">
+    <div class="fields">
+      <label>Gate <select name="gate_id">{% for g in world.project.gates %}<option value="{{ g.id }}">{{ g.id }} ({{ g.date.isoformat() }})</option>{% endfor %}</select></label>
+      <label>Date <input type="date" name="date" required></label>
+    </div>
+    <button type="submit">Set gate date</button>
+  </form>
+  </details>
+  <details class="edit-pill end"><summary>Task owner role</summary>
+  <form method="post" action="/edit" class="card edit">
+    <input type="hidden" name="kind" value="set_task_owner">
+    <div class="fields">
+      <label>Task <select name="task_id">{% for t in tasks %}<option value="{{ t.id }}">{{ t.id }}</option>{% endfor %}</select></label>
+      <label>Owner role <select name="role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
+    </div>
+    <button type="submit">Set task owner</button>
+  </form>
+  </details>
+  <form method="post" action="/reset" class="reset"><button type="submit" class="outline">Reset to the recorded world</button></form>
 </div>
 {% if refusal is not none %}<p class="refusal">{{ refusal }}</p>{% endif %}
 {% if no_change %}<p class="notice">This edit changed no digest.</p>{% endif %}
@@ -159,64 +242,6 @@
 {% else %}
   <p class="none">No edits. The room shows the recorded world.</p>
 {% endif %}
-</div>
-
-<div class="grid3">
-<form method="post" action="/edit" class="card edit">
-  <h3>Reader role</h3>
-  <input type="hidden" name="kind" value="set_role">
-  <div class="fields">
-    <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }} ({{ p.user_id }})</option>{% endfor %}</select></label>
-    <label>Role <select name="role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
-  </div>
-  <button type="submit">Set role</button>
-</form>
-<form method="post" action="/edit" class="card edit">
-  <h3>Channel membership</h3>
-  <input type="hidden" name="kind" value="set_membership">
-  <div class="fields">
-    <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }} ({{ p.user_id }})</option>{% endfor %}</select></label>
-    <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
-    <label>Member <select name="member"><option value="true">true</option><option value="false">false</option></select></label>
-  </div>
-  <button type="submit">Set membership</button>
-</form>
-<form method="post" action="/edit" class="card edit">
-  <h3>Channel private flag</h3>
-  <input type="hidden" name="kind" value="set_private">
-  <div class="fields">
-    <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
-    <label>Private <select name="private"><option value="true">true</option><option value="false">false</option></select></label>
-  </div>
-  <button type="submit">Set private flag</button>
-</form>
-<form method="post" action="/edit" class="card edit">
-  <h3>Entity owner role</h3>
-  <input type="hidden" name="kind" value="set_owner">
-  <div class="fields">
-    <label>Entity <select name="entity_id">{% for e in world.entities %}<option value="{{ e.id }}">{{ e.id }}</option>{% endfor %}</select></label>
-    <label>Owner role <select name="role"><option value="">none</option>{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
-  </div>
-  <button type="submit">Set owner role</button>
-</form>
-<form method="post" action="/edit" class="card edit">
-  <h3>Gate date</h3>
-  <input type="hidden" name="kind" value="set_gate_date">
-  <div class="fields">
-    <label>Gate <select name="gate_id">{% for g in world.project.gates %}<option value="{{ g.id }}">{{ g.id }} ({{ g.date.isoformat() }})</option>{% endfor %}</select></label>
-    <label>Date <input type="date" name="date" required></label>
-  </div>
-  <button type="submit">Set gate date</button>
-</form>
-<form method="post" action="/edit" class="card edit">
-  <h3>Task owner role</h3>
-  <input type="hidden" name="kind" value="set_task_owner">
-  <div class="fields">
-    <label>Task <select name="task_id">{% for t in tasks %}<option value="{{ t.id }}">{{ t.id }}</option>{% endfor %}</select></label>
-    <label>Owner role <select name="role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label>
-  </div>
-  <button type="submit">Set task owner</button>
-</form>
 </div>
 </section>
 
@@ -236,7 +261,7 @@
       <div class="line-top">{% if row.section == "not_happened" %}<span class="dot"></span>{% endif %}<span class="heading">{{ heading }}</span>{% if row.must_see %}<span class="pill must">must see</span>{% endif %}</div>
       <p class="summary">{{ summary }}</p>
       {% for entry in row.item.evidence %}<p class="source">source: {{ entry.permalink }}</p>{% endfor %}
-      <details><summary>why</summary><p>{{ row.reason }}</p></details>
+      <details class="why"><summary>why</summary><p>{{ row.reason }}</p></details>
     </li>
   {% endfor %}
   </ul>
@@ -257,34 +282,35 @@
 <section class="card diff">
   <div class="reader-head"><h3>{{ profile.name }}</h3><span class="pill role">{{ profile.role }}</span></div>
   {% if edits %}<p class="diff-count"><span class="badge{% if not reader.effect %} zero{% endif %}">{{ reader.effect }}</span>Lines the latest edit changed</p>{% endif %}
-  {% if not (diff.added or diff.removed or diff.changed or reader.reworded) %}
+  {% if not (reader.added or reader.removed or reader.changed or reader.reworded) %}
   <p class="empty">Same lines as the recorded world.</p>
   {% endif %}
-  {% if diff.added %}
+  {% if reader.added %}
   <h4 class="label">Added</h4>
   <ul class="added">
-  {% for view in diff.added %}
-    <li><span class="t">{{ view.title }}</span> <span class="where">{{ place(view) }}</span>
-      <details><summary>why</summary><p>{{ view.reason }}</p></details></li>
+  {% for view, title in reader.added %}
+    <li><span class="t">{{ title }}</span> <span class="where">{{ place(view) }}</span>
+      <details class="why"><summary>why</summary><p>{{ view.reason }}</p></details></li>
   {% endfor %}
   </ul>
   {% endif %}
-  {% if diff.removed %}
+  {% if reader.removed %}
   <h4 class="label">Removed</h4>
   <ul class="removed">
-  {% for view in diff.removed %}
-    <li><span class="t">{{ view.title }}</span> <span class="where">{{ place(view) }}</span></li>
+  {% for view, title in reader.removed %}
+    <li><span class="t">{{ title }}</span> <span class="where">{{ place(view) }}</span></li>
   {% endfor %}
   </ul>
   {% endif %}
-  {% if diff.changed %}
+  {% if reader.changed %}
   <h4 class="label">Changed</h4>
   <ul class="changed">
-  {% for change in diff.changed %}
-    <li><span class="t">{{ change.after.title }}</span>
+  {% for change, before_title, after_title, notes in reader.changed %}
+    <li><span class="t">{{ after_title }}</span>
+      <p class="notes">{% for note in notes %}<span class="note-pill">{{ note }}</span>{% endfor %}</p>
       <div class="pair">
-        <div class="before"><span class="label">Before</span>{% if "title" in change.fields %}<p>{{ change.before.title }}</p>{% endif %}<p>{{ place(change.before) }}</p>{% if "reason" in change.fields %}<details><summary>why</summary><p>{{ change.before.reason }}</p></details>{% endif %}</div>
-        <div class="after"><span class="label">After</span>{% if "title" in change.fields %}<p>{{ change.after.title }}</p>{% endif %}<p>{{ place(change.after) }}</p>{% if "reason" in change.fields %}<details><summary>why</summary><p>{{ change.after.reason }}</p></details>{% endif %}</div>
+        <div class="before"><span class="label">Before</span>{% if "title" in change.fields %}<p>{{ before_title }}</p>{% endif %}<p>{{ place(change.before) }}</p>{% if "reason" in change.fields %}<p class="reason"><span class="label">why</span>{{ change.before.reason }}</p>{% endif %}</div>
+        <div class="after"><span class="label">After</span>{% if "title" in change.fields %}<p>{{ after_title }}</p>{% endif %}<p>{{ place(change.after) }}</p>{% if "reason" in change.fields %}<p class="reason"><span class="label">why</span>{{ change.after.reason }}</p>{% endif %}</div>
       </div></li>
   {% endfor %}
   </ul>
