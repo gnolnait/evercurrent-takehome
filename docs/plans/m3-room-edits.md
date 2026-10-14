@@ -1,6 +1,6 @@
 # Plan: M3 unit 10, message edits and reseed in the demo room
 
-Status: v0.1, 2026-10-13, 21:00 PT. Process stage 1 (`docs/process.md`), the lighter
+Status: v0.2, 2026-10-13, after the Codex plan review. Process stage 1 (`docs/process.md`), the lighter
 variant the user chose on 2026-10-13: Codex writes the tests, an Opus subagent writes the
 code, every test is RED-GREEN proven, one review lane per commit, at most one fix round.
 Builds on `docs/plans/m3-ui.md` (units 8 and 9, merged) and `docs/plans/m3-driver.md`
@@ -67,15 +67,25 @@ class RunScenario(Frozen):   kind: Literal["run_scenario"]; name: Literal["d2-br
   `Settings` and records the miss into `data/cassettes/`.
 - M6. Selection, diffs, reworded lines, `last_effect` and owners read the room store when
   message changes exist, else the base store, with the room world, as before.
-- M7. File names: `EditMessage.files` replaces the message's file names. Extraction does
-  not read file names (D24 unbuilt); the page says that a file name changes the seed and
-  not the digest.
+- M7. File names: `EditMessage.files` replaces the message's file names. The extraction
+  prompt carries file names (`src/digest/extract/prompts.py:81`, `:174-177`), so a file
+  edit is a message change like a text edit: it needs its cassette or a live call, and it
+  can change the digest. The reseed does not re-upload files, so in Slack a file edit
+  shows only on a fresh seed; the page says so.
+- M8. Known limit: an edited message keeps the claims extraction drew from its earlier
+  text, because the merge keeps the claims of a message that is still cited
+  (`src/digest/extract/verify.py:246`). Editing "Rev C" to "Rev D" in place therefore
+  shows both values. A value change is shown cleanly by a new post that states the new
+  value, which supersedes through the ledger rules; the page says this next to the edit
+  form. Fixing the merge is extraction work (M2), after the interview.
 
 Curated edits (`data/world/kestrel/room-edits.yaml`, committed with their cassettes): a
 name, a one-line description and one message change each. Picked at recording time from
-these candidates: the PLM bot's PN-11020 Rev C post edited to Rev D; the anodize PO ask
-answered in its thread; the thermal review closed in a reply; the CM's bracket blocker
-withdrawn. Each is recorded as the first message change after a reset.
+these candidates, each a new post (M8): the PLM bot's feed posts PN-11020 Rev D; Hamid
+answers the anodize PO ask in its thread with the PO number; Tobias closes the thermal
+review in its thread; the CM withdraws its bracket blocker in a reply. The PLM post is a
+bot persona, so it is recorded through `EditMessage` of a reply or a scenario line rather
+than `PostMessage`, whichever the M3 persona rule allows; the recording step settles it. Each is recorded as the first message change after a reset.
 
 ## Save and reseed
 
