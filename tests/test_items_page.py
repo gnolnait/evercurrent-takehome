@@ -15,12 +15,19 @@ import test_web
 from digest import queries
 from digest.daily.render import item_parts, line_parts
 from digest.daily.select import Line
-from digest.models import Item, ItemStatus, ItemType
+from digest.models import AbsenceDetail, Item, ItemStatus, ItemType
 from digest.priors import load_priors
 from digest.room import PostMessage, Room, RoomBase, RoomState, SetGateDate
 from digest.store import Store
 from digest.web.app import create_app
 from digest.world.schema import World
+
+
+def detail(item: Item) -> AbsenceDetail:
+    """The absence detail of an absence item; the test fails on any other item."""
+    assert item.absence is not None
+    return item.absence
+
 
 day6_store = test_room.day6_store
 base = test_room_edits.base
@@ -63,7 +70,7 @@ def parts(item: Item, world: World) -> tuple[str, str]:
             heading += f" - owner {names[item.owner]}"
     elif absence.source == "ask":
         heading = (
-            f"Not happened: {names[absence.asker]} asked {names[item.owner]}, "
+            f"Not happened: {names[absence.asker or '']} asked {names[item.owner or '']}, "
             f"no reply for {absence.days_silent} working days"
         )
     else:
@@ -115,7 +122,7 @@ def test_default_sections_match_queries(items_room: ItemsFakeRoom) -> None:
         blockers = queries.list_open_blockers(ctx)
         absences = queries.list_absences(ctx)
     assert blockers and absences
-    ask = next(v.item for v in absences if v.item.absence.source == "ask")
+    ask = next(v.item for v in absences if detail(v.item).source == "ask")
     world = items_room.state().world
     plain = next(
         v.item for v in blockers if v.item.title == "PN-31020 signal harness shortage for DVT-1 kit"
@@ -144,7 +151,7 @@ def test_default_sections_match_queries(items_room: ItemsFakeRoom) -> None:
     assert "Results" not in headings(page.root)
     heading = parts(ask, items_room.state().world)[0]
     people = {p.user_id: p.name for p in items_room.state().world.personas}
-    for uid in (ask.owner, ask.absence.asker):
+    for uid in (ask.owner, detail(ask).asker):
         assert uid and people[uid] in heading and uid not in heading
     assert any(n.attrs.get("href") == "/" for n in page.find("a"))
 
@@ -170,7 +177,7 @@ def test_item_details_include_owner_evidence_and_silence(items_room: ItemsFakeRo
     with items_room.items_context() as ctx:
         owned = next(v for v in queries.list_open_blockers(ctx) if v.owner_name)
         absence = next(
-            v for v in queries.list_absences(ctx) if v.item.absence.source == "checklist"
+            v for v in queries.list_absences(ctx) if detail(v.item).source == "checklist"
         )
     with TestClient(create_app(items_room)) as client:
         response = client.get("/items")
@@ -190,7 +197,7 @@ def test_item_details_include_owner_evidence_and_silence(items_room: ItemsFakeRo
                 n.tag == "a" and n.attrs.get("href") == evidence.permalink for n in node.nodes()
             )
     assert absence.item.owner is None
-    assert f"{absence.item.absence.days_silent} working days" in summary
+    assert f"{detail(absence.item).days_silent} working days" in summary
 
 
 def test_item_readership_uses_current_selections(items_room: ItemsFakeRoom) -> None:
@@ -279,7 +286,13 @@ def test_search_single_filter(
     if "owner" in filters:
         assert any(p.user_id == filters["owner"] and p.kind == "human" for p in world.personas)
     with items_room.items_context() as ctx:
-        expected = queries.search_items(ctx, **filters, limit=50)
+        expected = queries.search_items(
+            ctx,
+            filters.get("text", ""),
+            owner=filters.get("owner"),
+            status=filters.get("status"),
+            limit=50,
+        )
     assert len(expected) >= minimum
     with TestClient(create_app(items_room)) as client:
         response = client.get("/items", params=filters)
@@ -378,9 +391,9 @@ def test_world_edit_changes_context_and_page_absences(
     old_headings = [parts(v.item, base.world)[0] for v in before]
     expected_headings = [parts(v.item, world)[0] for v in expected]
     assert expected_headings != old_headings
-    checklist = [v.item for v in expected if v.item.absence.source == "checklist"]
+    checklist = [v.item for v in expected if detail(v.item).source == "checklist"]
     assert checklist
-    assert all(item.absence.buffer_consumed == 3 for item in checklist)
+    assert all(detail(item).buffer_consumed == 3 for item in checklist)
     with room.items_context() as ctx:
         assert ctx.world == room.state().world
         assert ctx.world != base.world
