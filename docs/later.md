@@ -4,12 +4,15 @@ Everything here is out of v1 (SPEC.md section 3). Each entry names the trigger t
 would promote it.
 
 - Asks back. One button-answerable question per person per day when a gate-relevant
-  belief has low confidence and exactly one plausible answerer exists. Trigger: ledger
-  precision holds through M3 and days 6 to 7 are free.
+  belief has low confidence and exactly one plausible answerer exists. Not in the D27
+  chain: step 3 there is the reader asking, not the system. Trigger:
+  step 2 of the Interaction section below has run. The question appears in the thread
+  of the reader's digest DM.
 - Interactive agent in Slack. Thread equals session keyed on (channel, thread_ts); emoji
   acknowledgement under 3 seconds; streaming replies; Stop and mute; mention required in
   channels; other people's messages treated as information, not instructions. Trigger:
-  the take-home is submitted.
+  the take-home is submitted. D27 sets the order: questions in the digest's thread come
+  after the per-line actions and labels (Interaction section below).
 - Agentic feature set beyond the v1 MCP server (design sketch, so v1 data structures
   do not block it). The v1 MCP server already lets a user's own assistant read the
   store and act through feedback events; that assistant supplies the agent loop, the
@@ -129,8 +132,10 @@ In order. Each item names its trigger. Measured numbers are from
    text, by a labeler who does not see the extractor output. The ledger gate becomes the
    key-error rate, with a recall guard and key stability across two recordings.
    Trigger: before the ledger.
-5. Digest window per reader and a seen record, so a reader is not told the same thing
-   twice. Trigger: every demo digest is a first digest (`docs/plans/m3-demo.md`).
+5. Delivery records. The digest window is built (`docs/plans/digest-window.md`); today
+   the caller states the previous digest. The seen record per reader, which brings back
+   an item that a score threshold or a section cap cut, is Interaction step 1 below.
+   Trigger: live delivery (D7).
 6. Stage key records the concrete model id, and a run refuses a mismatch. Today the key
    holds the logical name, so a model change in `config/models.yaml` reuses old runs.
 7. Extraction payload limit: open items, plus items that share an entity with the new
@@ -153,3 +158,44 @@ In order. Each item names its trigger. Measured numbers are from
     list, so the change re-renders the corpus. Trigger: the next re-render.
 14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
     instead of an instant interruption. Trigger: a real-time tier.
+
+## Interaction (D27), after the 2026-10-14 interview
+
+In order. Each step is a gate for the next. Steps 1 and 2 build what SPEC section 3
+already puts in v1 scope; the other steps are out of v1.
+
+1. The v1 per-line actions (SPEC section 5 step 8: done, snooze, not mine, `it happened`)
+   as Slack buttons, the `seen` record of SPEC section 4, and the absence line wording of
+   SPEC section 5 step 7 (today the lines start with "Not happened:"). The seen record
+   also brings back an item that the score threshold or a section cap cut on the day its
+   evidence landed. Trigger: delivery to a real workspace.
+2. Shown-absence labels (D27) until the false rate is measured on at least 50 labelled
+   episodes. Trigger: step 1.
+3. Questions in the digest's thread, answered by the D20 read tools with cited records.
+   Trigger: the reader-scoped server exists.
+4. Drafted replies to ask absences, which the reader edits and sends. Trigger: the
+   shown-absence false rate passes the D27 gate.
+5. Drafted ticket edits from a blocker line. Trigger: a tracker connector exists (D25),
+   and blocker lines pass their own labelled gate (D27), which is not defined yet.
+
+Not in the chain: a phase-shaped digest inside a gate buffer, with days to the gate, open
+blockers and checklist tasks with no evidence first. `ProjectConfig.phase_on` exists, and
+no production code calls it yet. Trigger: a reader asks for gate status in the thread
+more than once a week.
+
+## Structure (D26), after the 2026-10-14 interview
+
+In order. Each item is its own unit under `docs/process.md`.
+
+1. `Workspace` out of `World`; `World` composes it. Digest code reads only `Workspace`.
+   Trigger: live Slack ingest or delivery to a real workspace.
+2. Absence split: `ChecklistAbsence | AskAbsence`, an explicit ask id, and `ask_message` on
+   ask items. Trigger: before any exposure record exists.
+3. One day-pipeline module out of `daily/render.py`; a window value on `Selection`; the
+   `Candidate` projection with newest evidence computed in one place. Trigger: the next
+   change to selection.
+4. `ThreadRef` and `MessageRef` value objects in `digest.models`; the simulator's
+   `world.manifest.ThreadRef` is renamed. Trigger: the next change to the files that
+   build or parse thread ids.
+5. A Slack anti-corruption adapter that maps Slack payloads to `Event`. Trigger: live
+   ingest (D7).

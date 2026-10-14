@@ -384,7 +384,7 @@ schema published as a resource, is the escape hatch for questions the fixed tool
 not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
 Enforced by import-linter (`uv run lint-imports` in CI): a layers contract in `pyproject.toml` (cli;
-eval and driver as siblings; daily; corpus; replay, extract and absence as siblings; store, llm and world as
+eval and driver as siblings; daily; corpus; replay, extract, absence and seed as siblings; store, llm and world as
 siblings; project and priors; models and settings) and a forbidden
 contract keeping `anthropic` and `httpx2` inside `digest.llm`.
 
@@ -512,6 +512,109 @@ reuses the authority model; nothing new enters the ledger.
 
 Would change it. A workspace that tickets nothing from chat: the metric reports n = 0
 and the golden labels carry the eval alone.
+
+## D26. Target domain model: three contexts, absences out of Item
+
+Status: designed, 2026-10-13. Built parts: stable item ids (PR #49) and the digest window
+(PR #58). Nothing below is built unless it says so.
+
+Decision.
+- Three domain contexts inside the one process, as the packages that exist today; no
+  package moves:
+  - Extraction (`extract/`) interprets messages, verifies quotes and produces items and
+    claims. It owns no rule about what is true later.
+  - Project knowledge (`project.py`, `absence.py`, and the ledger when built) owns the
+    accepted items, claims and their history, task state and absences.
+  - Digest (`daily/`) owns reader profiles, selection, rendering, delivery and exposure.
+  Ingestion and the simulator are adapters and test support. The store, the model
+  gateway and the settings are infrastructure. Domain code does not import the simulator.
+- `Item` stays the stored aggregate for extracted information. The `absence` item type
+  and the `absence` field leave it.
+- `Absence = ChecklistAbsence | AskAbsence`, derived at a cutoff and never stored. An
+  `AskAbsence` names its ask by item id. An ask item carries `ask_message`
+  (SPEC section 4), so detection does not infer the asking message from evidence authors.
+- Selection reads a `Candidate`: a projection for one reader and one cutoff, holding the
+  subject (`Item | Absence`), the evidence the reader may see, and the newest evidence.
+  Visibility runs before a candidate exists. `Selection` holds one window value (the
+  previous digest and the first-digest length).
+- `World` composes a `Workspace` (time zone, workspace URL, project, channels, personas,
+  entities) with the simulator's dates, scripted events and expected outcomes. Digest code
+  reads only `Workspace`.
+- `ThreadRef(channel_id, thread_ts)` and `MessageRef(channel_id, ts)` replace string thread
+  ids and loose (channel_id, ts) pairs. They live in `digest.models`. The simulator's
+  `world.manifest.ThreadRef`, which adds `authored`, is renamed and holds a `ThreadRef`.
+- Ledger and exposure, so this split is not redone:
+  - An item's claims stay the extractor's assertions with their message. The ledger
+    derives claim records with their own ids, keyed by (entity, attribute, param), with
+    asserted, observed and invalid times and a reference back to the item and the message.
+    Ledger edges (supersedes, contradicts) connect claim ids, not item ids.
+  - Exposure is append-only and written by Digest at delivery: reader, run, delivered
+    part, time, and the item ids and claim ids shown. An absence is exposed by its own key
+    (day, source, task or ask), never by an item id.
+  - Items are overwritten in place today, so exact exposure needs a kept item revision or
+    a delivery snapshot.
+
+Why. The code works around one type that carries three concepts:
+- `daily/select.py` finds an ask absence's ask by stripping an id prefix (`_cited_ask`).
+- `models.py` gives every item a nullable `AbsenceDetail`.
+- `absence.py` infers the asking message from evidence authors.
+- `daily/` imports `World` from `world.schema`, so live mode would build a fake world.
+
+Not chosen. Renaming `Item` to `Finding` (it touches the stored table and the tests for no
+change in behaviour); a package migration; a repository per type, an event bus or separate
+services; a graph database (D22 amendment).
+
+Order. The Structure section of `docs/later.md`.
+
+Would change it. A second process or team that owns one context: its boundary then becomes
+an API.
+
+## D27. Interaction model: inform, ask by button, draft writes, earn authority
+
+Status: designed, 2026-10-13. Built: the digest posts cited lines. Nothing else below is
+built, including the per-line actions and their feedback events.
+
+Decision.
+- The digest is a briefing that a reader finishes in one scan. It is the morning
+  surface and the record of what each reader was told. Conversation is follow-up in the
+  digest's thread, never the morning surface.
+- Inform: every line is a cited claim with an owner where one is known. Its actions are
+  feedback events in the store (SPEC section 5 step 8).
+- Ask: at most one open question per user, answerable with a button, only about the
+  system's own uncertainty (did this happen, is this yours). Never a free-text prompt,
+  and never "what do you want to see?".
+- Act: an action on project work (a reply in a project thread, a nudge, a ticket edit)
+  is a draft that the user edits and sends. The system never takes such an action on its
+  own. Digests, real-time alerts and onboarding messages are the product's own messages,
+  not drafts.
+- Earn authority: a line type gets a draft action only when its false rate on labelled
+  lines passes a gate. For absence lines:
+  - Unit: one absence episode per reader (SPEC section 5 step 8), counted once however
+    many days it shows.
+  - Labels: a reviewer labels a sample of shown episodes real or false against the
+    covered sources. An `it happened` click adds its episode to the sample as a candidate
+    false label, which the reviewer confirms. Unlabelled episodes do not count.
+  - Gate: shown-absence false rate (false episodes over labelled episodes) of at most 10%
+    on at least 50 labelled episodes. Both numbers are a design choice, not a
+    measurement. This is not the A6 rate (SPEC section 7), which counts false alarms over
+    the simulator's non-stall silences.
+  - Today: 7 of 23 detected absences on the simulator's golden set are false. That is a
+    different set and metric, but it says absence lines get `it happened`, not a draft.
+  Every other line type needs its own labels and threshold before it gets a draft
+  action; none is defined yet.
+- Order, each step a gate for the next: per-line actions with a seen record; `it happened`
+  labels; thread questions answered by the D20 read tools; drafted replies to ask
+  absences; drafted ticket edits. The steps are in `docs/later.md`.
+
+Why. Readers already get too much Slack, so a digest that asks every morning becomes one
+more inbox. Each button is both the reader's control and a label, and labels are what the
+precision gates need. Slack text is untrusted: extraction runs with no tools, and an agent
+that reads Slack and holds write tools can be steered by a message, so writes stay drafts.
+A draft built on a false absence sends a nudge to someone who already replied, and that
+costs more trust than a missed line.
+
+Would change it. Reader labels that put a line type well inside its gate for a month: that
+type may move from drafts to one-click send, still with a preview.
 
 ## Validation against EverCurrent's published experience
 

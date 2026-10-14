@@ -2,7 +2,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from hypothesis import given, settings
@@ -83,6 +83,95 @@ def test_upsert_key_includes_channel(store: Store) -> None:
     assert store.upsert_events([first, first, second]) == 3
     assert store.events_in_thread(first.thread_id, AS_OF) == [first]
     assert store.events_in_thread(second.thread_id, AS_OF) == [second]
+
+
+def test_copy_to_includes_uncheckpointed_wal_rows_and_keeps_base_unchanged(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.sqlite"
+    copy = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        writer = sqlite3.connect(base)
+        try:
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("INSERT INTO meta (key, value) VALUES ('wal_marker', 'present')")
+            writer.commit()
+            assert Path(f"{base}-wal").stat().st_size > 0
+            base_rows = list(writer.execute("SELECT key, value FROM meta ORDER BY key"))
+
+            copied = store.copy_to(copy)
+
+            with copied:
+                assert copied.get_meta("wal_marker") == "present"
+            assert store.get_meta("wal_marker") == "present"
+            assert list(writer.execute("SELECT key, value FROM meta ORDER BY key")) == base_rows
+        finally:
+            writer.close()
+
+
+def test_copy_to_removes_target_when_backup_fails(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+
+        class FailingBackupConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self.connection = connection
+
+            def backup(self, target_connection: sqlite3.Connection) -> None:
+                Path(f"{target}-wal").write_bytes(b"partial wal")
+                Path(f"{target}-shm").write_bytes(b"partial shm")
+                raise sqlite3.OperationalError("forced backup failure")
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self.connection, name)
+
+        store._db = cast(sqlite3.Connection, FailingBackupConnection(store._db))
+        with pytest.raises(sqlite3.OperationalError, match="forced backup failure"):
+            store.copy_to(target)
+
+    assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
+def test_copy_to_removes_target_when_opening_finished_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        original_open = Store.open
+
+        def fail_target_open(path: Path | Literal[":memory:"]) -> Store:
+            if path == target:
+                Path(f"{target}-wal").write_bytes(b"partial wal")
+                Path(f"{target}-shm").write_bytes(b"partial shm")
+                raise sqlite3.OperationalError("forced finished-copy open failure")
+            return original_open(path)
+
+        monkeypatch.setattr(Store, "open", fail_target_open)
+
+        with pytest.raises(sqlite3.OperationalError, match="finished-copy open failure"):
+            store.copy_to(target)
+
+    assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
+def test_copy_to_refuses_existing_target_without_changing_its_files(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    existing = {
+        target: b"existing target",
+        Path(f"{target}-wal"): b"existing wal",
+        Path(f"{target}-shm"): b"existing shm",
+    }
+    for path, contents in existing.items():
+        path.write_bytes(contents)
+
+    with Store.open(base) as store, pytest.raises(FileExistsError):
+        store.copy_to(target)
+
+    assert {path: path.read_bytes() for path in existing} == existing
 
 
 @pytest.mark.parametrize("deleted", [False, True])
@@ -304,6 +393,83 @@ def test_file_store_refuses_unrelated_database_without_modifying_it(tmp_path: Pa
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
     assert tables == [("t",)]
     assert journal_mode == ("delete",)
+
+
+@pytest.mark.parametrize(
+    ("method", "sql_fragment", "error_type"),
+    [
+        ("execute", "SELECT name FROM sqlite_master", sqlite3.OperationalError),
+        ("execute", "PRAGMA journal_mode=WAL", sqlite3.OperationalError),
+        ("read_text", "schema.sql", OSError),
+        ("executescript", "CREATE TABLE IF NOT EXISTS meta", sqlite3.OperationalError),
+        (
+            "execute",
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            sqlite3.OperationalError,
+        ),
+    ],
+    ids=("version-query", "journal-mode", "schema-read", "schema", "schema-version"),
+)
+def test_open_closes_connection_when_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    sql_fragment: str,
+    error_type: type[BaseException],
+) -> None:
+    path = tmp_path / "store.sqlite"
+    real_connect = sqlite3.connect
+    closed = False
+
+    class FailingConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            object.__setattr__(self, "connection", connection)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.connection, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self.connection, name, value)
+
+        def __enter__(self) -> "FailingConnection":
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return self.connection.__exit__(*exc)
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            if method == "execute" and sql_fragment in sql:
+                raise sqlite3.OperationalError("forced store setup failure")
+            return self.connection.execute(sql, *args, **kwargs)
+
+        def executescript(self, sql: str) -> sqlite3.Cursor:
+            if method == "executescript" and sql_fragment in sql:
+                raise sqlite3.OperationalError("forced store setup failure")
+            return self.connection.executescript(sql)
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+            self.connection.close()
+
+    def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, FailingConnection(real_connect(*args, **kwargs)))
+
+    real_read_text = Path.read_text
+
+    def read_text(file: Path, *args: Any, **kwargs: Any) -> str:
+        if method == "read_text" and file.name == sql_fragment:
+            raise OSError("forced store setup failure")
+        return real_read_text(file, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    with pytest.raises(error_type, match="forced store setup failure"):
+        Store.open(path)
+
+    assert closed
 
 
 @settings(max_examples=30, derandomize=True)

@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import sqlite3
 import tempfile
 from collections import Counter
-from collections.abc import Set
-from datetime import UTC, date, datetime, time
+from collections.abc import Iterator, Set
+from contextlib import contextmanager
+from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
 from statistics import median
+from time import sleep
 from typing import TYPE_CHECKING, NoReturn
 from zoneinfo import ZoneInfo
 
@@ -27,14 +30,30 @@ from digest.corpus.render import render_world
 from digest.daily.render import build_digest, render_digest, select_digest
 from digest.daily.select import Selection
 from digest.daily.slack import slack_message
+from digest.driver import (
+    LineView,
+    ReaderDiff,
+    ScriptLine,
+    StoreView,
+    diff_selections,
+    make_event,
+)
 from digest.eval.extraction import run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
 from digest.llm.cassette import CassetteMiss, Cassettes
 from digest.llm.client import LLM, from_settings
+from digest.models import Event
 from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
-from digest.replay import replay_world
+from digest.replay import read_events, replay_world
+from digest.seed import (
+    SeedBlocked,
+    SlackSeedClient,
+    SlackWebSeedClient,
+    plan_seed,
+)
+from digest.seed import seed as seed_corpus
 from digest.settings import Settings
 from digest.store import Store
 from digest.world.golden import derive_golden, write_golden
@@ -55,6 +74,7 @@ _BOT_TOKEN_PREFIX = "xoxb-"
 _SLACK_ERROR_CODE = re.compile(r"[a-z_]+")  # a body such as invalid_blocks
 _SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]+")
 _AUTH_ERRORS = frozenset({"invalid_auth", "not_authed"})
+_AT_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?")
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -260,6 +280,92 @@ def _not_set(key: str) -> str:
     return f"{key} is not set in the environment or in {Path.cwd() / '.env'}"
 
 
+# --- digest seed (docs/plans/m5-seed.md) -------------------------------------------------
+
+
+@app.command()
+def seed(
+    world: str = typer.Option(..., "--world", help="World name under data/world/."),
+    map_path: Path | None = typer.Option(
+        None,
+        "--map",
+        help="Seed map file. Default: .slack-seed/<team_id>-<world>.json.",
+    ),
+    until_day: int | None = typer.Option(
+        None, "--until-day", help="Seed only the events up to the end of this world day."
+    ),
+    pace: float = typer.Option(1.2, "--pace", min=0, help="Seconds between two writes."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Make no write; print what a run would do."
+    ),
+) -> None:
+    """Post the world's corpus into the Slack workspace of SLACK_BOT_TOKEN, under persona
+    names, and record a map from each world message to its Slack message.
+
+    The command reads SLACK_BOT_TOKEN as `digest post --dm` does. It plans the posts
+    before it makes a Slack call. A real run prints one line per acknowledged write, then
+    the summary line. A dry run prints the count and blocker lines only, and exits 1 when
+    a blocker stops a real run. A Slack error shows its error code only, any other error
+    its type only, so no output holds the token.
+    """
+    world_dir = Path("data") / "world" / world
+    # Each refusal comes after its try statement, so no exception chains to it.
+    failure: str | None = None
+    try:
+        loaded = load_world(world_dir / "world.yaml")
+        events = list(read_events(world_dir / "events.jsonl", loaded.workspace_url))
+        posts = plan_seed(loaded, events, until_day)
+    except OSError as error:
+        failure = f"{error.filename}: {error.strerror or error}"
+    except (yaml.YAMLError, ValueError) as error:  # ValueError: validation, format, B7, day
+        failure = str(error)
+    if failure is not None:
+        _refuse(failure)
+    token = _env_value("SLACK_BOT_TOKEN")
+    if token is None:
+        _refuse(_not_set("SLACK_BOT_TOKEN"))
+    if not token.startswith(_BOT_TOKEN_PREFIX):
+        _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
+    client = _seed_client(token)
+    try:
+        report = seed_corpus(
+            loaded, posts, client, map_path, pace=pace, sleep=sleep, dry_run=dry_run
+        )
+    except SeedBlocked as error:  # a check before the first write; the message names it
+        failure = str(error)
+    # The message of any other error can hold the token, so the refusal shows
+    # _slack_failure only.
+    except Exception as error:
+        failure = f"{_slack_failure(error)}; the map keeps what is done; run the command again"
+    if failure is not None:
+        _refuse(failure)
+    if dry_run:
+        if not report.complete:
+            raise typer.Exit(code=1)
+        return
+    typer.echo(
+        f"seeded {report.posts} posts and {report.files} files in {report.channels} channels; "
+        f"{report.reactions_not_seeded} reactions not seeded; map {report.map_path}"
+    )
+
+
+def _seed_client(token: str) -> SlackSeedClient:
+    """The seeder's Slack client: a `SlackWebSeedClient` over a `WebClient` with no retry
+    handler, so the seeder owns retries (plan B11). Tests patch this factory."""
+    # slack-sdk is in the optional `slack` extra. A top-level import would stop every
+    # command when the extra is not installed.
+    # The refusal comes after the try statement, so no exception chains to it.
+    try:
+        from slack_sdk import WebClient
+    except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
+        _refuse("digest seed needs the slack extra; run uv sync --extra slack")
+    return SlackWebSeedClient(WebClient(token=token, retry_handlers=[]))
+
+
 @app.command()
 def run(
     user: str = typer.Option(..., help="User id from the corpus or workspace."),
@@ -301,6 +407,47 @@ def run(
         except ValueError as error:  # a refused store, or a bot
             _refuse(str(error))
     typer.echo(digest)
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(8000, help="Port on 127.0.0.1."),
+) -> None:
+    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world (offline).
+
+    The command builds the day-6 store as `digest demo` does, in a temporary directory
+    that lasts until the server stops. It closes its own connection to the store before
+    the server starts; the room opens the store for each rebuild. The command never
+    constructs the settings object, so it reads no API key and no `.env` file.
+    """
+    # The web extra is optional. A top-level import would break `digest demo` on a plain
+    # `uv sync`, as `post` avoids for slack-sdk. digest.room is imported here beside the
+    # web app that uses it.
+    # The refusal comes after the try statement, so no exception chains to it.
+    try:
+        import uvicorn
+
+        from digest.room import Room, build_base
+        from digest.web.app import create_app, server_config
+    except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
+        _refuse("digest serve needs the web extra; run uv sync --extra web")
+    failure: str | None = None
+    # build_base reads world day 6; the store must end on that day.
+    with _demo_store(6) as (loaded, priors, store):
+        try:
+            base = build_base(store, loaded, priors)
+            store.close()
+            room = Room(base)
+        except (ValueError, OSError) as error:  # a refused store
+            failure = str(error)
+        if failure is not None:
+            _refuse(failure)
+        typer.echo(f"serving the demo room at http://127.0.0.1:{port}/")
+        uvicorn.Server(server_config(create_app(room), port)).run()
 
 
 @app.command("eval")
@@ -479,6 +626,198 @@ def replay(
     typer.echo(report.model_dump_json())
 
 
+@app.command()
+def say(
+    as_: str | None = typer.Option(
+        None, "--as", help="Persona id of the sender; not a bot. Not with --script."
+    ),
+    channel: str | None = typer.Option(
+        None, "--channel", help="Channel name; the persona must be a member. Not with --script."
+    ),
+    at: str | None = typer.Option(
+        None,
+        "--at",
+        help="World time, YYYY-MM-DDTHH:MM[:SS] in the world's time zone, on the store's day "
+        "and later than every event in the store. Not with --script.",
+    ),
+    text: str | None = typer.Option(None, "--text", help="Message text. Not with --script."),
+    thread: str | None = typer.Option(
+        None,
+        "--thread",
+        help="Ts of a top-level message in the channel to reply to. Not with --script.",
+    ),
+    script: Path | None = typer.Option(
+        None,
+        "--script",
+        help="Script file: run each JSON line as its own say into a fresh scratch copy.",
+    ),
+    db: Path = typer.Option(
+        ...,
+        "--db",
+        help="Scratch store path; made as a copy of the base store on first use. "
+        "With --script, it must not exist yet.",
+    ),
+    base_db: Path | None = typer.Option(
+        None,
+        "--base-db",
+        help="Base store path, never written; default DIGEST_DB, then data/<world>.sqlite.",
+    ),
+) -> None:
+    """Add a message as a persona at a world time, into a scratch copy of the store.
+
+    The command opens the base store read-only and never writes it. It refuses a message
+    that breaks a rule with exit 1 and a one-line reason, and then writes nothing. It
+    refuses to make a new scratch store when `<db>.script.jsonl` already exists, so a log
+    never holds two sessions. It writes the event, sets the
+    meta key `extract_until` to the day before the store's day when that key is not
+    already earlier, appends the arguments as one JSON line to `<db>.script.jsonl` and
+    prints the event's ts. Run `digest extract --db <scratch>` next.
+
+    The command refuses a `--db` equal to the base store path, or one that resolves to the
+    same file. Without `--script`, the command uses an existing `--db` as it is. A failed
+    event write refuses on one line that starts with the `--db` path. A failed copy or
+    event write removes a scratch store that this say made. A failed log append keeps it.
+    The command keeps a scratch store that already existed.
+
+    With `--script`, the command refuses a `--db` that already exists, or a
+    `<db>.script.jsonl` that already exists, before the copy. It makes `--db` as a fresh
+    copy of the base store, then runs every line of the file in order, each as its own say
+    with the same rules. It appends to no script file. On any failure after the copy, it
+    removes the scratch store. It prints the ts values only after it stores every line.
+    """
+    settings = Settings()
+    base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
+    if db.resolve() == base.resolve() or (
+        db.exists() and base.exists() and os.path.samefile(db, base)
+    ):
+        _refuse(f"--db {db} is the same file as the base store {base}; give a scratch path")
+    single = {"--as": as_, "--channel": channel, "--at": at, "--text": text, "--thread": thread}
+    if script is not None:
+        given = [option for option, value in single.items() if value is not None]
+        if given:
+            _refuse(f"--script cannot be used with {', '.join(given)}")
+        _say_script(script, db, base)
+        return
+    if as_ is None or channel is None or at is None or text is None:
+        _refuse("say needs --as, --channel, --at and --text, or --script")
+    try:
+        line = ScriptLine(as_=as_, channel=channel, at=at, text=text, thread=thread)
+    except ValidationError as error:
+        _refuse(_first_error(error))
+    fresh = not db.exists()
+    log_path = Path(f"{db}.script.jsonl")
+    if fresh and not base.is_file():
+        _refuse(f"no base store at {base}; run digest replay first")
+    with _open_store_readonly(base) if fresh else _open_store(db) as checked:
+        world = _store_world(checked)
+        try:
+            event, meta = _checked_say(checked, world, line)
+        except ValueError as error:
+            _refuse(" ".join(str(error).split()))
+        if fresh:
+            if log_path.exists():  # after the rule checks, so a broken rule names its reason
+                _refuse(f"script log {log_path} already exists; remove it or give another --db")
+            scratch = _copy_store(checked, db)  # before the try: a refused copy removes nothing
+            try:
+                with scratch:  # inside the try: close before _remove_store, for Windows
+                    scratch.upsert_events([event], meta=meta)
+            except (OSError, sqlite3.Error) as error:
+                _remove_store(db)
+                _refuse(f"{db}: {' '.join(str(error).split())}")
+            except BaseException:
+                _remove_store(db)
+                raise
+        else:
+            try:
+                checked.upsert_events([event], meta=meta)
+            except (OSError, sqlite3.Error) as error:  # keep a store this say did not make
+                _refuse(f"{db}: {' '.join(str(error).split())}")
+    with log_path.open("a", encoding="utf-8", newline="\n") as log_file:
+        log_file.write(line.model_dump_json() + "\n")
+    typer.echo(event.ts)
+
+
+@app.command()
+def diff(
+    as_of: str = typer.Option(..., "--as-of", help="Digest date, YYYY-MM-DD."),
+    db: Path = typer.Option(..., "--db", help="Store B, the store after the change."),
+    base_db: Path | None = typer.Option(
+        None,
+        "--base-db",
+        help="Store A, the store before the change; default DIGEST_DB, then data/<world>.sqlite.",
+    ),
+    user: str | None = typer.Option(
+        None, "--user", help="Compare only this user id; default every non-bot persona."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print a JSON array of the reader diffs."),
+) -> None:
+    """Show which readers' digests differ between two stores on a date, and why.
+
+    For each reader with a change, the command lists the added, removed and changed lines,
+    each with its title and reason. Then it names the readers with no change. With no change
+    for any reader, it prints "no change" and exits 0. The readers are sorted by user_id, in
+    the text output and in `--json`. A refused store or an unknown user exits 1 with the
+    reason, as `digest run` does. The command opens both stores read-only and never writes
+    them.
+    """
+    settings = Settings()
+    try:
+        day = date.fromisoformat(as_of)
+    except ValueError:
+        _refuse(f"--as-of must be YYYY-MM-DD, got {as_of!r}")
+    base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
+    for path in (base, db):
+        if not path.is_file():  # a clearer reason than the error of a read-only open
+            _refuse(f"no store at {path}; run digest replay first")
+    with _open_store_readonly(base) as before_store, _open_store_readonly(db) as after_store:
+        name = _stored(after_store, "world")
+        base_name = _stored(before_store, "world")
+        if base_name != name:
+            _refuse(f"store {base} holds world {base_name!r}, but store {db} holds {name!r}")
+        world = _store_world(after_store)
+        try:
+            priors = load_priors(DEFAULT_PRIORS_PATH)
+        except ValidationError as error:
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {_first_error(error)}")
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {' '.join(str(error).split())}")
+        if user is None:
+            readers = sorted(p.user_id for p in world.personas if p.kind != "bot")
+        else:
+            readers = [user]
+        diffs: list[ReaderDiff] = []
+        for reader in readers:
+            try:
+                before = select_digest(before_store, world, priors, reader, day)
+                after = select_digest(after_store, world, priors, reader, day)
+            except KeyError:
+                _refuse(f"unknown user {reader}: no persona with that id in world {name}")
+            except ValueError as error:  # a refused store, or a bot
+                _refuse(str(error))
+            diffs.append(diff_selections(before, after))
+    if as_json:
+        typer.echo(json.dumps([d.model_dump(mode="json") for d in diffs], indent=2))
+        return
+    changed = [d for d in diffs if d.added or d.removed or d.changed]
+    if not changed:
+        typer.echo("no change")
+        return
+    for reader_diff in changed:
+        typer.echo(reader_diff.user_id)
+        for view in reader_diff.added:
+            typer.echo(f"  added {_line_view(view)}")
+        for view in reader_diff.removed:
+            typer.echo(f"  removed {_line_view(view)}")
+        for change in reader_diff.changed:
+            typer.echo(f"  changed {_line_view(change.after)}")
+            for field in change.fields:
+                was, now = getattr(change.before, field), getattr(change.after, field)
+                typer.echo(f"      {field}: {was} -> {now}")
+    unchanged = [d.user_id for d in diffs if d not in changed]
+    if unchanged:
+        typer.echo(f"no change: {', '.join(unchanged)}")
+
+
 world_app = typer.Typer(help="Inspect a scripted world.", no_args_is_help=True)
 app.add_typer(world_app, name="world")
 
@@ -578,12 +917,40 @@ def world_golden(
 def _demo_selections(day: int) -> tuple[World, list[Selection]]:
     """Build the selections of the demo readers for a world day of the bundled world.
 
+    The function builds the store with `_demo_store`. It returns the world and one
+    selection for each reader of `_DEMO_READERS`, in the same order. A refused store stops
+    the command. The function never constructs the settings object. It assumes that each
+    reader got the digest of the previous world day; on world day 1, each digest is a
+    first digest.
+    """
+    selections: list[Selection] = []
+    # The refusal comes after the try statement, so no exception chains to it.
+    failure: str | None = None
+    with _demo_store(day) as (loaded, priors, store):
+        today = loaded.date_of(day)
+        previous = loaded.date_of(day - 1) if day > 1 else None
+        try:
+            for user_id in _DEMO_READERS:
+                selections.append(
+                    select_digest(store, loaded, priors, user_id, today, previous_digest=previous)
+                )
+        except (ValueError, OSError) as error:  # a refused store
+            failure = str(error)
+    if failure is not None:
+        _refuse(failure)
+    return loaded, selections
+
+
+@contextmanager
+def _demo_store(day: int) -> Iterator[tuple[World, Priors, Store]]:
+    """Yield the bundled world, the priors and a store replayed and extracted through `day`.
+
     The function replays the bundled world into a temporary store one day at a time and
-    runs the extract stage at the end of each day from the recorded cassettes. It returns
-    the world and one selection for each reader of `_DEMO_READERS`, in the same order. A
-    cassette directory that does not exist or holds no cassette file stops the command
-    before any replay. A failed thread in any extract run stops the command before it
-    selects a digest. The function never constructs the settings object.
+    runs the extract stage at the end of each day from the recorded cassettes. The store
+    and its temporary directory last until the `with` block ends. A cassette directory that
+    does not exist or holds no cassette file stops the command before any replay. A failed
+    thread in any extract run stops the command before the function yields. The function
+    never constructs the settings object.
     """
     world_dir = Path("data") / "world" / _DEMO_WORLD
     source = world_dir / "world.yaml"
@@ -617,7 +984,6 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
     llm = LLM(None, Cassettes(cassettes), "replay")
     today = loaded.date_of(day)
     zone = ZoneInfo(loaded.timezone)
-    selections: list[Selection] = []
     # Windows can hold a handle on the store file after it closes. A cleanup error must not
     # replace the output or the exit code.
     with (
@@ -628,20 +994,20 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
             total = _extract_days(
                 store, loaded, llm, priors, zone, _end_of(today, zone), replay=world_dir
             )
-            if total.failed:
-                noun = "thread" if total.failed == 1 else "threads"
-                _refuse(
-                    f"extract reported {total.failed} failed {noun} up to day {day}; "
-                    "the demo builds no digest from a partial extraction"
-                )
-            for user_id in _DEMO_READERS:
-                selections.append(select_digest(store, loaded, priors, user_id, today))
         # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
         except (CassetteMiss, ValueError, OSError) as error:
             failure = str(error)
-    if failure is not None:
-        _refuse(failure)
-    return loaded, selections
+        if failure is not None:
+            _refuse(failure)
+        if total.failed:
+            noun = "thread" if total.failed == 1 else "threads"
+            _refuse(
+                f"extract reported {total.failed} failed {noun} up to day {day}; "
+                "the demo builds no digest from a partial extraction"
+            )
+        # The yield is outside the try statement, so an error in the caller's block is
+        # not reported as an extract failure.
+        yield loaded, priors, store
 
 
 def _webhook_url() -> str | None:
@@ -789,6 +1155,120 @@ def _extract_days(
     return total
 
 
+def _say_script(script: Path, db: Path, base: Path) -> None:
+    """Run every line of a script file as its own say into a new scratch store at `db`.
+
+    Refuse a `db` that exists, or a `<db>.script.jsonl` that exists. Split the file into
+    lines on "\\n" only, so a text that holds U+0085, U+2028 or U+2029 replays. On any
+    failure after the copy, remove the new scratch store, so a failure writes nothing. Print
+    the ts values only after every line is stored.
+    """
+    if db.exists():
+        _refuse(f"--db {db} already exists; --script runs into a new scratch store only")
+    log_path = Path(f"{db}.script.jsonl")
+    if log_path.exists():
+        _refuse(f"script log {log_path} already exists; remove it or give another --db")
+    try:
+        raw_lines = [raw.removesuffix("\r") for raw in script.read_bytes().decode().split("\n")]
+    except (OSError, UnicodeDecodeError) as error:
+        _refuse(f"{script}: {error}")
+    lines: list[tuple[int, ScriptLine]] = []
+    for number, raw in enumerate(raw_lines, start=1):
+        if not raw.strip():
+            continue
+        try:
+            lines.append((number, ScriptLine.model_validate_json(raw)))
+        except ValidationError as error:
+            _refuse(f"{script}:{number}: {_first_error(error)}")
+    if not base.is_file():
+        _refuse(f"no base store at {base}; run digest replay first")
+    with _open_store_readonly(base) as source:
+        world = _store_world(source)
+        scratch = _copy_store(source, db)
+    stored: list[str] = []
+    where = str(script)  # the script line that failed, for the refusal
+    try:
+        with scratch:
+            for number, line in lines:
+                where = f"{script}:{number}"
+                event, meta = _checked_say(scratch, world, line)
+                scratch.upsert_events([event], meta=meta)
+                stored.append(event.ts)
+    except (ValueError, OSError, sqlite3.Error) as error:
+        _remove_store(db)
+        _refuse(f"{where}: {' '.join(str(error).split())}")
+    except BaseException:
+        _remove_store(db)
+        raise
+    for ts in stored:
+        typer.echo(ts)
+
+
+def _checked_say(store: Store, world: World, line: ScriptLine) -> tuple[Event, dict[str, str]]:
+    """The event of one say line and the meta to write with it.
+
+    Raise ValueError with a one-line reason for a line that breaks rule S1, S2 or S3, or
+    for a store whose meta is malformed. The function writes nothing.
+    """
+    if _AT_PATTERN.fullmatch(line.at) is None:
+        raise ValueError(f"--at must be YYYY-MM-DDTHH:MM[:SS], got {line.at!r}")
+    moment = datetime.fromisoformat(line.at)
+    until = store.get_meta("until")
+    end = None if until is None else _instant(until)
+    if end is None:  # a ValueError, not _refuse: a script removes its scratch store first
+        raise ValueError(
+            f"store {store.path} meta key 'until' is {until!r}, "
+            "not an ISO timestamp with a UTC offset"
+        )
+    day = end.astimezone(ZoneInfo(world.timezone)).date()
+    view = StoreView(day=day, latest_event_ts=store.latest_event_ts())
+    event = make_event(world, view, line.as_, line.channel, moment, line.text, line.thread)
+    if line.thread is not None:  # rule S3
+        found = store.events_in_thread(f"{event.channel_id}:{line.thread}", end)
+        if not found or found[0].ts != line.thread:
+            raise ValueError(
+                f"--thread {line.thread} is not the ts of a top-level message "
+                f"in channel {line.channel}"
+            )
+    # The next `digest extract` must revisit the store's day; keep an earlier key as it is.
+    revisit = day - timedelta(days=1)
+    done = store.get_meta("extract_until")
+    try:
+        earlier = done is not None and date.fromisoformat(done) < revisit
+    except ValueError:
+        raise ValueError(
+            f"store {store.path} meta key 'extract_until' is {done!r}, not YYYY-MM-DD"
+        ) from None
+    return event, {} if earlier else {"extract_until": revisit.isoformat()}
+
+
+def _store_world(store: Store) -> World:
+    """The world that the store holds, loaded from data/world; refuse a missing or bad file."""
+    source = Path("data") / "world" / _stored(store, "world") / "world.yaml"
+    try:
+        return load_world(source)
+    except OSError as error:
+        _refuse(f"{source}: {error.strerror or error}")
+    except ValidationError as error:
+        _refuse(f"{source}: {_first_error(error)}")
+    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        _refuse(f"{source}: {' '.join(str(error).split())}")
+
+
+def _copy_store(store: Store, path: Path) -> Store:
+    """Copy the store to a new file at `path` and open the copy; refuse on a failed copy."""
+    try:
+        return store.copy_to(path)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        _refuse(f"cannot copy store {store.path} to {path}: {error}")
+
+
+def _line_view(view: LineView) -> str:
+    """One diff line: section, lane and rank, then the title and the reason."""
+    place = "must-see" if view.lane == "must_see" else f"ranked {view.rank}"
+    return f"[{view.section}, {place}] {view.title}: {view.reason}"
+
+
 def _overlap_line(*shown: Set[str]) -> str:
     """The Jaccard index of the item ids of each pair of demo digests, to two decimals.
 
@@ -831,6 +1311,30 @@ def _open_store(path: Path) -> Store:
         _refuse(f"cannot open store {path}: {error}")
 
 
+def _open_store_readonly(path: Path) -> Store:
+    """Open the store read-only, or refuse for a file that is not a store of this schema."""
+    try:
+        return Store.open_readonly(path)
+    except ValueError as error:  # empty, or another schema version; the message names the store
+        _refuse(str(error))
+    except (OSError, sqlite3.DatabaseError) as error:
+        _refuse(f"cannot open store {path}: {error}")
+
+
+def _remove_store(path: Path) -> None:
+    """Remove a store file with its `-wal` and `-shm` files."""
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
+def _first_error(error: ValidationError) -> str:
+    """The first message of a validation error, on one line, after its location."""
+    first = error.errors()[0]
+    message = " ".join(first["msg"].split())
+    location = ".".join(map(str, first["loc"]))
+    return f"{location}: {message}" if location else message
+
+
 def _instant(text: str) -> datetime | None:
     """The aware datetime of an ISO timestamp with an offset; None for anything else."""
     try:
@@ -843,8 +1347,3 @@ def _instant(text: str) -> datetime | None:
 def _refuse(reason: str) -> NoReturn:
     typer.echo(reason, err=True)
     raise typer.Exit(code=1)
-
-
-def _not_yet(name: str) -> int:
-    typer.echo(f"`digest {name}` is not implemented yet; see SPEC.md section 9.", err=True)
-    return 2

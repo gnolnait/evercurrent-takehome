@@ -21,10 +21,52 @@ the driver is ours. Posting into a real workspace is out of scope (the seeder, M
 ## The scratch store
 
 `say` never writes to the base store. On first use it creates `--db` with
-`Store.copy_to(path)`, a new store method that uses SQLite's online backup API from a
-read-only connection (`sqlite3.Connection.backup`), so rows still in the base store's
-write-ahead log are copied too. `--db` equal to the
-base path, or resolving to the same file, is refused.
+`Store.copy_to(path)`, a new store method that uses SQLite's online backup API from the
+base store's own read-only connection (`sqlite3.Connection.backup`), so rows still in
+the base store's write-ahead log are copied too. `--db` equal to the base path, or
+resolving to the same file, is refused.
+
+Review rulings (unit 7 code review, 2026-10-12):
+- The base store is opened read-only (`Store.open_readonly`, a `mode=ro` connection with
+  no schema script and no write); a file that is not a store of the current schema is
+  refused with its reason. `copy_to` backs up from the store's own connection.
+- `copy_to` removes the target file when the backup fails, so no half-made scratch
+  store is left behind.
+- A `say` that creates the scratch store refuses when `<db>.script.jsonl` already exists,
+  naming that file, so a log never mixes two sessions.
+- `--script` removes the scratch store (with its `-wal` and `-shm` files) on any
+  failure after the copy, not only on a refused line, and prints the event ts values
+  only after every line is stored.
+- A script file is split into lines on `\n` only, so a `--text` holding U+0085, U+2028
+  or U+2029 replays.
+- Every refusal is one line; a validation error is reduced to its first message.
+
+Review rulings, round 2 (fix round review, 2026-10-12):
+- `--script` also refuses when `<db>.script.jsonl` already exists, naming that file, as a
+  single `say` that creates the scratch store does.
+- `diff` opens both stores read-only, so it never writes either store, also when `--db`
+  and `--base-db` name the same file.
+- `copy_to` removes the target and its `-wal` and `-shm` files on any failure, including
+  a failure to open the finished copy.
+- A single `say` that creates the scratch store removes it (with its `-wal` and `-shm`
+  files) on any failure after the copy, and refuses on one line.
+- A rule refusal (a `ValueError` from the rule checks) is one line in a single `say` too:
+  its whitespace is folded, as in `--script`.
+- A priors refusal in `diff` names the priors file, as `digest run` does.
+- Recorded, not fixed: the script log is appended after the event commits, so a log
+  write failure leaves an event with no log line; a cleanup that raises replaces the
+  refusal with its own error.
+
+Review rulings, round 3 (2026-10-13):
+- A single `say` removes the scratch store only when it made it: the copy runs before
+  the cleanup block, and `copy_to` cleans up its own failures. A refused copy (a target
+  that appeared after the check) removes nothing.
+- `Store.open` closes its connection on any failure after the connect, not only a failed
+  version check, so a cleanup can delete the file on Windows.
+- The `say` docstring names the failures that remove the scratch store: the copy and the
+  event write, not the log append.
+- A failed event write in a single `say` names the scratch store path in its refusal, as
+  `--script` names its line.
 
 ## `digest say`
 
@@ -65,7 +107,8 @@ cassettes; a miss exits 1 with the cassette key. `DIGEST_MODE=record` with the g
 key records them once.
 
 `digest say --script <file> --db <scratch> [--base-db <store>]` runs every line of a
-script file in order (each line as its own `say`, same rules) into a fresh scratch copy,
+script file in order (each line as its own `say`, same rules) into a fresh scratch copy
+(a `--db` that already exists is refused, so a script never overwrites a session),
 and does not append to any script file. A script reproduces a session only when the
 session ran one `digest extract` after its last `say`: extracting between lines changes
 the extraction requests, so such a session is not reproducible from its script.
@@ -111,6 +154,21 @@ class ReaderDiff(Frozen):
   none. `--json` prints a JSON array of `ReaderDiff` in the same order.
 - No change for any reader prints "no change" and exits 0. A refused store or an unknown
   user exits 1 with the reason, as `digest run` does.
+
+`diff_selections` rulings (2026-10-13, before the tests):
+- A `Line` maps to a `LineView` field by field: `item_id` is `line.item.item_id`, `title`
+  is `line.item.title`, `section` is `line.section`, `lane` is `"must_see"` when
+  `line.must_see` is true and `"ranked"` otherwise, and `reason` is `line.reason`.
+- `rank` is the 1-based position of a ranked line among the ranked lines of its section,
+  in the order of `Selection.lines`. A must-see line has `rank` None. `score` is not
+  compared: a score change shows only through `rank` or `reason`.
+- Section order is the order of `SECTION_CAPS` (`needs_you`, `not_happened`, `decisions`,
+  `risks`, `fyi`).
+- `user_id` is `after.profile.user_id`. Two selections of different readers raise
+  `ValueError`. An `item_id` that occurs twice in one selection raises `ValueError`.
+- Fields of `Selection` other than `profile` and `lines` (`day`, `hidden`, and any field
+  added later) are not compared.
+- The function is pure: same inputs, same output, no I/O.
 
 ## Code layout
 

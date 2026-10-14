@@ -66,5 +66,6 @@ A unit is one milestone slice from SPEC.md section 8, small enough to review in 
 - Claude lenses: `/review-local --base main` dispatches the lens agents and writes
   `.review/<sha>/verdict.json` in the main checkout, also when it runs in a linked
   worktree.
-- Hooks: `.claude/hooks` guards block commits to main, PR merges, signing bypass, and any
-  commit or push while a test edit lacks a RED-GREEN proof.
+- Hooks: `.claude/hooks` guards block commits to main, PR merges, signing bypass, PR
+  creation without a review marker for HEAD (`.review/<sha>/verdict.json` or
+  `codex.md`), and any commit or push while a test edit lacks a RED-GREEN proof.

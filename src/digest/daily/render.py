@@ -13,6 +13,7 @@ from digest.absence import detect_absences
 from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
+from digest.models import ts_micros
 from digest.priors import Priors
 from digest.project import ChecklistTask
 from digest.store import Store
@@ -28,11 +29,12 @@ SECTION_TITLES: Mapping[Section, str] = {
 
 
 def render_digest(world: World, selection: Selection) -> str:
-    """The digest as plain text: a header, the non-empty sections, the hidden-items footer."""
+    """The digest as plain text: a header, the window line, the sections, the hidden footer."""
     names = {persona.user_id: persona.name for persona in world.personas}
     tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
     profile = selection.profile
-    blocks = [f"Daily digest for {profile.name} ({profile.role}) - {selection.day.isoformat()}"]
+    header = f"Daily digest for {profile.name} ({profile.role}) - {selection.day.isoformat()}"
+    blocks = [f"{header}\n{window_line(selection)}"]
     for section, title in SECTION_TITLES.items():
         lines = [line for line in selection.lines if line.section == section]
         if lines:
@@ -45,13 +47,32 @@ def render_digest(world: World, selection: Selection) -> str:
     return "\n\n".join(blocks)
 
 
+def window_line(selection: Selection) -> str:
+    """The line under the header that names the digest window."""
+    if selection.previous_digest is None:
+        return f"First digest: the last {selection.first_working_days} working days"
+    return f"Since your digest of {selection.previous_digest.isoformat()}"
+
+
 def build_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> str:
     """Select and render the reader's digest for `day`; see `select_digest` for the refusals."""
     return render_digest(world, select_digest(store, world, priors, user_id, day))
 
 
-def select_digest(store: Store, world: World, priors: Priors, user_id: str, day: date) -> Selection:
+def select_digest(
+    store: Store,
+    world: World,
+    priors: Priors,
+    user_id: str,
+    day: date,
+    *,
+    previous_digest: date | None = None,
+) -> Selection:
     """Select the reader's lines for `day` from a replayed and extracted store.
+
+    The window starts at the end of `previous_digest`, at most `max_working_days` back;
+    without one, the digest is a first digest. An item's newest evidence is the greatest `event_ts` among the stored messages
+    its evidence cites, so an edit counts as new evidence.
 
     Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not
     exactly the end of `day` in the world's zone, or a store with extract deltas pending.
@@ -96,13 +117,27 @@ def select_digest(store: Store, world: World, priors: Priors, user_id: str, day:
         raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
     items = store.items(as_of)
     absences = detect_absences(store, world.project, priors, as_of, zone)
-    return select(world, profile, items, absences, priors, day)
+    # Extract cites only messages of the item's own thread. A cited message the store does not
+    # hold counts at its `message_ts`.
+    event_times = {
+        (event.channel_id, event.ts): ts_micros(event.event_ts)
+        for thread_id in {item.thread_id for item in items}
+        for event in store.events_in_thread(thread_id, as_of)
+    }
+    newest_evidence = {
+        item.item_id: max(
+            event_times.get((entry.channel_id, entry.message_ts), ts_micros(entry.message_ts))
+            for entry in item.evidence
+        )
+        for item in items
+    }
+    return select(world, profile, items, absences, priors, day, previous_digest, newest_evidence)
 
 
-def _line(
+def line_parts(
     line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
-) -> str:
-    """One line, then its indented summary and source links.
+) -> tuple[str, str]:
+    """The line's heading and its one-line summary, without "- ", "[must see]" or sources.
 
     A checklist absence takes the task text and owner role from the world's checklist.
     """
@@ -111,26 +146,32 @@ def _line(
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
         owner = f" - owner {names.get(item.owner, item.owner)}" if item.owner else ""
-        head = f"- {_plain(item.title)}{entities}{owner}"
-        body = [f"  {_plain(item.summary)}"]
+        head = f"{_plain(item.title)}{entities}{owner}"
     elif detail.source == "checklist":
         task = tasks.get((detail.gate or "", detail.task or ""))
         what = f"{task.task} ({task.owner})" if task else detail.task
         head = (
-            f"- Not happened: {what} for {detail.gate} - "
+            f"Not happened: {what} for {detail.gate} - "
             f"{_days(detail.days_silent)} silent, "
             f"{detail.buffer_consumed}/{detail.buffer_days} buffer days used"
         )
-        body = [f"  {_plain(item.summary)}"]
     else:
         asker = names.get(detail.asker, detail.asker) if detail.asker else "someone"
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
-        head = f"- Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
-        body = [f"  {_plain(item.summary)}"]
+        head = f"Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
+    return head, _plain(item.summary)
+
+
+def _line(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> str:
+    """One line, then its indented summary and source links."""
+    heading, summary = line_parts(line, names, tasks)
+    head = f"- {heading}"
     if line.must_see:
         head += " [must see]"
-    sources = [f"  source: {entry.permalink}" for entry in item.evidence]
-    return "\n".join([head, *body, *sources])
+    sources = [f"  source: {entry.permalink}" for entry in line.item.evidence]
+    return "\n".join([head, f"  {summary}", *sources])
 
 
 def _days(count: int) -> str:
