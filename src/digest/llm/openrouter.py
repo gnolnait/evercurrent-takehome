@@ -76,8 +76,12 @@ class OpenRouterBackend:
             payload = response.json()
         except ValueError:
             raise LLMOutputError("openrouter reply is not JSON", raw=response.text) from None
-        if "choices" not in payload:
-            raise LLMOutputError("openrouter reply without choices", raw=response.text)
+        # Check the shape explicitly. A gateway can send valid JSON of the wrong shape.
+        # A try statement here would also catch the refusals below.
+        if not _has_expected_shape(payload):
+            raise LLMOutputError(
+                "openrouter reply has an unexpected shape", raw=response.text
+            ) from None
         choice = payload["choices"][0]
         text = choice["message"]["content"]
         if text is None:
@@ -95,3 +99,20 @@ class OpenRouterBackend:
             input_tokens=usage.get("prompt_tokens"),
             output_tokens=usage.get("completion_tokens"),
         )
+
+
+def _has_expected_shape(payload: object) -> bool:
+    """Return True when the reply has the fields that `complete` reads."""
+    if not isinstance(payload, dict):
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    choice = choices[0]
+    if not isinstance(choice, dict) or "finish_reason" not in choice:
+        return False
+    if not isinstance(choice.get("message"), dict):
+        return False
+    # A null usage counts as no usage. Any other value must be an object.
+    usage = payload.get("usage")
+    return usage is None or isinstance(usage, dict)
