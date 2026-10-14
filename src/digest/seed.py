@@ -95,6 +95,10 @@ class SlackSeedClient(Protocol):
         """Upload a file into a thread; return the file's permalink."""
         ...
 
+    def update(self, channel_id: str, ts: str, text: str, *, metadata: dict[str, object]) -> None:
+        """Update a posted message's text in place (chat.update); see docs/plans/m5-reseed.md."""
+        ...
+
 
 class MappedMessage(BaseModel):
     channel: str
@@ -172,6 +176,8 @@ class SeedReport:
     reactions_not_seeded: int
     complete: bool
     map_path: Path  # the map file the run used
+    updated: int = 0  # messages updated in place in this run (docs/plans/m5-reseed.md R8)
+    removed: tuple[str, ...] = ()  # world keys in the reference and the map, not in posts
 
 
 def plan_seed(world: World, events: Sequence[Event], until_day: int | None) -> list[Post]:
@@ -230,8 +236,12 @@ def seed(
     pace: float,
     sleep: Callable[[float], None],
     dry_run: bool,
+    reference: Sequence[Post] | None = None,
 ) -> SeedReport:
     """Make the posts and uploads that the map at `map_path` does not hold yet.
+
+    With `reference`, also update in place the mapped messages whose text changed
+    (docs/plans/m5-reseed.md); not built yet.
 
     Owns every map read and write (B9, B10). A `map_path` of None means
     `.slack-seed/<team_id>-<world>.json` in the working directory. See the plan for the
@@ -514,6 +524,11 @@ class SlackWebSeedClient:
             metadata=metadata,
         )
         return response["ts"]
+
+    def update(
+        self, channel_id: str, ts: str, text: str, *, metadata: Mapping[str, object]
+    ) -> None:
+        raise NotImplementedError
 
     def upload(self, channel_id: str, thread_ts: str, filename: str, content: bytes) -> str:
         response = self._call(

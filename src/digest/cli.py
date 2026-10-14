@@ -298,6 +298,14 @@ def seed(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Make no write; print what a run would do."
     ),
+    events_path: Path | None = typer.Option(
+        None, "--events", help="Corpus to seed. Default: the world's events.jsonl."
+    ),
+    reference_path: Path | None = typer.Option(
+        None,
+        "--reference",
+        help="Corpus the map was seeded from; update changed messages in place.",
+    ),
 ) -> None:
     """Post the world's corpus into the Slack workspace of SLACK_BOT_TOKEN, under persona
     names, and record a map from each world message to its Slack message.
@@ -308,6 +316,8 @@ def seed(
     a blocker stops a real run. A Slack error shows its error code only, any other error
     its type only, so no output holds the token.
     """
+    if events_path is not None or reference_path is not None:
+        raise NotImplementedError  # docs/plans/m5-reseed.md R9
     world_dir = Path("data") / "world" / world
     # Each refusal comes after its try statement, so no exception chains to it.
     failure: str | None = None
