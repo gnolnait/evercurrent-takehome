@@ -1309,15 +1309,8 @@ def test_say_script_refuses_existing_db_without_write(tmp_path: Path) -> None:
     assert log.read_text(encoding="utf-8") == "keep this log\n"
 
 
-def _require_scripts() -> Path:
-    if not SCRIPTS_DIR.is_dir():
-        pytest.skip("data/world/kestrel/scripts is not committed yet")
-    return SCRIPTS_DIR
-
-
 def _find_script(text: str) -> Path:
-    scripts = _require_scripts()
-    matches = [path for path in scripts.glob("*.jsonl") if text in path.read_text("utf-8")]
+    matches = [path for path in SCRIPTS_DIR.glob("*.jsonl") if text in path.read_text("utf-8")]
     assert len(matches) == 1, f"expected one script containing {text!r}, found {matches}"
     return matches[0]
 
@@ -1370,7 +1363,6 @@ def _scenario_item(path: Path, entity: str, quote: str) -> Item:
     return matches[0]
 
 
-@pytest.mark.skipif(not SCRIPTS_DIR.is_dir(), reason="Kestrel driver scripts are not committed yet")
 def test_d2_bracket_delay_reaches_only_me_must_see(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1393,7 +1385,6 @@ def test_d2_bracket_delay_reaches_only_me_must_see(
     assert must_see == {"U0ME01"}
 
 
-@pytest.mark.skipif(not SCRIPTS_DIR.is_dir(), reason="Kestrel driver scripts are not committed yet")
 def test_d3_private_gate_delay_is_visible_only_to_private_channel_members(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1417,7 +1408,6 @@ def test_d3_private_gate_delay_is_visible_only_to_private_channel_members(
     )
 
 
-@pytest.mark.skipif(not SCRIPTS_DIR.is_dir(), reason="Kestrel driver scripts are not committed yet")
 def test_d6_same_script_from_fresh_copies_has_byte_identical_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
