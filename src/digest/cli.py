@@ -16,7 +16,7 @@ from itertools import combinations
 from pathlib import Path
 from statistics import median
 from time import sleep
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 from zoneinfo import ZoneInfo
 
 import typer
@@ -29,7 +29,7 @@ from digest.corpus.avoid import load_avoid_names
 from digest.corpus.render import render_world
 from digest.daily.render import build_digest, render_digest, select_digest
 from digest.daily.select import Selection
-from digest.daily.slack import slack_message
+from digest.daily.slack import slack_digest
 from digest.driver import (
     LineView,
     ReaderDiff,
@@ -104,7 +104,7 @@ def demo(
     object, so it reads no API key and no `.env` file. It writes nothing outside the
     temporary directory.
     """
-    loaded, selections = _demo_selections(day)
+    loaded, selections, _ = _demo_selections(day)
     digests = [render_digest(loaded, selection) for selection in selections]
     shown = [{line.item.item_id for line in selection.lines} for selection in selections]
     typer.echo(f"\n\n{_RULE}\n\n".join(digests))
@@ -134,14 +134,17 @@ def post(
     The command reads SLACK_WEBHOOK_URL from the environment, then from `.env`. The URL
     must start with https://hooks.slack.com/ and hold no whitespace, else the command
     exits 1 before it builds a digest. It builds the three digests as `digest demo` does
-    and posts nothing until all three are built. It posts one message per reader, in
-    reader order. Before the first send, it prints one line with the number of digests
-    and the destination. It stops at the first message that Slack refuses or that fails
-    to send. A send failure shows the reader and the exception type only. A refusal shows
-    the reader, the status and the response body. It shows the body only when the body is
-    a Slack error code (lower-case letters and underscores) that is not part of the URL,
-    else it says the body is withheld. A refusal after a partial post also says how many
-    digests were already sent and that a rerun sends all of them again. A missing URL
+    and posts nothing until all three are built. Per reader, in reader order, it posts the
+    top message, then the thread items as a second plain message when there are any: a
+    webhook returns no `ts`, so it cannot post a thread reply. Before the first send, it
+    prints one line with the number of digests and the destination. It stops at the first
+    message that Slack refuses or that fails to send. A send failure shows the reader and
+    the exception type only. A refusal shows the reader, the status and the response body.
+    It shows the body only when the body is a Slack error code (lower-case letters and
+    underscores) that is not part of the URL, else it says the body is withheld. A refusal
+    of a second message also says that the first message was sent. A refusal after a
+    partial post also says how many digests were already sent and that a rerun sends all
+    of them again. A missing URL
     names the `.env` file in the working directory. The command never constructs the
     settings object, so it reads no API key. No output contains the webhook URL.
 
@@ -150,8 +153,8 @@ def post(
 
     With `--seed-map PATH`, the command loads the map that `digest seed` wrote before it
     checks the destination. A missing or unreadable map, or a map for another world than
-    the demo world, exits 1. The source links of mapped messages then point at the seeded
-    Slack messages, with their file links and channels. Before the first send, the command
+    the demo world, exits 1. The source link of a mapped item then points at the seeded
+    Slack message, with its file links and channel. Before the first send, the command
     prints how many source links are not in the map, when any are not. Without a map, the
     command makes no `auth.test` call (docs/plans/m5-links.md).
     """
@@ -164,38 +167,54 @@ def post(
         _refuse(_not_set("SLACK_WEBHOOK_URL"))
     if not url.startswith(_WEBHOOK_PREFIX) or any(char.isspace() for char in url):
         _refuse(f"SLACK_WEBHOOK_URL must start with {_WEBHOOK_PREFIX} and hold no whitespace")
-    loaded, selections = _demo_selections(day)
-    messages = [slack_message(loaded, selection, links) for selection in selections]
+    loaded, selections, authors = _demo_selections(day)
+    digests = [
+        slack_digest(loaded, selection, links=links, authors=authors, threaded=False)
+        for selection in selections
+    ]
     client = _webhook_client(url)
     _echo_unmapped(selections, links)
-    typer.echo(f"sending {len(messages)} digests to the webhook")
-    for sent, (selection, message) in enumerate(zip(selections, messages, strict=True)):
+    typer.echo(f"sending {len(digests)} digests to the webhook")
+    for sent, (selection, digest) in enumerate(zip(selections, digests, strict=True)):
         reader = selection.profile.name
-        rerun = _rerun_note(sent, len(messages))
-        # A refusal raised in an except block would chain the caught exception, so each
-        # handler stores the reason and the refusal comes after the try statement.
-        failure: str | None = None
-        try:
-            response = client.send(text=message["text"], blocks=message["blocks"])
-        # The message of an exception can hold the URL, so the refusal shows the type only.
-        except Exception as error:
-            failure = f"cannot post the digest for {reader}: {type(error).__name__}{rerun}"
+        top, *rest = digest
+        failure = _webhook_failure(
+            client, top, url, f"the digest for {reader}", _rerun_note(sent, len(digests))
+        )
         if failure is not None:
             _refuse(failure)
-        if response.status_code != 200:
-            # Show only a Slack error code that is not part of the URL. Another body, such
-            # as a proxy page, can echo the URL.
-            body = response.body
-            shown = (
-                body
-                if _SLACK_ERROR_CODE.fullmatch(body) and body not in url
-                else "body withheld (not a Slack error code)"
-            )
-            _refuse(
-                f"Slack refused the digest for {reader}: "
-                f"status {response.status_code}, {shown}{rerun}"
-            )
+        for message in rest:
+            what = f"the second message of the digest for {reader}"
+            note = f"; its first message was sent{_partial_note(sent, len(digests))}"
+            failure = _webhook_failure(client, message, url, what, note)
+            if failure is not None:
+                _refuse(failure)
         typer.echo(f"posted the digest for {reader}")
+
+
+def _webhook_failure(
+    client: WebhookClient, message: dict[str, Any], url: str, what: str, note: str
+) -> str | None:
+    """Send one message to the webhook. Return the refusal, or None when Slack accepted it.
+
+    The refusal names `what` and ends with `note`. A send failure shows the exception type
+    only, because its message can hold the URL. A Slack refusal shows the status, and the
+    body only when the body is a Slack error code that is not part of the URL: another
+    body, such as a proxy page, can echo the URL.
+    """
+    try:
+        response = client.send(text=message["text"], blocks=message["blocks"])
+    except Exception as error:
+        return f"cannot post {what}: {type(error).__name__}{note}"
+    if response.status_code == 200:
+        return None
+    body = response.body
+    shown = (
+        body
+        if _SLACK_ERROR_CODE.fullmatch(body) and body not in url
+        else "body withheld (not a Slack error code)"
+    )
+    return f"Slack refused {what}: status {response.status_code}, {shown}{note}"
 
 
 def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
@@ -204,9 +223,12 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
     The function reads SLACK_BOT_TOKEN from the environment, then from `.env`. The user id
     must match `[UW][A-Z0-9]+` and the token must start with `xoxb-`, else the command exits
     1 before it builds a digest. It builds the three digests as `digest demo` does and sends
-    nothing until all three are built. It opens the DM once with `conversations.open`. It
-    posts one message per reader with `chat.postMessage`, in reader order. It stops at the
-    first failure. Before it opens the DM, it prints one line with the number of digests
+    nothing until all three are built. It opens the DM once with `conversations.open`. Per
+    reader, in reader order, it posts the top message with `chat.postMessage`, then the
+    thread reply, when there is one, with `thread_ts` set to the `ts` of the top message.
+    It stops at the first failure. A failed reply, or a top message with no `ts` when a
+    reply is due, also says that the top message was sent. Before it opens the DM, it
+    prints one line with the number of digests
     and the destination. A Slack API error shows the reader and the text of
     `_slack_failure`. An `invalid_auth` or `not_authed` error also says whether the token
     came from the environment or from `.env` (see `_env_source`). A refusal after a
@@ -227,8 +249,11 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
     source = _env_source("SLACK_BOT_TOKEN")
     if not token.startswith(_BOT_TOKEN_PREFIX):
         _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
-    loaded, selections = _demo_selections(day)
-    messages = [slack_message(loaded, selection, links) for selection in selections]
+    loaded, selections, authors = _demo_selections(day)
+    digests = [
+        slack_digest(loaded, selection, links=links, authors=authors, threaded=True)
+        for selection in selections
+    ]
     client = _slack_web_client(token)
     # The message of an exception can hold the token, so a refusal shows _slack_failure only.
     # Each refusal comes after its try statement, so no exception chains to it.
@@ -243,23 +268,47 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
         if team_id != links.team_id:
             _refuse("the seed map is for another Slack workspace (team) than the bot token")
     _echo_unmapped(selections, links)
-    typer.echo(f"sending {len(messages)} digests by DM to {user_id}")
+    typer.echo(f"sending {len(digests)} digests by DM to {user_id}")
     try:
         channel = client.conversations_open(users=user_id)["channel"]["id"]
     except Exception as error:
         failure = f"cannot open the DM with {user_id}: {_dm_failure(error, source)}"
     if failure is not None:
         _refuse(failure)
-    for sent, (selection, message) in enumerate(zip(selections, messages, strict=True)):
+    for sent, (selection, digest) in enumerate(zip(selections, digests, strict=True)):
         reader = selection.profile.name
-        rerun = _rerun_note(sent, len(messages))
+        rerun = _rerun_note(sent, len(digests))
+        top, *rest = digest
         try:
-            client.chat_postMessage(channel=channel, text=message["text"], blocks=message["blocks"])
+            response = client.chat_postMessage(
+                channel=channel, text=top["text"], blocks=top["blocks"]
+            )
         except Exception as error:
             failure = f"cannot post the digest for {reader}: {_dm_failure(error, source)}{rerun}"
         if failure is not None:
             _refuse(failure)
+        for reply in rest:
+            refusal = f"cannot post the thread reply of the digest for {reader}"
+            note = f"; its top message was sent{_partial_note(sent, len(digests))}"
+            ts = _message_ts(response)
+            if ts is None:
+                _refuse(f"{refusal}: the top message has no ts{note}")
+            try:
+                client.chat_postMessage(
+                    channel=channel, thread_ts=ts, text=reply["text"], blocks=reply["blocks"]
+                )
+            except Exception as error:
+                failure = f"{refusal}: {_dm_failure(error, source)}{note}"
+            if failure is not None:
+                _refuse(failure)
         typer.echo(f"posted the digest for {reader}")
+
+
+def _message_ts(response: object) -> str | None:
+    """The `ts` of a `chat.postMessage` response, or None when it has no string `ts`."""
+    lookup = getattr(response, "get", None)
+    ts = lookup("ts") if callable(lookup) else None
+    return ts if isinstance(ts, str) else None
 
 
 def _load_seed_map(path: Path) -> SeedMap:
@@ -345,6 +394,11 @@ def _slack_failure(error: Exception) -> str:
     if isinstance(code, str) and _SLACK_ERROR_CODE.fullmatch(code):
         return code
     return "SlackApiError, error code withheld (not a Slack error code)"
+
+
+def _partial_note(sent: int, total: int) -> str:
+    """The note for a refusal after the first message of a digest was sent."""
+    return _rerun_note(sent, total) or f", and a rerun sends all {total} again"
 
 
 def _rerun_note(sent: int, total: int) -> str:
@@ -1032,16 +1086,18 @@ def world_golden(
     )
 
 
-def _demo_selections(day: int) -> tuple[World, list[Selection]]:
+def _demo_selections(day: int) -> tuple[World, list[Selection], dict[str, str]]:
     """Build the selections of the demo readers for a world day of the bundled world.
 
-    The function builds the store with `_demo_store`. It returns the world and one
-    selection for each reader of `_DEMO_READERS`, in the same order. A refused store stops
-    the command. The function never constructs the settings object. It assumes that each
-    reader got the digest of the previous world day; on world day 1, each digest is a
-    first digest.
+    The function builds the store with `_demo_store`. It returns the world, one selection
+    for each reader of `_DEMO_READERS` in the same order, and the authors: the user id of
+    each evidence message of the selections that the store holds, by `<channel>:<ts>`. A
+    refused store stops the command. The function never constructs the settings object.
+    It assumes that each reader got the digest of the previous world day; on world day 1,
+    each digest is a first digest.
     """
     selections: list[Selection] = []
+    authors: dict[str, str] = {}
     # The refusal comes after the try statement, so no exception chains to it.
     failure: str | None = None
     with _demo_store(day) as (loaded, priors, store):
@@ -1054,9 +1110,19 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
                 )
         except (ValueError, OSError) as error:  # a refused store
             failure = str(error)
+        as_of = datetime.combine(today, time.max, ZoneInfo(loaded.timezone))
+        for line in (line for selection in selections for line in selection.lines):
+            posted = {
+                (event.channel_id, event.ts): event.user_id
+                for event in store.events_in_thread(line.item.thread_id, as_of)
+            }
+            for entry in line.item.evidence:
+                author = posted.get((entry.channel_id, entry.message_ts))
+                if author is not None:
+                    authors[f"{entry.channel_id}:{entry.message_ts}"] = author
     if failure is not None:
         _refuse(failure)
-    return loaded, selections
+    return loaded, selections, authors
 
 
 @contextmanager
