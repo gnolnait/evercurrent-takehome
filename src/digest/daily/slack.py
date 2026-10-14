@@ -9,6 +9,7 @@ from typing import Any
 from digest.daily.render import SECTION_TITLES, window_line
 from digest.daily.select import Line, Selection
 from digest.project import ChecklistTask
+from digest.seed import SeedMap
 from digest.world.schema import World
 
 MAX_BLOCKS = 50  # Slack refuses a message with more blocks
@@ -20,7 +21,9 @@ ELLIPSIS = "\N{HORIZONTAL ELLIPSIS}"
 _PARTIAL_TOKEN = re.compile(r"<[^>]*$|&[a-z]*$")
 
 
-def slack_message(world: World, selection: Selection) -> dict[str, Any]:
+def slack_message(
+    world: World, selection: Selection, links: SeedMap | None = None
+) -> dict[str, Any]:
     """The digest as Slack `text` and Block Kit `blocks`: a header, the window line, the sections, the footers.
 
     The message holds at most 50 blocks. Lines past the limit are left out, and the last

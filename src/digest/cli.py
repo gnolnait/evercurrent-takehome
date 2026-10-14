@@ -121,6 +121,11 @@ def post(
             "Slack user id, not to the webhook."
         ),
     ),
+    seed_map: Path | None = typer.Option(
+        None,
+        "--seed-map",
+        help="Seed map from `digest seed`: link sources to the seeded Slack messages.",
+    ),
 ) -> None:
     """Post the three demo digests to the Slack incoming webhook in SLACK_WEBHOOK_URL.
 
@@ -140,7 +145,12 @@ def post(
 
     With `--dm USER_ID`, the command does not use the webhook. It sends each digest as a
     direct message from the app's bot to the Slack user `USER_ID` (see `_post_dm`).
+
+    With `--seed-map PATH`, source links point at the seeded Slack messages
+    (docs/plans/m5-links.md).
     """
+    if seed_map is not None:
+        raise NotImplementedError
     if dm is not None:
         _post_dm(day, dm)
         return

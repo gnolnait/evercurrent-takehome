@@ -414,6 +414,24 @@ def _pending_lines(world: World, posts: Sequence[Post], seed_map: SeedMap) -> li
     return lines
 
 
+def message_permalink(seed_map: SeedMap, key: str) -> str | None:
+    """The Slack permalink of a mapped world message, or None when the key is absent.
+
+    See docs/plans/m5-links.md L1.
+    """
+    raise NotImplementedError
+
+
+def channel_of(seed_map: SeedMap, key: str) -> str | None:
+    """The Slack channel id of a mapped world message, or None when the key is absent."""
+    raise NotImplementedError
+
+
+def files_of(seed_map: SeedMap, key: str) -> list[tuple[str, str]]:
+    """(name, permalink) per file of a mapped world message, in map order; [] when none."""
+    raise NotImplementedError
+
+
 def placeholder_file(name: str) -> bytes:
     """Placeholder bytes for a world file: a one-page PDF for a `.pdf` name, else UTF-8 text."""
     if not name.lower().endswith(".pdf"):
