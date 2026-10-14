@@ -107,6 +107,7 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
         try:
             room.save(path)
         except (OSError, ValueError) as error:
+            saved.clear()  # a real reseed waits for a save that succeeds
             return render(f"The save failed: {error}")
         saved[:] = [_message_changes(room.state())]
         return render(

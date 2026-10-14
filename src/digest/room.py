@@ -504,6 +504,10 @@ class Room:
         new text and files, `edited` false and `event_ts` equal to its `ts`, so the copy
         is a clean corpus that `read_events` and `plan_seed` accept. The room store keeps
         the edit flag and the stamp.
+
+        The copy is built in a temporary folder beside `path`, which replaces `path` only
+        when every file is written. On a failure the previous copy stays as it was and the
+        temporary folder is removed.
         """
         if path.resolve() == self._world_dir:
             raise ValueError(f"cannot save the room over the committed corpus {path}")
@@ -517,9 +521,16 @@ class Room:
             )
         # Python sorts stably, so equal ts values keep the committed order.
         ordered = sorted(events.values(), key=lambda e: e.ts_us)
-        shutil.copytree(self._world_dir, path, dirs_exist_ok=True)
-        with (path / "events.jsonl").open("w", encoding="utf-8", newline="\n") as file:
-            file.writelines(event.model_dump_json() + "\n" for event in ordered)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{path.name}-", dir=path.parent))
+        try:
+            shutil.copytree(self._world_dir, staging, dirs_exist_ok=True)
+            with (staging / "events.jsonl").open("w", encoding="utf-8", newline="\n") as file:
+                file.writelines(event.model_dump_json() + "\n" for event in ordered)
+            _replace_dir(staging, path)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         return path
 
     def _write(
@@ -696,6 +707,27 @@ def _ts(world: World, at: dt.datetime) -> str:
 def _end_of_day(world: World, day: dt.date) -> dt.datetime:
     """The last instant of a world day, in UTC."""
     return dt.datetime.combine(day, dt.time.max, ZoneInfo(world.timezone)).astimezone(dt.UTC)
+
+
+def _replace_dir(new: Path, path: Path) -> None:
+    """Put the folder `new` at `path`; both are in the same parent folder.
+
+    Windows cannot rename a folder over an existing one, so an existing `path` moves
+    aside first, and it moves back when the second rename fails.
+    """
+    if not path.exists():
+        new.rename(path)
+        return
+    # mkdtemp reserves a free name; the rename below needs that name with no folder.
+    old = Path(tempfile.mkdtemp(prefix=f".{path.name}-old-", dir=path.parent))
+    old.rmdir()
+    path.rename(old)
+    try:
+        new.rename(path)
+    except BaseException:
+        old.rename(path)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
 
 
 def _remove_store(path: Path) -> None:
