@@ -13,7 +13,7 @@ from digest.absence import detect_absences
 from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
-from digest.models import ts_micros
+from digest.models import Item, ts_micros
 from digest.priors import Priors
 from digest.project import ChecklistTask, add_working_days
 from digest.store import Store
@@ -199,14 +199,13 @@ def check_store_day(store: Store, world: World, day: date) -> None:
         )
 
 
-def line_parts(
-    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+def item_parts(
+    item: Item, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
 ) -> tuple[str, str]:
-    """The line's heading and its one-line summary, without "- ", "[must see]" or sources.
+    """The item's heading and its one-line summary, without "- ", "[must see]" or sources.
 
     A checklist absence takes the task text and owner role from the world's checklist.
     """
-    item = line.item
     detail = item.absence
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
@@ -225,6 +224,13 @@ def line_parts(
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
         head = f"Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
     return head, _plain(item.summary)
+
+
+def line_parts(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> tuple[str, str]:
+    """The line's heading and its one-line summary, as `item_parts` gives them."""
+    return item_parts(line.item, names, tasks)
 
 
 def _line(

@@ -43,7 +43,10 @@ class LLMResponse(Frozen):
 
 
 class LLMOutputError(ValueError):
-    """The backend answered, but not with usable output. `raw` is the text it returned."""
+    """The backend did not answer, or it answered without usable output.
+
+    `raw` is the text it returned, or "" when it did not answer.
+    """
 
     def __init__(self, message: str, raw: str) -> None:
         super().__init__(message)
