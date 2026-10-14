@@ -878,7 +878,10 @@ def test_ask_absence_visibility_precedes_audience(
     assert selection.lines == ()
 
 
-def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
+@pytest.mark.parametrize("absence_role_prior", [0.1, 1.0])
+def test_third_reader_sees_ask_in_fyi_but_no_absence_regardless_of_role_prior(
+    absence_role_prior: float,
+) -> None:
     ask = item("ask", type="ask", owner="UEMPTY")
     missing = absence(
         f"absence:ask:{ask.item_id}",
@@ -888,14 +891,33 @@ def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
         affected_roles=(),
     ).model_copy(update={"thread_id": ask.thread_id})
     table = priors(
-        role_priors={"ME": {"ask": 1.0, "absence": 0.1}},
-        min_score=0.03,
+        role_priors={"ME": {"ask": 1.0, "absence": absence_role_prior}},
+        min_score=0.0,
     )
 
-    selection = choose([ask], [missing], table=table)
+    selection = choose([ask], [missing], profile=profile_for(world(), "UREADER"), table=table)
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [("ask", "fyi")]
     assert selection.lines[0].must_see is False
+
+
+def test_asker_sees_only_must_see_absence_when_ask_would_rank_in_fyi() -> None:
+    ask = item("ask", type="ask", owner="UEMPTY")
+    missing = absence(
+        f"absence:ask:{ask.item_id}",
+        source="ask",
+        asker="UASKER",
+        owner="UEMPTY",
+        affected_roles=(),
+    ).model_copy(update={"thread_id": ask.thread_id})
+
+    selection = choose(
+        [ask], [missing], profile=profile_for(world(), "UASKER"), table=priors(min_score=0.0)
+    )
+
+    assert [(line.item.item_id, line.section, line.must_see) for line in selection.lines] == [
+        ("absence:ask:ask", "not_happened", True)
+    ]
 
 
 def test_ranked_ties_use_newest_evidence_then_item_id() -> None:
