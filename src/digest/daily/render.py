@@ -5,7 +5,7 @@ See plan B6.1 and B6.2.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -13,7 +13,7 @@ from digest.absence import detect_absences
 from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
-from digest.models import ts_micros
+from digest.models import Item, ts_micros
 from digest.priors import Priors
 from digest.project import ChecklistTask, add_working_days
 from digest.store import Store
@@ -147,20 +147,6 @@ def select_digest(
         raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
     items = store.items(as_of)
     absences = detect_absences(store, world.project, priors, as_of, zone)
-    # Extract cites only messages of the item's own thread. A cited message the store does not
-    # hold counts at its `message_ts`.
-    event_times = {
-        (event.channel_id, event.ts): ts_micros(event.event_ts)
-        for thread_id in {item.thread_id for item in items}
-        for event in store.events_in_thread(thread_id, as_of)
-    }
-    newest_evidence = {
-        item.item_id: max(
-            event_times.get((entry.channel_id, entry.message_ts), ts_micros(entry.message_ts))
-            for entry in item.evidence
-        )
-        for item in items
-    }
     recent_start = datetime.combine(
         add_working_days(day, -priors.daily.recent_activity.working_days), time.max, zone
     )
@@ -173,9 +159,29 @@ def select_digest(
         priors,
         day,
         previous_digest,
-        newest_evidence,
+        newest_evidence(store, items, as_of),
         recent_messages,
     )
+
+
+def newest_evidence(store: Store, items: Sequence[Item], as_of: datetime) -> dict[str, int]:
+    """Item id to the greatest `event_ts` among the stored messages its evidence cites.
+
+    The value is in microseconds since the epoch. Extract cites only messages of the item's own
+    thread. A cited message the store does not hold counts at its `message_ts`.
+    """
+    event_times = {
+        (event.channel_id, event.ts): ts_micros(event.event_ts)
+        for thread_id in {item.thread_id for item in items}
+        for event in store.events_in_thread(thread_id, as_of)
+    }
+    return {
+        item.item_id: max(
+            event_times.get((entry.channel_id, entry.message_ts), ts_micros(entry.message_ts))
+            for entry in item.evidence
+        )
+        for item in items
+    }
 
 
 def line_parts(

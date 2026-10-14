@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import math
 import statistics
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, time
 from pathlib import Path
-from typing import get_args
+from typing import TYPE_CHECKING, get_args
 from zoneinfo import ZoneInfo
 
 from digest.absence import detect_absences, task_citations
@@ -24,6 +24,9 @@ from digest.world.golden import Golden, GoldenClaim, GoldenItem, derive_golden, 
 from digest.world.load import load_world
 from digest.world.manifest import Manifest, load_manifest
 from digest.world.schema import World
+
+if TYPE_CHECKING:
+    from digest.eval.ranking import RankingReport
 
 # A golden claim on one of these attributes matches only with an equal normalized value.
 # A golden claim on any other attribute matches on entity and attribute (plan Q6).
@@ -233,10 +236,13 @@ def _run_days(
     llm: LLM,
     priors: Priors,
     asks: Mapping[str, str],
+    after_extract: Callable[[int, date, datetime], None] | None = None,
 ) -> tuple[ExtractReport, set[_AbsenceKey], set[str]]:
     """Replay, extract and detect absences for each day.
 
-    Return the extract reports summed over the days, the absence keys and the uncitable tasks.
+    `after_extract` gets the world day, its date and its end after the day's extract, while
+    the store holds that day. Return the extract reports summed over the days, the absence
+    keys and the uncitable tasks.
     """
     zone = ZoneInfo(world.timezone)
     glossary = world.glossary()
@@ -257,6 +263,8 @@ def _run_days(
         as_of = _end_of(today, zone)
         report = run_extract(store, llm, glossary, world.project, priors, as_of, zone, purposes)
         extracted = extracted.plus(report)
+        if after_extract is not None:
+            after_extract(day, today, as_of)
         found = detect_absences(store, world.project, priors, as_of, zone)
         detected |= {_absence_key(day, item, asks) for item in found}
         uncitable |= _uncitable(world.project, store.items(as_of), today, zone)
@@ -536,8 +544,16 @@ def _ratio(part: int, whole: int) -> float | None:
     return part / whole if whole else None
 
 
-def write_report(report: ExtractionReport, path: Path) -> None:
-    """Write the report as markdown: one table per section, `n` beside every rate."""
+def write_report(
+    report: ExtractionReport, path: Path, ranking: RankingReport | None = None
+) -> None:
+    """Write the report as markdown: one table per section, `n` beside every rate.
+
+    With `ranking`, the Ranking section follows the extraction sections.
+    """
+    # Inline import: digest.eval.ranking imports this module.
+    from digest.eval.ranking import write_ranking_section
+
     pairs = sum(scores.golden_matched for scores in report.by_type.values())
     golden = sum(scores.golden for scores in report.by_type.values())
     lines = [
@@ -644,7 +660,10 @@ def write_report(report: ExtractionReport, path: Path) -> None:
         *_table("Models", ("logical model", "concrete ids"), list(report.models.items())),
         *_table("Not run", ("metric", "reason"), list(report.not_run.items())),
     ]
-    path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    text = "\n".join(lines)
+    if ranking is not None:
+        text += "\n" + write_ranking_section(ranking)
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _table(

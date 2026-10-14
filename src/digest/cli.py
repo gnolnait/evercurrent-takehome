@@ -39,6 +39,7 @@ from digest.driver import (
     make_event,
 )
 from digest.eval.extraction import run_extraction_eval, write_report
+from digest.eval.ranking import RankingReport, run_ranking_eval
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
@@ -579,20 +580,33 @@ def eval_cmd(
 ) -> None:
     """Run the evaluation suite against the golden corpus and write the report.
 
-    The eval runs in a fresh store at data/eval-<world>.sqlite. The command deletes that file
+    The extraction eval runs in a fresh store at data/eval-<world>.sqlite, and the ranking eval
+    after it in a fresh store at data/eval-ranking-<world>.sqlite. The command deletes each file
     and its -wal and -shm files first.
     """
     settings = Settings()
     name = world or settings.world
     world_dir = Path("data") / "world" / name
     store_path = Path("data") / f"eval-{name}.sqlite"
+    ranking_path = Path("data") / f"eval-ranking-{name}.sqlite"
     try:
         loaded = load_world(world_dir / "world.yaml")
         priors = load_priors()
         llm = from_settings(settings)
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{store_path}{suffix}").unlink(missing_ok=True)
+        for fresh in (store_path, ranking_path):
+            for suffix in ("", "-wal", "-shm"):
+                Path(f"{fresh}{suffix}").unlink(missing_ok=True)
         report = run_extraction_eval(world_dir, llm, priors, store_path)
+        ranking: RankingReport | None = None
+        try:
+            ranking = run_ranking_eval(world_dir, llm, priors, ranking_path)
+        # select_digest refuses a day, for example after a failed extract call leaves deltas
+        # pending (plan R7b). The extraction report still holds, so it names the refusal.
+        except ValueError as error:
+            typer.echo(f"ranking eval not run: {error}", err=True)
+            report = report.model_copy(
+                update={"not_run": {**report.not_run, "ranking": str(error)}}
+            )
     # CassetteMiss: replay found no recording. ValueError: a stale golden.jsonl, a manifest
     # with no thread for an event, a golden thread never run, a missing API key or a
     # malformed file. OSError: a missing world, manifest or golden file.
@@ -600,7 +614,7 @@ def eval_cmd(
         _refuse(_with_notes(error))
     path = out or Path("reports") / f"eval-{loaded.date_of(loaded.days)}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_report(report, path)
+    write_report(report, path, ranking=ranking)
     typer.echo(str(path))
     for label, value in [
         ("thread recall", report.thread_recall),
