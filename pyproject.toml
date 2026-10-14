@@ -105,7 +105,7 @@ layers = [
     "digest.eval | digest.driver",
     "digest.daily",
     "digest.corpus",
-    "digest.replay | digest.extract | digest.absence | digest.seed",
+    "digest.replay | digest.extract | digest.absence | digest.seed | digest.feedback",
     "digest.store | digest.llm | digest.world",
     "digest.project | digest.priors",
     "digest.models | digest.settings",
