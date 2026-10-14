@@ -376,7 +376,7 @@ class FeedbackState:
     suppressed: frozenset[Episode]  # empty in this slice
 
 class Episode(NamedTuple):          # one silence of one absence (SPEC step 8)
-    source: str                     # the absence's source letter
+    source: str                     # AbsenceDetail.source: "checklist" or "ask"
     subject: str                    # the task id, or the ask item id; source h: "<part>@<rev>"
     last_evidence: str              # "<channel id>:<message ts>" of its last evidence
 
@@ -624,10 +624,11 @@ otherwise.
      followed by a new silence is a new episode, so it shows again. The click changes no
      task state, no ledger and no other reader's digest (SPEC step 8). The menu value
      stays `it_happened:#<n>`; the optional permalink of SPEC step 8 needs a modal input.
-2. **Exposure records** (SPEC M5 core, D26). Append-only records of what each reader was
-   shown, written on Slack's acceptance of each part, for interactive and plain posts.
-   The unit also reads the `done` events with `resolution: exposure` of this slice. It
-   keeps `posted_messages` (mutable revision state) separate from the exposure records.
+2. **Exposure records** (SPEC M5 core, D26): the `deliveries` table of
+   `docs/plans/m5-exposure.md`, written on Slack's acceptance of each part, for
+   interactive and plain posts. It joins `posted_messages` (mutable revision state) on
+   `(channel, ts)`, and keys an absence by its `Episode`. It also reads the `done` events
+   with `resolution: exposure` of this slice.
 3. **Not mine, confirm, thumbs and "more like this".** Confirm waits for contradiction
    lines.
 
