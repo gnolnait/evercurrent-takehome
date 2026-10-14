@@ -1,4 +1,4 @@
-"""Unit 14: B14.1 to B14.12 of docs/plans/m4-ranking-eval.md (v0.3.1).
+"""Unit 14: B14.1 to B14.13 of docs/plans/m4-ranking-eval.md (v0.3.2).
 
 B14.1 to B14.3 test the pure helpers with numbers worked out by hand. B14.4 to B14.6 run the
 ranking eval on the Kestrel world and the committed cassettes (replay mode, no network) and
@@ -50,13 +50,13 @@ from digest.eval.ranking import (
 )
 from digest.extract.stage import run_extract
 from digest.llm.client import LLM, from_settings
-from digest.models import Item, micros_since_epoch, ts_micros
+from digest.models import Evidence, Item, micros_since_epoch, ts_micros
 from digest.priors import Priors
 from digest.project import add_working_days
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
-from digest.world.golden import Golden, read_golden
+from digest.world.golden import Golden, GoldenItem, read_golden
 from digest.world.load import load_world
 from digest.world.schema import World
 
@@ -1692,6 +1692,78 @@ def test_each_qualifying_bracket_item_delivers_once_and_old_facts_score_zero(
     assert run.applied > 0
     _assert_scores(persona.overall, [r[0] for r in rows], [r[1] for r in rows])
     _assert_scores(persona.ranked_lane, [r[2] for r in rows], [r[3] for r in rows])
+
+
+def test_ranked_lane_keeps_the_assigned_fact_after_dropping_c0_delivery() -> None:
+    """B14.13. Setup: two ranked items qualify for A then B; C0's must-see lane delivered A.
+
+    Action: grade the ranked list with the private one-configuration helper `_view`.
+    Assert: the first line drops; the second keeps B's grade 2 and scores full recall and nDCG.
+    """
+    stamp = "1791824400.000003"
+    first = Item(
+        item_id="first",
+        thread_id=f"CENG:{stamp}",
+        type="ask",
+        title="Review the drive",
+        summary="Review the drive",
+        entities=(),
+        owner="UREADER",
+        due=None,
+        affected_roles=("ME",),
+        severity="medium",
+        confidence="high",
+        evidence=(
+            Evidence(
+                channel_id="CENG",
+                message_ts=stamp,
+                quote="Review the drive",
+                permalink="https://small.slack.com/archives/CENG/p1791824400000003",
+            ),
+        ),
+        first_seen=stamp,
+        last_updated=stamp,
+    )
+    second = first.model_copy(update={"item_id": "second"})
+    golden = tuple(
+        GoldenItem(
+            event_id=event_id,
+            scenario=None,
+            day=1,
+            date=date(2026, 10, 12),
+            channel_id="CENG",
+            thread_ts=stamp,
+            type="ask",
+            summary="Review the drive",
+            entities=(),
+            claims=(),
+            tasks=(),
+            owner="UREADER",
+            affected_roles=("ME",),
+            must_see_for=("UREADER",),
+            known_by={},
+        )
+        for event_id in ("A", "B")
+    )
+
+    def candidates(item: Item) -> list[str]:
+        return [
+            fact.event_id
+            for fact in golden
+            if item.thread_id == f"{fact.channel_id}:{fact.thread_ts}" and _qualifies(fact, item)
+        ]
+
+    assert candidates(first) == candidates(second) == ["A", "B"]
+    values, top5 = ranking._view(
+        [(first, False), (second, False)],
+        facts={"A": 2, "B": 2},
+        lane_set={"B": 2},
+        removed={"A"},
+        candidates=candidates,
+    )
+
+    assert top5[1] == ("second",)
+    assert values[2:] == pytest.approx((1.0, 1.0))
 
 
 def test_send_everything_drops_c0_deliveries_before_the_ranked_top_five(
