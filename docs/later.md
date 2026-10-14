@@ -129,8 +129,10 @@ In order. Each item names its trigger. Measured numbers are from
    text, by a labeler who does not see the extractor output. The ledger gate becomes the
    key-error rate, with a recall guard and key stability across two recordings.
    Trigger: before the ledger.
-5. Digest window per reader and a seen record, so a reader is not told the same thing
-   twice. Trigger: every demo digest is a first digest (`docs/plans/m3-demo.md`).
+5. Delivery records and a seen record per reader. The digest window is built
+   (`docs/plans/digest-window.md`); today the caller states the previous digest, and an
+   item cut by a score threshold or a section cap on its own day does not come back.
+   Trigger: live delivery (D7).
 6. Stage key records the concrete model id, and a run refuses a mismatch. Today the key
    holds the logical name, so a model change in `config/models.yaml` reuses old runs.
 7. Extraction payload limit: open items, plus items that share an entity with the new
@@ -153,3 +155,20 @@ In order. Each item names its trigger. Measured numbers are from
     list, so the change re-renders the corpus. Trigger: the next re-render.
 14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
     instead of an instant interruption. Trigger: a real-time tier.
+
+## Structure (D26), after the 2026-10-14 interview
+
+In order. Each item is its own unit under `docs/process.md`.
+
+1. `Workspace` out of `World`; `World` composes it. Digest code reads only `Workspace`.
+   Trigger: live Slack ingest or delivery to a real workspace.
+2. Absence split: `ChecklistAbsence | AskAbsence`, an explicit ask id, and `ask_message` on
+   ask items. Trigger: before any exposure record exists.
+3. One day-pipeline module out of `daily/render.py`; a window value on `Selection`; the
+   `Candidate` projection with newest evidence computed in one place. Trigger: the next
+   change to selection.
+4. `ThreadRef` and `MessageRef` value objects in `digest.models`; the simulator's
+   `world.manifest.ThreadRef` is renamed. Trigger: the next change to the files that
+   build or parse thread ids.
+5. A Slack anti-corruption adapter that maps Slack payloads to `Event`. Trigger: live
+   ingest (D7).

@@ -75,8 +75,12 @@ ARG_WRAPPERS = {"nice", "ionice", "stdbuf", "xargs", "chrt", "taskset", "timeout
 # signing for them (on `status`/`log`/... it is inert -> not a bypass).
 COMMIT_VERBS = {"commit", "merge", "revert", "cherry-pick", "am", "rebase"}
 # Leading shell control-flow keywords / group openers that precede the real
-# command (`if git commit ...`, `! git commit`, `{ git commit; }`).
-KEYWORDS = {"if", "then", "elif", "else", "while", "until", "do", "!", "{", "}"}
+# command (`if git commit ...`, `! git commit`, `{ git commit; }`,
+# `coproc git commit`).
+KEYWORDS = {
+    "if", "then", "elif", "else", "while", "until", "do", "!", "{", "}",
+    "coproc",
+}
 
 
 def trigger_kind(tok):

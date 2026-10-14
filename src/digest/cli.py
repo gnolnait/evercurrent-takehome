@@ -583,7 +583,9 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
     the world and one selection for each reader of `_DEMO_READERS`, in the same order. A
     cassette directory that does not exist or holds no cassette file stops the command
     before any replay. A failed thread in any extract run stops the command before it
-    selects a digest. The function never constructs the settings object.
+    selects a digest. The function never constructs the settings object. It assumes that
+    each reader got the digest of the previous world day; on world day 1, each digest is a
+    first digest.
     """
     world_dir = Path("data") / "world" / _DEMO_WORLD
     source = world_dir / "world.yaml"
@@ -616,6 +618,7 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
         _refuse(f"cassette directory {cassettes} does not exist or holds no cassette file")
     llm = LLM(None, Cassettes(cassettes), "replay")
     today = loaded.date_of(day)
+    previous = loaded.date_of(day - 1) if day > 1 else None
     zone = ZoneInfo(loaded.timezone)
     selections: list[Selection] = []
     # Windows can hold a handle on the store file after it closes. A cleanup error must not
@@ -635,7 +638,9 @@ def _demo_selections(day: int) -> tuple[World, list[Selection]]:
                     "the demo builds no digest from a partial extraction"
                 )
             for user_id in _DEMO_READERS:
-                selections.append(select_digest(store, loaded, priors, user_id, today))
+                selections.append(
+                    select_digest(store, loaded, priors, user_id, today, previous_digest=previous)
+                )
         # CassetteMiss: no recording for a request. ValueError: a refused replay or store.
         except (CassetteMiss, ValueError, OSError) as error:
             failure = str(error)

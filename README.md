@@ -97,9 +97,13 @@ the ranker plus absences. The eval has no direct keying metric. Its claim precis
 stricter matching on golden threads only, so it does not establish whether keying
 precision meets 0.8. The cut is a conservative scope decision under that uncertainty.
 
-Designed, not built: the claims ledger and linking, stale beliefs, the per-reader digest
-window, phase re-weighting, feedback, live Slack delivery, the web preview and the MCP
-server. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
+A digest covers what is new since the reader's previous digest, plus must-see items and
+open blockers and ask absences of any age; the header names the window. Delivery is not
+recorded yet, so the caller states the previous digest (the demo uses the previous world
+day).
+
+Designed, not built: the claims ledger and linking, stale beliefs, delivery records,
+phase re-weighting, feedback, live Slack delivery, the web preview and the MCP server. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
 for the ordered next steps and other deferred work.
 
 ## Develop
