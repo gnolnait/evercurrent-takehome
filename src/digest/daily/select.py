@@ -86,12 +86,15 @@ def select(
     day: date,
     previous_digest: date | None,
     newest_evidence: Mapping[str, int],
+    recent_messages: frozenset[tuple[str, str]],
 ) -> Selection:
     """Choose the reader's lines for the day. Items must be open and updated by the end of the day.
 
     `newest_evidence` maps an item id to its newest evidence in microseconds since the epoch.
     An absence, or an item not in the map, uses its `last_updated`. An absence that is not
-    must-see for the reader is left out. It is not counted in `hidden`.
+    must-see for the reader is left out. It is not counted in `hidden`. `recent_messages`
+    holds (channel_id, ts) of the reader's recent messages; the entities of each current item
+    whose visible evidence cites one lift the relevance of ranked items that share them.
     """
     zone = ZoneInfo(world.timezone)
     end = micros_since_epoch(datetime.combine(day, time.max, zone))
@@ -103,6 +106,13 @@ def select(
         item for item in items if item.status == "open" and ts_micros(item.last_updated) <= end
     ]
     gates = {gate.id for gate in world.project.gates}
+    active: set[str] = set()  # entities of the reader's recent activity, from visible evidence
+    for item in current:
+        trimmed = _visible(world, profile, item)
+        if trimmed is not None and any(
+            (entry.channel_id, entry.message_ts) in recent_messages for entry in trimmed.evidence
+        ):
+            active.update(trimmed.entities)
     hidden = 0
     must_see: dict[Section, list[Line]] = {section: [] for section in SECTION_CAPS}
     ranked: dict[Section, list[Line]] = {section: [] for section in SECTION_CAPS}
@@ -122,7 +132,7 @@ def select(
         newest = newest_evidence.get(item.item_id, ts_micros(item.last_updated))
         if not (trimmed.type == "blocker" or start < newest <= end):
             continue
-        line = _ranked_line(trimmed, section, profile, priors)
+        line = _ranked_line(trimmed, section, profile, priors, active)
         if line.score >= priors.daily.min_score:
             ranked[section].append(line)
     lines: list[Line] = []
@@ -223,8 +233,14 @@ def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
     return None
 
 
-def _ranked_line(item: Item, section: Section, profile: Profile, priors: Priors) -> Line:
-    """Score the item as importance * role_prior * personal_relevance (plan B5.4)."""
+def _ranked_line(
+    item: Item, section: Section, profile: Profile, priors: Priors, active: set[str]
+) -> Line:
+    """Score the item as importance * role_prior * personal_relevance (plan B5.4).
+
+    An item that is neither owned nor in the reader's role gets the recent-activity relevance
+    when it shares an entity with `active`.
+    """
     importance = TYPE_WEIGHTS[item.type] * SEVERITY_WEIGHTS[item.severity]
     role_prior = priors.daily.role_priors.get(profile.role, {}).get(item.type, DEFAULT_ROLE_PRIOR)
     if set(item.entities) & set(profile.owned_entities):
@@ -233,9 +249,13 @@ def _ranked_line(item: Item, section: Section, profile: Profile, priors: Priors)
         relevance = 0.8
     else:
         relevance = 0.4
+    shared = sorted(set(item.entities) & active) if relevance == 0.4 else []
+    if shared:
+        relevance = priors.daily.recent_activity.relevance
+    lift = f" (recent activity: {', '.join(shared)})" if shared else ""
     reason = (
         f"importance={round(importance, 3)} role_prior={round(role_prior, 3)} "
-        f"personal_relevance={relevance}"
+        f"personal_relevance={relevance}{lift}"
     )
     score = importance * role_prior * relevance
     return Line(item=item, section=section, must_see=False, reason=reason, score=score)

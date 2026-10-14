@@ -365,7 +365,13 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    lines are never cut by a section cap; the caps bound the ranked lane. Ranked lane:
    `score = importance * role_phase_prior * personal_relevance * decision_exposure *
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
-   impression. Every term is 1 when the project or the profile does not supply its input
+   impression. `personal_relevance` is 1.0 for an owned entity, 0.8 for the reader's role,
+   else 0.4. An item at 0.4 that shares an entity with the reader's recent activity gets
+   `daily.recent_activity.relevance` (default 0.8, never above the role level). Recent
+   activity is the entities of current items whose visible evidence cites one of the
+   reader's messages from the last `daily.recent_activity.working_days` working days
+   (default 3). It is a step window over the reader's own messages, not the decayed
+   interest of section 2, and with no recent messages it changes nothing. Every term is 1 when the project or the profile does not supply its input
    (no `depends_on` edges, no watch prompts) and stays within a band above zero, set per
    term in `config/priors.yaml`, so no single input takes a score to zero. Must-see rules
    run over all open items. A ranked-lane candidate is an item whose newest evidence

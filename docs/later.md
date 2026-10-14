@@ -167,6 +167,10 @@ In order. Each item names its trigger. Measured numbers are from
 16. Gate dates from the corpus. The phase line counts to the configured gate date; the
     corpus moves the PN-51010 T1 gate to 2026-10-21 while the configured G-TR1 date stays
     2026-10-20. Trigger: the ledger reads schedule claims.
+17. Configured bands for the relevance levels. `personal_relevance` still uses the
+    constants 1.0, 0.8 and 0.4 in code; SPEC section 5 step 6 asks for a band per term in
+    `config/priors.yaml`. Only the recent-activity value is configured
+    (`docs/plans/recent-activity.md`). Trigger: the ablation table.
 
 ## Interaction (D27), after the 2026-10-14 interview
 

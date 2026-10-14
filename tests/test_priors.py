@@ -190,3 +190,67 @@ def test_window_priors_reject_values_below_one(first: int, maximum: int, field: 
 def test_window_priors_reject_first_above_maximum() -> None:
     with pytest.raises(ValidationError):
         priors_module.WindowPriors(first_working_days=11, max_working_days=10)
+
+
+@pytest.mark.parametrize("source", ["model", "daily", "bundled"])
+def test_ra10_recent_activity_defaults(source: str) -> None:
+    if source == "model":
+        model = getattr(priors_module, "RecentActivityPriors", None)
+        assert callable(model), "priors must expose RecentActivityPriors"
+        recent = model()
+    else:
+        daily = DailyPriors() if source == "daily" else load_priors().daily
+        recent = getattr(daily, "recent_activity", None)
+        assert recent is not None, "DailyPriors must expose recent_activity"
+    assert recent.working_days == 3
+    assert recent.relevance == 0.8
+
+
+@pytest.mark.parametrize(("working_days", "relevance"), [(1, 0.400001), (3, 0.6), (7, 0.8)])
+def test_ra10_recent_activity_loads_configured_values(
+    tmp_path: Path, working_days: int, relevance: float
+) -> None:
+    path = tmp_path / "priors.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "triage": {"miss_cost_ratio": 10},
+                "absence": {"ask_reply_cadence_days": 2},
+                "daily": {
+                    "recent_activity": {"working_days": working_days, "relevance": relevance}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    recent = getattr(load_priors(path).daily, "recent_activity", None)
+    assert recent is not None
+    assert recent.working_days == working_days
+    assert recent.relevance == relevance
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    [
+        ("working_days", 0, "greater_than_equal"),
+        ("working_days", -1, "greater_than_equal"),
+        ("working_days", 1.5, "int_from_float"),
+        ("relevance", 0.4, "greater_than"),
+        ("relevance", 0.3, "greater_than"),
+        ("relevance", 0.800001, "less_than_equal"),
+    ],
+)
+def test_ra10_recent_activity_rejects_invalid_values(
+    field: str, value: float, error_type: str
+) -> None:
+    # Accept the valid pair first so rejecting an unknown field cannot pass this test.
+    valid = DailyPriors.model_validate({"recent_activity": {"working_days": 1, "relevance": 0.6}})
+    recent = getattr(valid, "recent_activity", None)
+    assert recent is not None
+    assert recent.relevance == 0.6
+    with pytest.raises(ValidationError) as raised:
+        DailyPriors.model_validate({"recent_activity": {field: value}})
+    assert any(
+        error["loc"] == ("recent_activity", field) and error["type"] == error_type
+        for error in raised.value.errors()
+    )

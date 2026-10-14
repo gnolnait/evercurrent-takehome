@@ -20,7 +20,7 @@ from digest.daily.select import Line, Section, Selection
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport
 from digest.extract.verify import DROP_FIELDS
-from digest.models import AbsenceDetail, Claim, Event, Evidence, Item
+from digest.models import AbsenceDetail, Claim, Event, Evidence, Item, Reaction
 from digest.priors import load_priors
 from digest.project import Gate, PhaseWindow
 from digest.settings import Settings
@@ -835,6 +835,138 @@ def test_select_digest_uses_max_event_time_across_cited_messages(
         )
 
     assert [(line.item.item_id, line.must_see) for line in selected.lines] == [(row.item_id, False)]
+
+
+@pytest.mark.parametrize("working_days", [None, 1], ids=["default-three", "configured-one"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "at-start",
+        "after-start",
+        "reply",
+        "other-author",
+        "deleted",
+        "old-edit",
+        "recent-edit",
+        "reaction",
+        "at-end",
+    ],
+)
+def test_ra8_select_digest_recent_activity_window(
+    world: World, working_days: int | None, case: str
+) -> None:
+    """On Monday, count from Wednesday or Friday's end in the world zone."""
+    day = date(2026, 10, 19)
+    zone = ZoneInfo(world.timezone)
+    until = datetime.combine(day, time.max, zone)
+    # These dates are independent examples of three and one working days before Monday.
+    boundary = datetime(2026, 10, 14 if working_days is None else 16, 23, 59, 59, 999999, zone)
+    start_ts = f"{int(boundary.timestamp())}.999999"
+    after_ts = f"{int(boundary.timestamp()) + 1}.000000"
+    end_ts = f"{int(until.timestamp())}.999999"
+    table = load_priors()
+    data = table.model_dump()
+    data["daily"]["min_score"] = 0.0
+    if working_days is not None:
+        data["daily"]["recent_activity"] = {"working_days": working_days, "relevance": 0.8}
+    table = type(table).model_validate(data)
+    for qualifying in [False, True]:
+        ts = after_ts
+        if not qualifying and case in {"at-start", "old-edit"}:
+            ts = start_ts
+        elif not qualifying and case == "at-end":
+            ts = end_ts
+        event = pending_event().model_copy(
+            update={
+                "ts": ts,
+                "event_ts": ts,
+                "thread_ts": ts,
+                "user_id": "U0ME01",
+                "text": "Work on the shared part.",
+            }
+        )
+        if not qualifying:
+            changes: dict[str, Any] = {}
+            if case == "reply":
+                changes["thread_ts"] = start_ts
+            elif case in {"other-author", "reaction"}:
+                changes["user_id"] = "U0EE01"
+                if case == "reaction":
+                    changes["reactions"] = (Reaction(name="eyes", user_id="U0ME01", ts=end_ts),)
+            elif case == "deleted":
+                changes.update(deleted=True, event_ts=end_ts)
+            elif case in {"old-edit", "recent-edit"}:
+                changes.update(edited=True, event_ts=end_ts)
+            event = event.model_copy(update=changes)
+        source = item(
+            item_id="activity-source",
+            thread_id=event.thread_id,
+            type="fyi",
+            entities=("ACTIVITY-PART",),
+            affected_roles=(),
+            first_seen=ts,
+            last_updated=ts,
+            evidence=(
+                Evidence(
+                    channel_id=event.channel_id,
+                    message_ts=ts,
+                    quote=event.text,
+                    permalink=event.permalink,
+                ),
+            ),
+        )
+        target = item(
+            item_id="activity-target",
+            entities=("ACTIVITY-PART",),
+            affected_roles=(),
+            first_seen=end_ts,
+            last_updated=end_ts,
+            evidence=(
+                Evidence(
+                    channel_id="C0ENGME",
+                    message_ts=end_ts,
+                    quote="Target update.",
+                    permalink=evidence().permalink,
+                ),
+            ),
+        )
+        # The target citation must never itself match the reader's source message.
+        target = target.model_copy(
+            update={
+                "thread_id": f"C0KPROG:{end_ts}",
+                "evidence": (target.evidence[0].model_copy(update={"channel_id": "C0KPROG"}),),
+            }
+        )
+        with Store.open(":memory:") as store:
+            set_replay_meta(store, until=until.astimezone(UTC).isoformat())
+            store.upsert_events(
+                [event.model_copy(update={"edited": False, "deleted": False, "event_ts": ts})]
+            )
+            store.upsert_events([event])
+            store.record_stage_run(
+                StageRun(
+                    stage="extract",
+                    thread_id=event.thread_id,
+                    last_ts=event.event_ts,
+                    prompt_version=EXTRACT_PROMPT_VERSION,
+                    model="extract",
+                    run_at=until,
+                    status="ok",
+                )
+            )
+            store.upsert_items(
+                [source, target], prompt_version=EXTRACT_PROMPT_VERSION, model="extract"
+            )
+            selected = daily_render.select_digest(
+                store, world, table, "U0ME01", day, previous_digest=date(2026, 10, 16)
+            )
+        line = next(line for line in selected.lines if line.item.item_id == target.item_id)
+        lifts = qualifying or case in {"after-start", "reply", "recent-edit", "at-end"}
+        assert line.score == pytest.approx(0.9 * 0.9 * (0.8 if lifts else 0.4))
+        assert line.reason == (
+            f"importance=0.9 role_prior=0.9 personal_relevance={0.8 if lifts else 0.4}"
+            + (" (recent activity: ACTIVITY-PART)" if lifts else "")
+        )
 
 
 @pytest.mark.parametrize(

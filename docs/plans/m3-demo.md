@@ -131,7 +131,9 @@ B5.4 Ranked lane: every other visible open item gets
   checked when the priors load; SPEC 5.6 keeps every score term above zero), default 0.5 when the table has no entry (ruling: the table ships with the role-by-type values in `config/priors.yaml`;
   phase re-weighting is M3 proper).
 - `personal_relevance`: 1.0 when an item entity is owned by the reader, 0.8 when the
-  item's `affected_roles` include the reader's role, else 0.4.
+  item's `affected_roles` include the reader's role, else 0.4. Amended 2026-10-13
+  (`docs/plans/recent-activity.md`): an item at 0.4 that shares an entity with the
+  reader's recent activity gets `daily.recent_activity.relevance` (default 0.8).
 An item below the threshold `priors.daily.min_score` (default 0.15) is left out.
 Ranked lines are ordered by score, highest first. Scores equal to six significant figures
 break on the item's newest evidence, the greatest `message_ts` among its evidence

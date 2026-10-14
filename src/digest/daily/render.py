@@ -161,7 +161,21 @@ def select_digest(
         )
         for item in items
     }
-    return select(world, profile, items, absences, priors, day, previous_digest, newest_evidence)
+    recent_start = datetime.combine(
+        add_working_days(day, -priors.daily.recent_activity.working_days), time.max, zone
+    )
+    recent_messages = store.authored_messages(profile.user_id, recent_start, as_of)
+    return select(
+        world,
+        profile,
+        items,
+        absences,
+        priors,
+        day,
+        previous_digest,
+        newest_evidence,
+        recent_messages,
+    )
 
 
 def line_parts(

@@ -203,6 +203,20 @@ class Store:
         )
         return [_event(row) for row in rows]
 
+    def authored_messages(
+        self, user_id: str, start: datetime, end: datetime
+    ) -> frozenset[tuple[str, str]]:
+        """(channel_id, ts) of the user's current, not deleted messages with start < ts <= end.
+
+        The store keeps the current version of each message, so an edit keeps its `ts`.
+        """
+        rows = self._db.execute(
+            "SELECT channel_id, ts FROM events"
+            " WHERE user_id = ? AND deleted = 0 AND ts_us > ? AND ts_us <= ?",
+            (user_id, micros_since_epoch(start), micros_since_epoch(end)),
+        )
+        return frozenset((row["channel_id"], row["ts"]) for row in rows)
+
     def search_events(self, query: str, as_of: datetime, limit: int = 50) -> list[Event]:
         terms = query.split()
         if not terms:
