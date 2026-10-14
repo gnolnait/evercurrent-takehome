@@ -121,6 +121,19 @@ def snapshot(path: Path) -> dict[str, bytes]:
     return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
 
 
+def fail_events_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = Path.open
+
+    def fail(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if path.name == "events.jsonl" and mode == "w":
+            with original(path, mode, *args, **kwargs) as file:
+                file.write('{"partial":')
+            raise OSError("events.jsonl write interrupted")
+        return original(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail)
+
+
 def saved_events(path: Path) -> list[Event]:
     return [
         Event.model_validate_json(line)
@@ -549,6 +562,27 @@ def test_save_preserves_untouched_lines_and_committed_corpus(
     ].model_dump(exclude={"text", "files", "edited", "event_ts"})
 
 
+def test_failed_save_keeps_previous_copy_and_removes_temporary_folder(
+    base: RoomBase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room = Room(base)
+    destination = tmp_path / "copy"
+    room.save(destination)
+    before = snapshot(destination)
+    siblings = set(tmp_path.iterdir())
+    room.apply(D2)
+
+    with monkeypatch.context() as patch:
+        fail_events_write(patch)
+        with pytest.raises(OSError, match=r"events\.jsonl write interrupted"):
+            room.save(destination)
+
+    assert snapshot(destination) == before
+    assert set(tmp_path.iterdir()) == siblings
+
+
 def test_messages_cover_day_six_and_count_changes_since_reset(
     base: RoomBase,
     corpus: list[Event],
@@ -650,6 +684,39 @@ def test_real_reseed_requires_save_and_separate_request(
     assert reseed.calls[0][0] == reseed.calls[1][0]
     assert reseed.calls[0][0].resolve() == tmp_path / ".room" / "kestrel"
     assert reseed.report in Page(response.text).root.text()
+
+
+def test_failed_save_blocks_reseed_until_save_succeeds(
+    base: RoomBase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room = Room(base)
+    room.apply(D2)
+    page_directory(tmp_path, monkeypatch)
+    reseed = FakeReseed()
+    with TestClient(create_app(room, reseed=reseed)) as client:
+        assert client.post("/save").status_code == 200
+        assert reseed.calls == []
+
+        with monkeypatch.context() as patch:
+            fail_events_write(patch)
+            failed = client.post("/save")
+
+        assert failed.status_code == 400
+        assert "events.jsonl write interrupted" in Page(failed.text).root.text()
+        refused = client.post("/reseed?dry_run=false")
+        assert refused.status_code == 400
+        assert "sav" in Page(refused.text).root.text().lower()
+        assert reseed.calls == []
+
+        assert client.post("/save").status_code == 200
+        assert reseed.calls == []
+        allowed = client.post("/reseed?dry_run=false")
+
+    assert allowed.status_code == 200
+    assert reseed.calls == [(Path(".room") / base.world.name, False)]
+    assert reseed.report in Page(allowed.text).root.text()
 
 
 @pytest.mark.parametrize("dry_run", ["true", "false"])
