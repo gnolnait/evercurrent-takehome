@@ -1,6 +1,6 @@
 # Plan: M5 slice, feedback recording and Slack interaction (`digest bot`)
 
-Status: v0.3 (plan re-review applied), 2026-10-13. Process stage 1 (`docs/process.md`).
+Status: v0.4 (RC review applied: store before ack, actor rule, episode key), 2026-10-13. Process stage 1 (`docs/process.md`).
 Stacked on the layout unit (`docs/plans/m5-layout.md` v0.4, branch `m5-layout`): it adds
 menus to the v6 top message and thread reply that `slack_digest` builds. Rebased onto
 `main` after the layout unit merges. This is "Next" of the layout plan and part of step 1
@@ -21,6 +21,10 @@ This slice writes no item status and changes no digest. Applying the events is t
 unit (Next units 1), built with the session that owns `daily/select.py`. That unit makes
 an owner's done resolve the item, filters done and snoozed items, and adds `It happened`
 with its episode suppression.
+
+This slice is a prerequisite. It does not pass the SPEC step 8 acceptance: the absence
+actions (`It happened`, and `Mark done` on a checklist absence line) and the exposure
+records come in later units (Next units 1 and 2).
 
 ## Commands
 
@@ -54,6 +58,8 @@ digest bot [--db PATH]
   text of the exception is not printed, because it can hold a token. On Ctrl-C the
   command prints `stopped` and the exit code is 0. `_socket_handler(bot_token, app_token,
   db)` in `cli.py` builds the bolt `App` and the handler; the tests patch it.
+- `--demo-actor` (on `bot`, off by default): the actor rule of I7. Without it, only a
+  clicker whose Slack user id is the item's owner resolves the item.
 
 ## Behaviours
 
@@ -80,7 +86,7 @@ The profile version of SPEC step 8 is not in the payload: profiles have no versi
 I3. **Done.** The subject's kind decides (`Subject.kind`, Interface). The event is the
 only write.
 
-- Kind `item`, and the item's `owner` equals the reader: `resolution: owner`.
+- Kind `item`, and the item's `owner` equals the actor (I7): `resolution: owner`.
 - Kind `item`, any other owner (another person, `None`): `resolution: exposure`.
 - Kind `checklist_absence`: `resolution: exposure`. The task stays open (SPEC section 4:
   a task closes only when a message carries a `done` link). The menu of I9 does not offer
@@ -92,6 +98,10 @@ only write.
 
 For a kept item with members (layout 4.3), the subject is the absorber; the event names
 the absorber's key only.
+
+`resolution: exposure` is a label on the feedback event only. This slice writes no
+exposure record. The exposure unit (Next units 2) defines the exposure records, and it
+reads these events.
 
 I4. **Snooze.** `until` is `add_working_days(<day>, 1)` (`digest.project`), where `<day>`
 is the digest day of the message, not the time of the click. Day 6 of Kestrel K2 (Mon 19
@@ -126,12 +136,17 @@ removes the effect of exactly its target.
 `shown_marks(store, reader, day) -> dict[str, FeedbackEvent]` gives, for the message
 update (I14), each `item_id` of `reader` with its newest live event of that exact `day`.
 
-I7. **Demo actor rule.** In the demo, one person receives the digests of several readers
-(three personas, one Slack user). So the clicker acts as the reader of the digest: the
-event's `reader` is the digest's reader, and the owner rule of I3 compares the item's
-`owner` with that reader, never with the clicker. The event records both `reader` and
-`slack_user`, so a later unit can apply a stricter rule (SPEC step 8: "when the clicker
-owns it") once readers have their own Slack accounts.
+I7. **Actor rule.** The owner rule of I3 compares the item's `owner` with the actor.
+`digest bot` has two modes:
+
+- Default: the actor is the clicker's Slack user id (SPEC step 8: "when the clicker owns
+  it"). In a real workspace the persona ids are Slack user ids. So only the owner resolves
+  an item; another clicker's done is `exposure`.
+- `--demo-actor`: in the demo, one person receives the digests of several readers (three
+  personas, one Slack user). The actor is the posted row's reader.
+
+In both modes the event's `reader` is the posted row's reader and `slack_user` is the
+clicker. `record` takes the actor as the keyword `actor`.
 
 ### Posting (`digest post --dm --interactive`)
 
@@ -182,7 +197,17 @@ the digest for <reader>: the message has no ts; its message was sent<note>`, wit
 ### Listener (`digest bot`)
 
 I11. **Accept a click.** The bolt adapter registers `item_menu` and `item_undo`. Each
-calls `ack()` first, then `handle_action(body, ...)`. The handler reads the
+calls `handle_action(body, ack=ack, ...)`. The handler calls `ack()` exactly once:
+
+- for `done`, `snooze` and `undo`: after the feedback write of I13 or I14, or after the
+  handler decides to ignore the click, and before any Slack call;
+- for `Why this item?`: before `views.open`;
+- when the handler raises before `ack()`: in a `finally`.
+
+So the event is in the store before Slack gets the ack (D7). A crash after the ack cannot
+lose a click. The write is one SQLite insert through a connection with a 1-second busy
+timeout, inside Slack's 3-second limit, and it does not wait for the lock of I15. No SQLite
+transaction is open during a Slack call. The handler reads the
 `posted_messages` row for `(container.channel_id, container.message_ts)`. The payload's
 `message.metadata` is a cross-check only: missing metadata is accepted. The handler
 ignores the click, with the log event `bot_action_ignored` and a `reason` field, and
@@ -213,11 +238,14 @@ root); unmapped, `In <#C...>` or `In #<name>`, with no link. Every text passes t
 pipeline (flatten, escape, the 3000 cut). The click records nothing (it is not a SPEC
 feedback event).
 
-I13. **Record and update.** For `done` and `snooze`, inside the lock of I15: build the
-`Subject` from the `PostedItem`, call `feedback.record`. A None result (a repeated
-delivery) logs `bot_action_repeated` and stops: no update. Else add 1 to the row's
-`revision` and call `chat.update` with the row's channel, ts, `text` and metadata, and
-the blocks of I14.
+I13. **Record and update.** For `done` and `snooze`: build the `Subject` from the
+`PostedItem` and call `feedback.record` through the handler's own connection, outside the
+lock of I15. Then call `ack()`. A None result (a repeated delivery) logs
+`bot_action_repeated` and stops: no update. Else, inside the lock: add 1 to the row's
+`revision` and call `chat.update` with the row's channel, ts, `text` and metadata, and the
+blocks of I14. A crash after the write and before the update leaves the event without a
+mark on the message; the next update of that message shows it, because I14 reads
+`shown_marks`.
 
 I14. **The updated message.** The blocks are the row's posted blocks, with every item
 block id carrying the new revision, and, for each item `<n>` whose key is in
@@ -233,19 +261,22 @@ block id carrying the new revision, and, for each item `<n>` whose key is in
 
 An item with no mark keeps its posted blocks, apart from the revision. So an undo
 restores the line, and a click on another item of the same message keeps the earlier
-marks. For `item_undo`, inside the lock: the clicked item is item `<n>` of the block id;
+marks. For `item_undo`: the clicked item is item `<n>` of the block id;
 a value that is not a decimal integer is `bad_value`. The handler calls
 `feedback.undo(int(value), reader=<row reader>, day=<row day>, item_id=<clicked item
-key>, ...)`. None logs `bot_action_repeated`; `UndoMismatch` is `undo_mismatch`; another
-ValueError is `bad_undo`; else the handler updates the message as in I13.
+key>, ...)` outside the lock, then calls `ack()`. None logs `bot_action_repeated`;
+`UndoMismatch` is `undo_mismatch`; another ValueError is `bad_undo`; else the handler
+updates the message inside the lock, as in I13.
 
 I15. **Locks and connections.** Bolt can run listeners on worker threads, and `Store.open`
 makes a connection that only its own thread may use. So:
 
-- `done`, `snooze` and `undo` hold one process-wide `threading.Lock` from the store open
-  to the end of `chat.update`, and open and close the store (`Store.open(db)`) inside the
-  lock. Two clicks on one message then update it in turn, and the second update shows
-  both marks.
+- The feedback write of `done`, `snooze` and `undo` opens its own connection
+  (`Store.open(db)`) outside any lock; SQLite orders two writes.
+- The update step holds one process-wide `threading.Lock` from the revision read to the
+  end of `chat.update`, and opens and closes its own connection inside the lock. Two
+  clicks on one message then update it in turn, and the second update shows both marks.
+  The ack of a click never waits for this lock.
 - `Why this item?` reads through its own connection outside the lock (I12). The posted
   row's fields that Why reads never change after the post.
 
@@ -342,14 +373,21 @@ class FeedbackEvent(Frozen):
 class FeedbackState:
     resolved: frozenset[str]        # item ids an owner marked done and did not undo; every reader
     snoozed: Mapping[str, date]     # this reader's snoozed item ids, with the day they show again
-    suppressed: frozenset[tuple[str, str, str]]
-                                    # (source, task or ask id, last evidence key); empty in this slice
+    suppressed: frozenset[Episode]  # empty in this slice
+
+class Episode(NamedTuple):          # one silence of one absence (SPEC step 8)
+    source: str                     # the absence's source letter
+    subject: str                    # the task id, or the ask item id; source h: "<part>@<rev>"
+    last_evidence: str              # "<channel id>:<message ts>" of its last evidence
+
+def episode(source: str, subject: str, channel: str, message_ts: str) -> Episode: ...
+    # the one constructor; posting and selection both call it
 
 class UndoMismatch(ValueError): ... # the target is another reader's, day's or item's event
 
 def record(store: Store, event: Literal["done", "snooze"], subject: Subject, *,
-           reader: str, slack_user: str, run_id: str, day: date, idempotency_key: str,
-           at: datetime) -> int | None: ...
+           reader: str, actor: str, slack_user: str, run_id: str, day: date,
+           idempotency_key: str, at: datetime) -> int | None: ...
     # I2 to I4, I6; the event id, or None for a key already seen
 def undo(store: Store, event_id: int, *, reader: str, day: date, item_id: str,
          slack_user: str, idempotency_key: str, at: datetime) -> int | None: ...
@@ -464,11 +502,13 @@ Each row is tested offline with a temporary store, hand-made `PostedMessage` row
 otherwise.
 
 - A1 (I1, I2, I7). `done` and `snooze` each write one row with the I2 payload; `reader`
-  is the posted row's reader, also when the payload has no metadata and when the clicker
-  is another Slack user; `slack_user` is the clicker; `ts` is the injected time; an
+  is the posted row's reader in both actor modes, also when the payload has no metadata
+  and when the clicker is another Slack user; `slack_user` is the clicker; `ts` is the injected time; an
   absence's `item_id` is `absence:<task>` or `absence:ask:<id>`.
-- A2 (I3). Done by the owner: `resolution: owner`. Done by a non-owner and on an item with
-  no owner: `exposure`. Done on a checklist absence: `exposure`. Done on an ask absence:
+- A2 (I3, I7). Done by the owner: `resolution: owner`. Done by a non-owner and on an item
+  with no owner: `exposure`. Through `handle_action`: by default, a clicker whose Slack id
+  is not the owner gives `exposure` although the posted reader owns the item, and is not
+  in `resolved` for any reader; with `--demo-actor`, the same click gives `owner`. Done on a checklist absence: `exposure`. Done on an ask absence:
   ValueError, no row. In every case the `items` table is unchanged.
 - A3 (I4). Snooze on day 6 (Mon 19 Oct 2026) gives `until` 2026-10-20; on a Friday it
   gives the Monday after.
@@ -521,13 +561,18 @@ otherwise.
   and keeps the row; with a token in the fake error, no captured log record and no output
   holds it; the `bot` command refuses a missing or malformed `SLACK_APP_TOKEN` or
   `SLACK_BOT_TOKEN` without printing the value.
-- A15 (I11, adapter). The bolt listener functions of the adapter, called with a fake
-  `ack` and a payload, call `ack` before `handle_action` and pass the payload to it
-  unchanged. No bolt `App` is constructed.
+- A15 (I11, adapter and ack order). The bolt listener functions of the adapter, called
+  with a fake `ack` and a payload, pass the payload and `ack` to `handle_action`
+  unchanged. No bolt `App` is constructed. With one event log shared by the fakes: for
+  `done`, `snooze` and `undo`, the row exists when `ack` is called, and `ack` comes before
+  `update`; for Why, `ack` comes before `open_view`; an ignored click calls `ack` once;
+  a handler that raises before the ack still calls `ack` once. While a fake `update` of
+  another click is blocked inside the lock, a `done` click on another thread writes its
+  row and calls `ack` before the block is released.
 - A16 (I14, undo binding). An `item_undo` click whose value names an event of another line
   of the same message gives `undo_mismatch`; one whose value names another reader's event
   gives `undo_mismatch`; neither writes a row or updates the message.
-- A17 (live, manual, recorded in the PR). In Scratch: run `digest bot`; in a second
+- A17 (live, manual, recorded in the PR). In Scratch: run `digest bot --demo-actor`; in a second
   terminal run `digest post --dm <member> --interactive --seed-map <map>` for day 6. On
   the three digests, click `Why this item?`, `Mark done` and `Snooze until tomorrow`, each
   on a line where it shows, and `Undo` after each of the last two. Record one sanitized
@@ -568,17 +613,21 @@ otherwise.
    - `It happened` comes back with its suppression. Design kept from v0.1: the option
      replaces `Mark done` on an ask absence in needs_you and sits on every absence line.
      The event `it_happened` is keyed by the absence's own key and the day shown, and its
-     payload holds the episode: `source` (`absence.source`), `task` (`absence.task`) for
-     a checklist absence or `ask` (the absence's `item_id` without `ASK_ABSENCE_PREFIX`)
-     for an ask absence, and `last_evidence` (the key of the absence's one evidence
-     entry). `daily/slack.py` builds the episode at post time, so `feedback.py` imports
-     nothing from `daily`. `FeedbackState.suppressed` then holds the live episodes of the
+     payload holds the `Episode` from `feedback.episode()`, the one constructor that
+     posting and selection both call: `source` (`absence.source`); `subject`, the task id
+     (`absence.task`) for a checklist absence or the ask item id (the absence's `item_id`
+     without `ASK_ABSENCE_PREFIX`) for an ask absence; and `last_evidence`,
+     `<channel id>:<message ts>` of the absence's one evidence entry. Source h is stretch;
+     its subject is `<part>@<rev>`. `daily/slack.py` builds the episode at post time and
+     keeps it on the `PostedItem`, so `feedback.py` imports nothing from `daily`. `FeedbackState.suppressed` then holds the live episodes of the
      reader; selection leaves out an absence whose episode is in it, and new evidence
      followed by a new silence is a new episode, so it shows again. The click changes no
      task state, no ledger and no other reader's digest (SPEC step 8). The menu value
      stays `it_happened:#<n>`; the optional permalink of SPEC step 8 needs a modal input.
-2. **Exposure on Slack's acceptance** (SPEC M5 core). `posted_messages` is the delivered
-   part; the unit adds the item and claim ids shown, as D26 says.
+2. **Exposure records** (SPEC M5 core, D26). Append-only records of what each reader was
+   shown, written on Slack's acceptance of each part, for interactive and plain posts.
+   The unit also reads the `done` events with `resolution: exposure` of this slice. It
+   keeps `posted_messages` (mutable revision state) separate from the exposure records.
 3. **Not mine, confirm, thumbs and "more like this".** Confirm waits for contradiction
    lines.
 
