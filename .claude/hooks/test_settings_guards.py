@@ -30,21 +30,37 @@ SETTINGS = Path(__file__).parents[1] / "settings.json"
 # supplies the guard: blocking briefly is the safe direction, and the message
 # says to retry.
 #
+# With `CLAUDE_HOOK_PYTHON` set and `guard_runner.py` present, the fence runs
+# the python file with that interpreter itself, which skips the bash wrapper's
+# launch (a bash start and its interpreter lookup). Both paths still come from
+# `CLAUDE_PROJECT_DIR`, and both exits go through the same coercion. Without
+# the variable, or without the python file, the fence runs the wrapper. The
+# variable counts only when it is a path (it holds a `/` or `\`): a shell runs
+# such a name as a file, never as a builtin, and `exec "$s"` would replace the
+# fence's own shell and skip the coercion. The backslash is single-quoted
+# because Windows hands the command to MSYS sh on a command line that
+# collapses an unquoted `\\`.
+#
 # Two inherited-shell hazards remain fenced: the child runs in an `if` so
 # errexit cannot bail between it and `rc=$?`, and every `CLAUDE_PROJECT_DIR`
-# expansion is `${CLAUDE_PROJECT_DIR-}` so nounset cannot abort on an unset
-# var. The BLOCKED echoes carry `|| :` so a closed stderr cannot turn a block
-# into a non-blocking exit 1. Behavior is covered by
+# and `CLAUDE_HOOK_PYTHON` expansion carries `-` so nounset cannot abort on an
+# unset var. The BLOCKED echoes carry `|| :` so a closed stderr cannot turn a
+# block into a non-blocking exit 1. Behavior is covered by
 # `test_guard_launch_fence.py`; this file pins the registration.
 RUNNER = (
-    'f="${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner"; '
-    'if [ -x "$f" ]; then if "$f"; then rc=0; else rc=$?; fi; '
-    'if [ "$rc" != 0 ] && [ "$rc" != 2 ]; then '
-    'echo "BLOCKED: guard_runner exited $rc (vanished or broken mid-run?); '
-    'failing closed. Retry shortly." >&2 || :; rc=2; fi; exit "$rc"; else '
-    'echo "BLOCKED: guard_runner missing or not executable at '
+    'w="${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner"; '
+    's="${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner.py"; '
+    'p="${CLAUDE_HOOK_PYTHON-}"; '
+    "case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; "
+    'if [ -n "$p" ] && [ -f "$s" ]; then if "$p" "$s"; then rc=0; else rc=$?; fi; '
+    'elif [ -x "$w" ]; then if "$w"; then rc=0; else rc=$?; fi; '
+    'else echo "BLOCKED: guard_runner missing or not executable at '
     '${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); '
-    'failing closed. Retry shortly." >&2 || :; exit 2; fi'
+    'failing closed. Retry shortly." >&2 || :; exit 2; fi; '
+    'if [ "$rc" != 0 ] && [ "$rc" != 2 ]; then '
+    'echo "BLOCKED: guard_runner exited $rc (vanished, broken mid-run, or a bad '
+    'CLAUDE_HOOK_PYTHON?); failing closed. Retry shortly." >&2 || :; rc=2; fi; '
+    'exit "$rc"'
 )
 
 

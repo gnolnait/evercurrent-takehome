@@ -337,6 +337,19 @@ def test_startup_degrades_to_a_note_when_fetch_fails(repo, origin, tmp_path):
     assert "- This checkout is 1 commit behind origin/main." in p.stdout
 
 
+def test_startup_counts_again_after_a_fetch_that_moves_origin_main(repo, origin):
+    """Setup: one good fetch, then a new commit on origin only. Action:
+    startup. Assert: the count is from after the fetch (2), not before it (1)."""
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "three")
+    # A push to the path, not to the remote name, leaves origin/main as it is.
+    _git(repo, "push", "-q", str(origin), "main")
+    _git(repo, "reset", "-q", "--hard", "base")
+    p = _run("startup", repo)
+    assert "git fetch failed" not in p.stdout
+    assert "- This checkout is 2 commits behind origin/main." in p.stdout
+
+
 def test_startup_stops_a_slow_fetch_at_its_timeout(repo, origin):
     """Setup: one good fetch, then an origin whose transport sleeps 30 s in a
     child of git, as git-remote-https does on a slow network. Action: startup.
