@@ -127,8 +127,10 @@ stays in a band above zero. "Off" in the ablation means the term is 1; a term st
 it moves person-days or must-see recall by a configured minimum, and before person-days
 exists nDCG at 5 may also keep it (D21). Items merge only within one audience, and each
 reader reads a ledger view built by the same rules from the claims they can see. Open
-blockers, unanswered asks, absences, stale beliefs, contradictions, pending claims and
-undelivered closing lines stay candidates when their evidence is older than the window.
+blockers, stale beliefs, contradictions, pending claims and undelivered closing lines stay
+candidates when their evidence is older than the window. An absence is must-see for the
+readers its source names and is never ranked (amended 2026-10-13,
+`docs/plans/ask-audience.md`).
 
 ## D7. Slack integration: Bolt sync, Socket Mode, internal app, scheduler in-process
 

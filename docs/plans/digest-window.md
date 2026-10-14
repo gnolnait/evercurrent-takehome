@@ -17,8 +17,9 @@ so day-6 digests run 13 to 16 lines and two roles share up to 71% of their items
 - Must-see rules run over all open items, as today. The window does not touch the
   must-see lane.
 - A ranked-lane candidate is an item whose newest evidence falls in the window, or,
-  whatever the age of its evidence, an open blocker or an ask absence. Checklist absences
-  reach a reader only through must-see, as today.
+  whatever the age of its evidence, an open blocker. Absences reach a reader only through
+  must-see (amended 2026-10-13: ask absences followed checklist absences,
+  `docs/plans/ask-audience.md`).
 - Asks: an ask made of the reader is already must-see. Any other open ask follows the
   window like other items. An unanswered ask comes back as an ask absence once its reply
   cadence passes (`digest.absence`), so selection needs no reply state.
@@ -73,8 +74,8 @@ digest.
   evidence after the window start is (paired test across the boundary).
 - W2. An edit: an item whose cited message has `ts` before the window start but
   `event_ts` after it is in the window.
-- W3. Old open blockers and old ask absences stay candidates, tested beside an old
-  ordinary item that is excluded. A candidate can still fall to the score threshold or a
+- W3. Old open blockers stay candidates, tested beside an old ordinary item that is
+  excluded (ask absences: amended 2026-10-13, `docs/plans/ask-audience.md`). A candidate can still fall to the score threshold or a
   section cap, as today.
 - W4. Must-see lines are the same with and without the window (preservation test).
 - W5. Boundaries: an item exactly at the end of `start_day` is out, one microsecond later
