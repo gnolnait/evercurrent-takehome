@@ -379,6 +379,17 @@ def seed(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Make no write; print what a run would do."
     ),
+    events_path: Path | None = typer.Option(
+        None, "--events", help="Corpus to seed. Default: the world's events.jsonl."
+    ),
+    reference_path: Path | None = typer.Option(
+        None,
+        "--reference",
+        help=(
+            "The corpus that Slack holds now (the last one seeded or pushed); update the "
+            "messages whose text differs in place."
+        ),
+    ),
 ) -> None:
     """Post the world's corpus into the Slack workspace of SLACK_BOT_TOKEN, under persona
     names, and record a map from each world message to its Slack message.
@@ -388,14 +399,27 @@ def seed(
     the summary line. A dry run prints the count and blocker lines only, and exits 1 when
     a blocker stops a real run. A Slack error shows its error code only, any other error
     its type only, so no output holds the token.
+
+    With --reference, the command updates in place each seeded message whose text
+    differs from the reference, and lists the seeded messages the corpus no longer holds.
+    It deletes nothing (docs/plans/m5-reseed.md). The reference must be the corpus Slack
+    holds now, the last one seeded or pushed: a message changed back to text that matches
+    the reference is not pushed. A dry run then also prints an `updates:` count and one
+    `removed:` line per removed message; a real run prints one `not deleted:` line per
+    removed message after the summary line.
     """
     world_dir = Path("data") / "world" / world
     # Each refusal comes after its try statement, so no exception chains to it.
     failure: str | None = None
+    reference = None
     try:
         loaded = load_world(world_dir / "world.yaml")
-        events = list(read_events(world_dir / "events.jsonl", loaded.workspace_url))
+        source = events_path or world_dir / "events.jsonl"
+        events = list(read_events(source, loaded.workspace_url))
         posts = plan_seed(loaded, events, until_day)
+        if reference_path is not None:
+            seeded = list(read_events(reference_path, loaded.workspace_url))
+            reference = plan_seed(loaded, seeded, until_day)
     except OSError as error:
         failure = f"{error.filename}: {error.strerror or error}"
     except (yaml.YAMLError, ValueError) as error:  # ValueError: validation, format, B7, day
@@ -410,7 +434,14 @@ def seed(
     client = _seed_client(token)
     try:
         report = seed_corpus(
-            loaded, posts, client, map_path, pace=pace, sleep=sleep, dry_run=dry_run
+            loaded,
+            posts,
+            client,
+            map_path,
+            pace=pace,
+            sleep=sleep,
+            dry_run=dry_run,
+            reference=reference,
         )
     except SeedBlocked as error:  # a check before the first write; the message names it
         failure = str(error)
@@ -424,10 +455,16 @@ def seed(
         if not report.complete:
             raise typer.Exit(code=1)
         return
+    if reference is None:
+        counts = f"{report.posts} posts and {report.files} files"
+    else:
+        counts = f"{report.posts} posts, {report.updated} updates and {report.files} files"
     typer.echo(
-        f"seeded {report.posts} posts and {report.files} files in {report.channels} channels; "
+        f"seeded {counts} in {report.channels} channels; "
         f"{report.reactions_not_seeded} reactions not seeded; map {report.map_path}"
     )
+    for key in report.removed:
+        typer.echo(f"not deleted: {key}")
 
 
 def _seed_client(token: str) -> SlackSeedClient:
