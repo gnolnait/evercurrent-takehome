@@ -113,7 +113,8 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
 
     @app.post("/edit")
     async def edit(request: Request) -> Response:
-        # Each refusal is a ValueError: a bad form field here, an R3 check in the room.
+        # A refusal is a ValueError (a bad form field here, an R3 check in the room) and
+        # answers 400. Any other error answers the 500 page of `failed`.
         form = await request.form()
         # A curated or scenario form sends fresh=true; any other value or none is false.
         fresh = form.get("fresh") == "true"
