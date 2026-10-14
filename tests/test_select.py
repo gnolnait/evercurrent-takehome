@@ -1,6 +1,7 @@
 from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -1444,3 +1445,206 @@ def test_ra7_must_see_lines_are_preserved(row: Item) -> None:
     assert after[0].must_see
     assert after[0].score == 0
     assert "recent activity" not in after[0].reason
+
+
+def ablation_priors(terms_off: set[str], *, base: Priors | None = None) -> Priors:
+    data = (base or priors()).model_dump()
+    data["daily"]["terms_off"] = terms_off
+    return Priors.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("term", "score", "reason"),
+    [
+        (
+            "importance",
+            0.4,
+            "importance=1.0 (off) role_prior=0.5 personal_relevance=0.8 (recent activity: A, Z)",
+        ),
+        (
+            "role_prior",
+            0.504,
+            "importance=0.63 role_prior=1.0 (off) personal_relevance=0.8 (recent activity: A, Z)",
+        ),
+        (
+            "personal_relevance",
+            0.315,
+            "importance=0.63 role_prior=0.5 personal_relevance=1.0 (off)",
+        ),
+    ],
+)
+def test_ab1_each_factor_off(term: str, score: float, reason: str) -> None:
+    row = item("lifted", entities=("Z", "A"))
+    messages = frozenset({("CPUBLIC", BASE_TS)})
+    before = choose([row], table=ablation_priors(set()), recent_messages=messages).lines[0]
+    assert before.score == 0.252
+    assert before.reason == (
+        "importance=0.63 role_prior=0.5 personal_relevance=0.8 (recent activity: A, Z)"
+    )
+
+    after = choose([row], table=ablation_priors({term}), recent_messages=messages).lines[0]
+    assert after.score == score
+    assert after.reason == reason
+
+
+@pytest.mark.parametrize("lifted", [False, True], ids=["static", "lifted"])
+def test_ab2_recent_activity_off(lifted: bool) -> None:
+    row = item("target", entities=("Z", "A"))
+    messages = frozenset({("CPUBLIC", BASE_TS)}) if lifted else frozenset()
+    before = choose([row], table=ablation_priors(set()), recent_messages=messages).lines[0]
+    assert before.score == (0.252 if lifted else 0.126)
+    assert before.reason == (
+        "importance=0.63 role_prior=0.5 personal_relevance=0.8 (recent activity: A, Z)"
+        if lifted
+        else "importance=0.63 role_prior=0.5 personal_relevance=0.4"
+    )
+
+    after = choose(
+        [row], table=ablation_priors({"recent_activity"}), recent_messages=messages
+    ).lines[0]
+    assert after.score == 0.126
+    assert after.reason == "importance=0.63 role_prior=0.5 personal_relevance=0.4"
+
+
+@pytest.mark.parametrize("recent_off", [False, True], ids=["relevance", "relevance-and-activity"])
+@pytest.mark.parametrize(
+    ("entities", "roles", "lifted"),
+    [
+        (("PN-OWNED",), (), False),
+        (("A",), ("ME",), False),
+        (("A",), (), False),
+        (("Z", "A"), (), True),
+    ],
+    ids=["owned", "affected-role", "other", "lifted"],
+)
+def test_ab3_personal_relevance_off_covers_every_source(
+    entities: tuple[str, ...], roles: tuple[Role, ...], lifted: bool, recent_off: bool
+) -> None:
+    terms = {"personal_relevance", "recent_activity"} if recent_off else {"personal_relevance"}
+    row = item("target", entities=entities, affected_roles=roles)
+    line = choose(
+        [row],
+        table=ablation_priors(terms),
+        recent_messages=frozenset({("CPUBLIC", BASE_TS)}) if lifted else frozenset(),
+    ).lines[0]
+    assert line.score == 0.315
+    assert line.reason == "importance=0.63 role_prior=0.5 personal_relevance=1.0 (off)"
+
+
+def test_ab4_importance_and_role_prior_off() -> None:
+    line = choose(
+        [item("lifted", entities=("Z", "A"))],
+        table=ablation_priors({"importance", "role_prior"}),
+        recent_messages=frozenset({("CPUBLIC", BASE_TS)}),
+    ).lines[0]
+    assert line.score == 0.8
+    assert line.reason == (
+        "importance=1.0 (off) role_prior=1.0 (off) personal_relevance=0.8 (recent activity: A, Z)"
+    )
+
+
+@pytest.mark.parametrize("term", ["importance", "recent_activity"])
+def test_ab6_threshold_and_cap(term: str) -> None:
+    rows = [item(f"owned-{i}", severity="high", entities=("PN-OWNED",)) for i in range(4)]
+    rows += [
+        item("contender", severity="high"),
+        item("target", entities=("A", "Z"), evidence=(evidence("CPUBLIC", 9),)),
+    ]
+    messages = frozenset({("CPUBLIC", "1791993600.000009")})
+    messages = messages if term == "recent_activity" else frozenset()
+    before = choose(
+        rows,
+        table=ablation_priors(set(), base=priors(min_score=0.15)),
+        recent_messages=messages,
+    ).lines
+    after = choose(
+        rows,
+        table=ablation_priors({term}, base=priors(min_score=0.15)),
+        recent_messages=messages,
+    ).lines
+    assert [line.item.item_id for line in before] == [
+        "owned-0",
+        "owned-1",
+        "owned-2",
+        "owned-3",
+        "contender" if term == "importance" else "target",
+    ]
+    assert [line.item.item_id for line in after] == [
+        "owned-0",
+        "owned-1",
+        "owned-2",
+        "owned-3",
+        "target" if term == "importance" else "contender",
+    ]
+    assert before[-1].score == (0.9 * 0.5 * 0.4 if term == "importance" else 0.252)
+    assert after[-1].score == (0.2 if term == "importance" else 0.9 * 0.5 * 0.4)
+    # Without cap competition, the target still crosses the threshold in each direction.
+    for terms, shown in [(set(), term == "recent_activity"), ({term}, term == "importance")]:
+        lines = choose(
+            [rows[-1]],
+            table=ablation_priors(terms, base=priors(min_score=0.15)),
+            recent_messages=messages,
+        ).lines
+        assert [line.item.item_id for line in lines] == (["target"] if shown else [])
+
+
+def test_ab8_empty_switch_preserves_scores_and_reasons() -> None:
+    """AB8 preservation: empty terms keep full scores and rounded reason values."""
+    rows = [
+        item("owned", entities=("PN-OWNED",)),
+        item("role", affected_roles=("ME",)),
+        item("other"),
+        item("lifted", entities=("Z", "A"), evidence=(evidence("CPUBLIC", 9),)),
+    ]
+    base = priors(role_priors={"ME": {"decision": 0.512345}})
+    # Preservation runs before the switch exists; feature checks require the field.
+    table = ablation_priors(set(), base=base) if "terms_off" in DailyPriors.model_fields else base
+    lines = choose(
+        rows, table=table, recent_messages=frozenset({("CPUBLIC", "1791993600.000009")})
+    ).lines
+    assert {line.item.item_id: (line.score, line.reason) for line in lines} == {
+        "owned": (0.63 * 0.512345, "importance=0.63 role_prior=0.512 personal_relevance=1.0"),
+        "role": (0.63 * 0.512345 * 0.8, "importance=0.63 role_prior=0.512 personal_relevance=0.8"),
+        "other": (0.63 * 0.512345 * 0.4, "importance=0.63 role_prior=0.512 personal_relevance=0.4"),
+        "lifted": (
+            0.63 * 0.512345 * 0.8,
+            "importance=0.63 role_prior=0.512 personal_relevance=0.8 (recent activity: A, Z)",
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "terms",
+    [
+        set(group)
+        for size in range(5)
+        for group in combinations(
+            ("importance", "role_prior", "personal_relevance", "recent_activity"), size
+        )
+    ],
+    ids=lambda terms: "+".join(sorted(terms)) or "empty",
+)
+def test_ab9_must_see_lines_are_preserved(terms: set[str]) -> None:
+    """AB9 preservation: every switch subset keeps must-see ids, sections and reasons."""
+    rows = [
+        item("ask", type="ask", owner="UREADER"),
+        item("blocker", type="blocker", entities=("PN-OWNED",)),
+        item("gate", type="schedule_change", entities=("G-DVT1",)),
+    ]
+    missing = [
+        absence("checklist", affected_roles=("ME",)),
+        absence("asker", source="ask", asker="UREADER"),
+        absence("asked", source="ask", asker="UASKER", owner="UREADER"),
+    ]
+    base = priors(min_score=1.1)
+    before = choose(rows, missing, table=base).lines
+    # Remove this compatibility branch after the implementation adds the field.
+    table = ablation_priors(terms, base=base) if "terms_off" in DailyPriors.model_fields else base
+    after = choose(
+        rows, missing, table=table, recent_messages=frozenset({("CPUBLIC", BASE_TS)})
+    ).lines
+    assert len(before) == len(after) == 6
+    assert all(line.must_see and line.score == 0 for line in after)
+    assert {line.item.item_id: (line.section, line.reason) for line in after} == {
+        line.item.item_id: (line.section, line.reason) for line in before
+    }
