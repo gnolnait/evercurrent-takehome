@@ -1,6 +1,6 @@
 # Plan: M5 slice, the Slack digest layout (v6)
 
-Status: v0.5, 2026-10-13. Process stage 1 (`docs/process.md`). The design comes from a design pass on the real day-6
+Status: v0.6, 2026-10-14. Process stage 1 (`docs/process.md`). The design comes from a design pass on the real day-6
 payloads; three readers' mock payloads (v6) were posted to the user's DM in Scratch on
 2026-10-13 and approved ("looks good"). This unit is one day of work. Section 15 lists what
 it does not do.
@@ -57,11 +57,10 @@ Terms used in every section below:
 Block order with at least one item:
 
 1. `header`, plain_text: `<program> · <Day d Mon>` of `selection.day`. Example:
-   `Kestrel K2 · Mon 19 Oct`. With `reader_in_header=True`, the header adds
-   ` · <first name> (<role text>)` of the reader, for example `Kestrel K2 · Mon 19 Oct ·
-   Nadia (ME)`. `digest post` passes True on both paths, because each path sends the
-   digests of several readers to one destination (one DM, or one webhook channel). A
-   delivery to each reader's own DM passes False.
+   `Kestrel K2 · Mon 19 Oct · Nadia (ME)`: the program, the day, and the reader's first
+   name and role text. Every delivery today sends the digests of several readers to one
+   destination (one DM, or one webhook channel), so the header names the reader. A later
+   delivery to each reader's own DM can drop the name.
 2. `context`: the lines of `render.context_lines(world, selection)`, word for word, joined
    by a newline: the window line (`Since your digest of 2026-10-16` or `First digest: the
    last 5 working days`), then the phase line when the world has a phase window on the
@@ -497,8 +496,9 @@ tokens below.
   needs to: `team_id` matches `T[A-Z0-9]+`; `workspace_url` matches
   `https://[a-z0-9-]+\.slack\.com`; each `channels` value and each message `channel`
   matches `C[A-Z0-9]+`; each message `ts` and `thread_ts` matches `[0-9]+\.[0-9]+`; each
-  file `permalink` matches `https://[a-z0-9-]+\.slack\.com/files/[A-Za-z0-9_.%/-]+`. A
-  value that does not match makes the map fail to load: `--seed-map` exits 1 with the
+  file `permalink` matches `https://[a-z0-9-]+\.slack\.com/files/[A-Za-z0-9_.%/-]+` and
+  starts with the map's `workspace_url` followed by `/files/`. A value that does not
+  match makes the map fail to load: `--seed-map` exits 1 with the
   field name only (the refusal of `docs/plans/m5-links.md`), before any Slack call.
 - No buttons, no overflow menus, no `actions` blocks, no accessories. A URL button still
   sends an interaction payload, and the bot has no handler.
@@ -581,67 +581,66 @@ def _demo_selections(day: int) -> tuple[World, list[Selection], dict[str, str]]:
 ## 13. Acceptance
 
 Each row is tested with hand-made selections, worlds, seed maps and `authors` unless it says
-otherwise. The decision tags (D1 to D14) name the decision of the v0.2 brief each row
-covers.
+otherwise. Each row names the plan sections it covers.
 
 - A1 (3). Block order of the top message with items, with and without a foot; the no-item
   form with `hidden = 0` (3 blocks) and `hidden > 0` (5 blocks); the header
   `<program> · <Day d Mon>`; the `context_lines` text word for word in block 1, with and without a phase line; no reply with no
   item.
-- A2 (3.1, D8). Each gate rule in turn, with a candidate for a later rule present; a past
+- A2 (3.1). Each gate rule in turn, with a candidate for a later rule present; a past
   gate is never picked; equal dates go to the lower id; `today`, `tomorrow`, `in N days`;
   the trailing ` (...)` is removed. Buffer clause: `No buffer days.` on a 0-buffer gate even
   with a checklist absence that has `buffer_consumed`; the largest `buffer_consumed` wins;
   nothing otherwise; never `buffer_days` alone.
-- A3 (3.2, D9). Each count template: 1 <= M <= 5, M > 5, M = 0 with K = 1, 2 and 3, A = 0;
+- A3 (3.2). Each count template: 1 <= M <= 5, M > 5, M = 0 with K = 1, 2 and 3, A = 0;
   T = 0 drops the `<more>` part; a first digest drops `<new>` in every form; the webhook
   words.
-- A4 (3.3, D9). The foot list with `Read first`; the hidden part alone, with the list, and
+- A4 (3.3). The foot list with `Read first`; the hidden part alone, with the list, and
   singular; `Next message:` in the webhook form; no foot and no divider when both parts are
   empty.
-- A5 (3.4, D9). Each notification form, with and without a gate; no doubled `.`; the cut
+- A5 (3.4). Each notification form, with and without a gate; no doubled `.`; the cut
   keeps the escaped text at or under 150 characters.
-- A6 (4.1, 4.2, D8). Top items are must-see only, at most 5; overflow opens the reply under
+- A6 (4.1, 4.2). Top items are must-see only, at most 5; overflow opens the reply under
   `Read first` with labels, in top order; an M = 0 day takes the K best scores in
   score order with selection-order ties; each top sort key decides one pair (section, gate
   date, an item with no gate last, `days_silent`, selection order); thread order.
-- A7 (4.3, D2). Rule (a) and rule (b) each fold; a risk with only a gate code in common in
+- A7 (4.3). Rule (a) and rule (b) each fold; a risk with only a gate code in common in
   the same thread does not fold; a shared non-gate code in another thread does not fold by
   rule (b); two asks in one thread stay apart; two absences stay apart; a risk that matches
   two absorbers goes to the first; the kept item is must-see when a member is; a folded ask
   of type ask takes its first member's title and keeps its own body; a folded ask absence
   keeps its own title and body; a folded checklist absence takes
   its best member's sentence; counts use the kept items.
-- A8 (5.1, D3). The ask message is the first entry by a known non-owner author; an entry
+- A8 (5.1). The ask message is the first entry by a known non-owner author; an entry
   whose key is not in `authors` is skipped; with no ask message, the body is the summary's
   first sentence, the link is the thread root, and no `Asked` or `You replied` tag shows.
   Title, body, link and tags all agree on the same entry.
-- A9 (5.2, D6). The checklist absence title and noun rule; each of the two ask-absence
+- A9 (5.2). The checklist absence title and noun rule; each of the two ask-absence
   titles; `1 working day`; `checked: #<channel> threads` on a checklist absence with and
   without a member.
-- A10 (5.3, D10). First-sentence split at `.`, `?`, `!` before whitespace or the end, not
+- A10 (5.3). First-sentence split at `.`, `?`, `!` before whitespace or the end, not
   inside `3.5` or `v1.2`; an empty summary; each cleanup rule, including the leading reader
   mention with its punctuation and an unknown id as `@someone`; each prefix; the 100 limit
   excludes the prefix.
-- A11 (5.4, D11). Each label row, including `Gate task` for an EM who does not own the gate,
+- A11 (5.4). Each label row, including `Gate task` for an EM who does not own the gate,
   each row-5 form and each section fallback; each owner case (one persona, two personas,
   reader, bot, unknown, `fyi`); `Owner: you` hidden under a label.
-- A12 (5.5, D11). At most 2 codes; owned first; gate, vendor, subsystem and build codes left
+- A12 (5.5). At most 2 codes; owned first; gate, vendor, subsystem and build codes left
   out; codes from members; repeats removed; a code in the cut title, body or label left
   out.
-- A13 (5.6, D4). `New` after P and not at P; `Asked <date>` for an ask to the reader;
+- A13 (5.6). `New` after P and not at P; `Asked <date>` for an ask to the reader;
   `Open since <date>`; no tag on an item first seen on `selection.day` in a first digest;
   `You replied` after `New` and after `Asked`, and not from an earlier reader message; no
   `New` in a first digest; no tag on an absence; no `Updated` tag ever.
-- A14 (6, D12). Target and label `Thread` or `Message` for a root, a reply and an ask
+- A14 (6). Target and label `Thread` or `Message` for a root, a reply and an ask
   message; a mapped reply's URL carries `thread_ts` and `cid`; an unmapped item has no link
   and prints `In <#C...>` or `In #<name>`; no world permalink ever; files from the item and
   its members in map order, repeats removed, 2 names then `+N files` and `+1 file`; no files
   without a seed map.
-- A15 (8, D1). One reply with its `text`; groups with headings and dividers; the cap packs
+- A15 (8). One reply with its `text`; groups with headings and dividers; the cap packs
   whole items, never leaves an empty heading, and ends with `<n> more items not shown`; no
   second reply.
-- A16 (9.1, D7). Word-boundary cut with `…` in the limit; a long word cut hard; the escape
+- A16 (9.1). Word-boundary cut with `…` in the limit; a long word cut hard; the escape
   after the cut (a `&` at the limit is never split); the 3000 bound on a long meta line; the
   header not escaped and cut to 150.
 - A17 (9.2, safety helper). On every message the rows above build, the helper checks: at
@@ -654,12 +653,12 @@ covers.
   without a map; in each mrkdwn text and in `text`, after the allowed tokens of 9.2 are
   removed, no `<`, no `>`, and `&` only in `&amp;`, `&lt;`, `&gt;`; no `<@` and no `<!`. The helper fails on each kind of broken payload: a cut link, unescaped text, an
   accessory, a long header, a link to another host.
-- A18 (11.2, D5). Webhook: per reader, the top message then the reply as a second send,
+- A18 (11.2). Webhook: per reader, the top message then the reply as a second send,
   with the webhook wording; nothing sent when a build fails; the second-message refusals.
-- A19 (11.1, D13). DM: the reply posts with `thread_ts` = the top message's `ts`, per
+- A19 (11.1). DM: the reply posts with `thread_ts` = the top message's `ts`, per
   reader; the refusal for a failed reply and for a missing `ts`, with `sent` 0 and
   `sent` > 0; no output holds the token.
-- A20 (12, D14). `_demo_selections` returns the authors of every evidence message;
+- A20 (12). `_demo_selections` returns the authors of every evidence message;
   `digest demo` output does not change.
 - A21 (real data). The day-6 demo selections, with a deterministic synthetic seed map
   built in the test from the replayed store (each evidence key mapped to channel = its world channel id, which
@@ -668,19 +667,22 @@ covers.
   check (A22). The comparison with the approved mocks in
   `notes/research/slack-layout/v6-*.json` is a manual check recorded in the PR (that folder
   is local scratch; the test builds from the store). Expected differences from v6: the
-  absence titles (D6), `checked: #<channel> threads` on each checklist absence, and Grace's
-  TST-THM-02 gate task linking its own thread (D12). Selection changes after the mocks
+  absence titles, `checked: #<channel> threads` on each checklist absence, and Grace's
+  TST-THM-02 gate task linking its own thread. Selection changes after the mocks
   (the ask audience of #74, and the new score order) change the reply block counts; the
   top messages keep their counts (10, 14 and 14 on 2026-10-13).
 - A23 (4.3, fold direction). An `fyi` ask in the thread of a `risks` line that shares a
   non-gate entity with it does not absorb it: the risk stays in `risks`, the ask stays in
   `fyi`. A `needs_you` ask in the same position still absorbs the risk.
-- A24 (2, header reader). `reader_in_header=False` (the default) gives today's header;
-  `True` adds ` · <first name> (<role text>)`; the 150 cut still holds. `digest post` and
-  `digest post --dm` each send headers that name their reader.
+- A24 (2, header reader). The header is `<program> · <Day d Mon> · <first name> (<role
+  text>)`; the 150 cut still holds. `digest post` and `digest post --dm` each send headers
+  that name their reader.
 - A25 (9.2, seed map). For each field of the 9.2 list, a map whose value does not match
   fails to load: `digest post --seed-map` exits 1, the output names the field, does not
-  hold the bad value, and no Slack call is made. A real-form map loads.
+  hold the bad value, and no Slack call is made. The bad values include a valid value
+  followed by `><!here>`, so the check must match the whole value. A file permalink of
+  another workspace (`https://other.slack.com/files/...` in a map for
+  `https://scratch.slack.com`) fails the same way. A real-form map loads.
 - A26 (12, authors). `digest post` and `digest post --dm`, with `_demo_selections`
   returning a non-empty authors map for an ask item, send the asker quote prefix and the
   `Asked of you` or `Your question` label that the authors decide.

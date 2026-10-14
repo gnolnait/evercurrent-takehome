@@ -90,8 +90,8 @@ def message_permalink(seed_map: SeedMap, key: str) -> str | None: ...
     # L1: the Slack permalink of a mapped world message, or None when the key is absent
 def channel_of(seed_map: SeedMap, key: str) -> str | None: ...
     # the Slack channel id of a mapped world message, or None when the key is absent
-def files_of(seed_map: SeedMap, key: str) -> list[tuple[str, str]]: ...
-    # (name, permalink) per file of a mapped world message, in map order; [] when none
+# files_of was removed by docs/plans/m5-layout.md v0.6: the layout reads the map's files
+# for all of an item's evidence keys in one map-order scan.
 ```
 
 `cli.py`: `post` gains `--seed-map`, loads the map with `SeedMap.load`, runs the checks
