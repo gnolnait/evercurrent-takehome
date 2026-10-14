@@ -479,24 +479,6 @@ def test_sc_role_change_pins_whole_diff(day6_store: Path, world: World, priors: 
         ),
         changed=(
             Change(
-                item_id=ask,
-                before=view(
-                    ask,
-                    "U0EM01 asked U0FW01; no reply for 3 working days",
-                    "not_happened",
-                    1,
-                    "importance=0.63 role_prior=0.9 personal_relevance=0.4",
-                ),
-                after=view(
-                    ask,
-                    "U0EM01 asked U0FW01; no reply for 3 working days",
-                    "not_happened",
-                    1,
-                    "importance=0.63 role_prior=1.0 personal_relevance=0.4",
-                ),
-                fields=("reason",),
-            ),
-            Change(
                 item_id=THERMAL,
                 before=view(
                     THERMAL,
@@ -535,6 +517,8 @@ def test_sc_role_change_pins_whole_diff(day6_store: Path, world: World, priors: 
         ),
     )
     assert state.diffs[1] == expected
+    assert ask not in item_ids(base.recorded[1])
+    assert ask not in item_ids(state.selections[1])
     assert "PO-45002211" in state.selections[1].profile.owned_entities
     assert state.diffs[0] == empty_diff("U0ME01")
     assert state.diffs[2] == empty_diff("U0EM01")
