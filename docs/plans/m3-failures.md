@@ -37,7 +37,8 @@ unchanged:
   The `LLMOutputError` docstring ("The backend answered") changes to cover a backend that
   did not answer. Effect on the CLI: `digest extract` prints the failed count and exits 0,
   as it does today for an HTTP status error, and the thread stays pending for the next
-  run; `digest demo` refuses a partial extraction. Today both crash with a traceback.
+  run. Today it crashes with a traceback. `digest demo` replays only, so it never
+  reaches the gateway.
 - F2. The room's refusal for a failed live call names the network as a cause: "the live
   model call failed (a network failure, an auth or rate-limit refusal, another HTTP error,
   or output that did not validate)". The comments in `Room` that list the failure set
