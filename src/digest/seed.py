@@ -237,8 +237,8 @@ def seed(
     `.slack-seed/<team_id>-<world>.json` in the working directory. See the plan for the
     checks before the first write (B1, B2, B10, B14), retries (B11) and pace (B13). A
     check that fails raises `SeedBlocked`; a dry run prints it as a blocker line instead.
-    A client error stops the run as it is. A run that stops before its first write writes
-    no new map file; after a write, the map keeps every acknowledged write (B9, B15).
+    A client error stops the run as it is. A run that stops before its first post or
+    upload writes no new map file; after a write, the map keeps every acknowledged write (B9, B15).
     """
     auth = _retry(client.auth_test, sleep)
     path = map_path or Path(".slack-seed") / f"{auth.team_id}-{world.name}.json"
@@ -261,9 +261,6 @@ def seed(
         raise SeedBlocked("; ".join(blockers))
     if path.exists() and not seed_map.complete:
         print(RESUME_LIMIT)
-    if _has_pending(posts, seed_map):
-        seed_map.complete = False
-        seed_map.save(path)
     written = False  # pace only after the first acknowledged write of the run (B13)
     posted = uploaded = 0
     used: set[str] = set()
@@ -275,6 +272,9 @@ def seed(
         if channel in to_join:
             _retry(partial(client.join, channel), sleep)
             to_join.discard(channel)
+        if not written:  # save the map just before the first post or upload of the run (B15)
+            seed_map.complete = False
+            seed_map.save(path)
         seed_map.channels[post.world_channel] = channel
         if post.key not in seed_map.messages:
             root = None if post.root_key == post.key else seed_map.messages[post.root_key].ts
@@ -387,15 +387,6 @@ def _changed_channels(world: World, slack_ids: Mapping[str, str], seed_map: Seed
         for channel in world.channels
         if channel.id in slack_ids and saved.get(channel.id, set()) - {slack_ids[channel.id]}
     ]
-
-
-def _has_pending(posts: Sequence[Post], seed_map: SeedMap) -> bool:
-    """Whether a post or an upload of `posts` is not in the map yet."""
-    return any(
-        post.key not in seed_map.messages
-        or any(f"{post.key}/{name}" not in seed_map.files for name in post.files)
-        for post in posts
-    )
 
 
 def _missing_roots(posts: Sequence[Post], seed_map: SeedMap) -> list[str]:
