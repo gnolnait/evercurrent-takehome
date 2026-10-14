@@ -118,8 +118,9 @@ def _page(state: RoomState, refusal: str | None) -> HTMLResponse:
     names = {persona.user_id: persona.name for persona in world.personas}
     tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
     # A persona user id in a diff title becomes the persona name (longest id first).
+    # The id must be a whole token: no letter, digit, underscore or hyphen on either side.
     alternatives = "|".join(re.escape(u) for u in sorted(names, key=len, reverse=True))
-    ids = re.compile(rf"\b(?:{alternatives})\b" if names else "(?!)")
+    ids = re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])" if names else "(?!)")
     readers = []
     for selection, diff, reworded, effect in zip(
         state.selections, state.diffs, state.reworded, state.last_effect, strict=True
