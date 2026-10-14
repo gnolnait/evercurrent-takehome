@@ -41,3 +41,6 @@ Thumbs.db
 
 # digest seed maps: one per Slack workspace
 .slack-seed/
+
+# The demo room's saved corpus copy (docs/plans/m3-room-edits.md)
+.room/
