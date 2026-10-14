@@ -15,7 +15,7 @@ from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.models import ts_micros
 from digest.priors import Priors
-from digest.project import ChecklistTask
+from digest.project import ChecklistTask, add_working_days
 from digest.store import Store
 from digest.world.schema import World
 
@@ -29,12 +29,12 @@ SECTION_TITLES: Mapping[Section, str] = {
 
 
 def render_digest(world: World, selection: Selection) -> str:
-    """The digest as plain text: a header, the window line, the sections, the hidden footer."""
+    """The digest as plain text: a header, the window and phase lines, the sections, the footer."""
     names = {persona.user_id: persona.name for persona in world.personas}
     tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
     profile = selection.profile
     header = f"Daily digest for {profile.name} ({profile.role}) - {selection.day.isoformat()}"
-    blocks = [f"{header}\n{window_line(selection)}"]
+    blocks = ["\n".join([header, *context_lines(world, selection)])]
     for section, title in SECTION_TITLES.items():
         lines = [line for line in selection.lines if line.section == section]
         if lines:
@@ -45,6 +45,36 @@ def render_digest(world: World, selection: Selection) -> str:
         noun = "item" if selection.hidden == 1 else "items"
         blocks.append(f"{selection.hidden} {noun} hidden by the visibility filter.")
     return "\n\n".join(blocks)
+
+
+def context_lines(world: World, selection: Selection) -> list[str]:
+    """The lines under the header: the window line, then the phase line when there is one."""
+    phase = phase_line(world, selection.day)
+    return [window_line(selection)] if phase is None else [window_line(selection), phase]
+
+
+def phase_line(world: World, day: date) -> str | None:
+    """The project phase on `day` and the next gate, or None before the first phase window.
+
+    The next gate is the gate with the earliest date at or after `day`, ties to the lowest id.
+    """
+    started = [window for window in world.project.phases if window.from_date <= day]
+    if not started:
+        return None
+    current = max(started, key=lambda window: window.from_date)
+    text = f"Phase: {current.phase} since {current.from_date.isoformat()}."
+    ahead = [gate for gate in world.project.gates if gate.date >= day]
+    if not ahead:
+        return text
+    gate = min(ahead, key=lambda gate: (gate.date, gate.id))
+    count, reached = 0, day
+    while reached < gate.date:
+        count += 1
+        reached = add_working_days(day, count)
+    noun = "working day" if count == 1 else "working days"
+    when = "today" if count == 0 else f"in {count} {noun}"
+    name = " ".join(gate.name.split())
+    return f"{text} Next gate: {gate.id} {name}, {when}."
 
 
 def window_line(selection: Selection) -> str:
@@ -131,13 +161,27 @@ def select_digest(
         )
         for item in items
     }
-    return select(world, profile, items, absences, priors, day, previous_digest, newest_evidence)
+    recent_start = datetime.combine(
+        add_working_days(day, -priors.daily.recent_activity.working_days), time.max, zone
+    )
+    recent_messages = store.authored_messages(profile.user_id, recent_start, as_of)
+    return select(
+        world,
+        profile,
+        items,
+        absences,
+        priors,
+        day,
+        previous_digest,
+        newest_evidence,
+        recent_messages,
+    )
 
 
-def _line(
+def line_parts(
     line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
-) -> str:
-    """One line, then its indented summary and source links.
+) -> tuple[str, str]:
+    """The line's heading and its one-line summary, without "- ", "[must see]" or sources.
 
     A checklist absence takes the task text and owner role from the world's checklist.
     """
@@ -146,26 +190,32 @@ def _line(
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
         owner = f" - owner {names.get(item.owner, item.owner)}" if item.owner else ""
-        head = f"- {_plain(item.title)}{entities}{owner}"
-        body = [f"  {_plain(item.summary)}"]
+        head = f"{_plain(item.title)}{entities}{owner}"
     elif detail.source == "checklist":
         task = tasks.get((detail.gate or "", detail.task or ""))
         what = f"{task.task} ({task.owner})" if task else detail.task
         head = (
-            f"- Not happened: {what} for {detail.gate} - "
+            f"Not happened: {what} for {detail.gate} - "
             f"{_days(detail.days_silent)} silent, "
             f"{detail.buffer_consumed}/{detail.buffer_days} buffer days used"
         )
-        body = [f"  {_plain(item.summary)}"]
     else:
         asker = names.get(detail.asker, detail.asker) if detail.asker else "someone"
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
-        head = f"- Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
-        body = [f"  {_plain(item.summary)}"]
+        head = f"Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
+    return head, _plain(item.summary)
+
+
+def _line(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> str:
+    """One line, then its indented summary and source links."""
+    heading, summary = line_parts(line, names, tasks)
+    head = f"- {heading}"
     if line.must_see:
         head += " [must see]"
-    sources = [f"  source: {entry.permalink}" for entry in item.evidence]
-    return "\n".join([head, *body, *sources])
+    sources = [f"  source: {entry.permalink}" for entry in line.item.evidence]
+    return "\n".join([head, f"  {summary}", *sources])
 
 
 def _days(count: int) -> str:

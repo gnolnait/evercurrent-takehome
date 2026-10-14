@@ -116,6 +116,7 @@ def test_blocks_plain_project_commit_on_main(repos):
         pytest.param("2>&1 git.exe commit -m update", id="after-leading-redirection"),
         pytest.param(">a >b git.exe commit -m update", id="after-chained-redirections"),
         pytest.param("FOO=1 >out git.exe commit -m update", id="after-env-and-redirection"),
+        pytest.param(">| /dev/null git.exe commit -m update", id="after-clobber-redirection"),
     ],
 )
 def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
@@ -125,6 +126,41 @@ def test_blocks_project_commit_on_main_by_any_git_name(cmd, repos):
 def test_allows_foreign_commit_by_full_git_path(repos):
     cmd = f'"/c/Program Files/Git/cmd/git.exe" -C {repos["sibling"]} commit -m update'
     assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param("git 2>/dev/null commit -m x", id="before-verb"),
+        pytest.param("git >out commit -m x", id="stdout-before-verb"),
+        pytest.param("git -C . 2>&1 commit -m x", id="after-option"),
+        pytest.param("git 2>&1 -C . commit -m x", id="before-option"),
+    ],
+)
+def test_blocks_commit_on_main_with_redirection_between_git_and_its_verb(cmd, repos):
+    """bash applies a redirection wherever it stands in the command, so `git
+    2>/dev/null commit` is still one git commit on main (2026-10-13)."""
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
+
+
+def test_allows_foreign_commit_with_redirection_before_its_verb(repos):
+    cmd = f"git -C {repos['sibling']} 2>/dev/null commit -m x"
+    assert _verdict(cmd, repos["project"]) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param("echo git switch -c feat && git commit -m x", id="echo"),
+        pytest.param("echo 2>&1 git switch -c feat && git commit -m x", id="echo-after-redirection"),
+        pytest.param("printf '%s' git checkout -b feat && git commit -m x", id="printf"),
+    ],
+)
+def test_switch_named_as_an_argument_does_not_unprotect(cmd, repos):
+    """Only a git that runs can switch the branch; `echo git switch ...` prints
+    words, so the commit after it still lands on main (2026-10-13, found by
+    running each command in a scratch repo and comparing with the guard)."""
+    assert _verdict(cmd, repos["project"]) == "BLOCK"
 
 
 def test_blocks_commit_on_main_after_redirection_inside_an_argument_list(repos):

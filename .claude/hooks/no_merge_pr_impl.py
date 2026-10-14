@@ -55,6 +55,8 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 # Bare words that may precede the real command word and should be skipped.
 WRAPPERS = {"sudo", "command", "env", "time", "nohup", "exec", "builtin",
             "then", "do", "else", "!", "doas", "setsid"}
+# These shell keywords run the command that follows them (`if gh pr merge`).
+WRAPPERS |= {"if", "elif", "while", "until", "coproc"}
 # Wrappers that may carry their own option flags and/or a numeric argument
 # (duration, niceness, cpu mask, parallelism) before the real command, e.g.
 # `timeout 5 gh ...`, `nice -n5 gh ...`, `stdbuf -oL gh ...`, `xargs -n1 gh ...`.
@@ -137,6 +139,9 @@ def command_word_and_tokens(seg):
     while toks:
         t = toks[0]
         base = t.rsplit("/", 1)[-1]
+        # `time -p` (POSIX output format) still runs the word after -p.
+        if base == "time" and toks[1:2] == ["-p"]:
+            toks.pop(1)
         if base in WRAPPERS or ENV_ASSIGN.match(t):
             toks.pop(0)
             continue

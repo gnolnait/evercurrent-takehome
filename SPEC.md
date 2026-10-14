@@ -1,6 +1,6 @@
 # SPEC: role- and phase-aware daily Slack digest
 
-Status: v0.4.3, 2026-10-12. This is the contract the tests are written against. Change it by
+Status: v0.4.4, 2026-10-13. This is the contract the tests are written against. Change it by
 editing this file first, then the tests, then the code. v0.2 added the belief ledger,
 absence detection, decision landing map and world-first simulator on top of the v0.1
 baseline pipeline. v0.3 adds, after the design review: bot personas for systems of
@@ -16,7 +16,9 @@ term, adds a `window_recency` term for windows longer than 36 hours, and makes
 the ranked-lane tie-break deterministic. v0.4.3 closes gaps that a contract review
 found: visibility of merged items, open items older than the window, role and person
 ownership, asks and task links in the domain model, the `spec_param` key, neutral and
-bounded score terms, the ablation rule, and the MCP tool budget and access.
+bounded score terms, the ablation rule, and the MCP tool budget and access. v0.4.4 adds
+the interaction model (D27): when the system informs, asks and drafts; the `it happened`
+action on absence lines; the wording of an absence line; and absence source (h).
 
 ## 1. Problem
 
@@ -67,7 +69,16 @@ In scope
   stale beliefs and absences.
 - Decision landing map across roles.
 - Feedback loop: thumbs up/down, "more like this", mute topic, and the `needs_you`
-  actions done, snooze, not mine, and confirm on a contradiction line; profile updates.
+  actions done, snooze, not mine, and confirm on a contradiction line; `it happened` on
+  an absence line; profile updates.
+- Interaction model (D27). The digest informs: each line is a cited claim, and each
+  action on it records a feedback event in the store. v1 asks no question and takes no
+  action on project work: it sends digests, and real-time alerts when the user enables
+  them (step 9). Later surfaces follow three rules. The system asks at most one open
+  question per user, answerable with a button, and only about its own uncertainty ("did
+  this happen?", "is this yours?"). An action on project work (a reply in a project
+  thread, a nudge, a ticket edit) is a draft that the user edits and sends. A line type
+  gets a draft action only when its labelled false rate passes the gate in D27.
 - World-first simulator: scripted ground truth, including bot personas for the systems
   of record, rendered into noisy Slack by a different model family; golden labels
   derived from the script.
@@ -102,7 +113,8 @@ In scope
 - One-command demo on the bundled corpus with no API key (LLM cassettes).
 
 Out of scope for v1 (tracked in `docs/later.md`)
-- Interactive Q&A agent in Slack, "asks back" questions, Linear, PLM or org-chart
+- Interactive Q&A agent in Slack, "asks back" questions, drafted replies and ticket
+  edits (their order and gates are in D27), Linear, PLM or org-chart
   connectors beyond the event envelope, multi-workspace, point-in-time history of
   edited messages, formal verification of the ledger.
 
@@ -148,7 +160,7 @@ channel_id, message_ts}], ask_message, absence}`
   `absence` field below.
 - `absence` is set exactly when the type is absence: `{source, gate, task, asker,
   days_silent, buffer_consumed, buffer_days}`, with days in working days. `source` is
-  checklist or ask in core; each stretch absence rule (section 5 step 5, c to g) adds
+  checklist or ask in core; each stretch absence rule (section 5 step 5, c to h) adds
   its own source value and fields when it is built.
 - status: open | resolved | superseded; `resolved_by` is the item or message that closed
   it, so a reader told while it was open can be shown the closing evidence
@@ -304,9 +316,10 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    item citing that last evidence. Task links are read from every item, whatever its
    status. A task is open until an item carries a `done` link to it. Its last evidence is
    the newest `tasks` link to it; with no link, it is the earliest claim on the task's
-   gate (the gate anchor); with neither, nothing is emitted. (b) An open ask
+   gate (the gate anchor); with neither, nothing is emitted. It is an absence for the
+   readers in the task's owner role and for the EM, who runs the gate. (b) An open ask
    addressed to a person with no reply from them after a cadence is an absence for the
-   asker and the owner, citing the ask. A reply is any message by the person asked, not
+   asker and the owner only, citing the ask. A reply is any message by the person asked, not
    deleted, later in the same thread than the ask message; the cadence is
    `absence.ask_reply_cadence_days` in `config/priors.yaml`. (c, stretch) A promise with an owner and a due date
    (an item with `owner` and `due`) whose due date passes with no later evidence from
@@ -316,9 +329,19 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    of the entities it names, else for the EM, citing the blocker. (f, stretch) Evidence for a checklist task that predates a revision change of the
    task's own entity makes the task an absence again ("passed on Rev B; Rev C since day
    9; no evidence on Rev C"). (g, stretch) A scoped claim whose scope has ended while the old value is still in use is
-   an absence for the key's owner, citing the deviation. The window before a gate in which
+   an absence for the key's owner, citing the deviation. (h, stretch) It needs a
+   `builders` map in `config/project.yaml` from a part to the external channel that
+   builds it. When a buildable document for such a part is released at a new revision,
+   an absence holds at `as_of` in two cases: `absence.release_post_cadence_days` have
+   passed since the release and no message in that channel cites the new revision yet;
+   or `absence.builder_reply_cadence_days` have passed since the first message that cites
+   it and that message has no reply yet in its thread from anyone but its author. A late
+   post or a late reply clears the absence. It is an absence for the
+   document's owner, and its key is the part and the revision. The first case cites the
+   release; the second cites the unanswered message, so it is a new episode (step 8). The
+   window before a gate in which
    an absence can fire scales with the task's priority, and an absence that persists
-   across days rises in rank and states how many days it has been silent. Never emit an
+   across days states how many days it has been silent. Never emit an
    absence without a citation.
 6. Rank per user: must-see lane (rule-based, never ranked away: asks addressed to the
    user, blockers on owned entities, schedule changes to owned gates, stale beliefs on
@@ -329,7 +352,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    external channel for the document's owner, and an action taken against a superseded
    value: a PO, tooling PO, release or build start whose claim names a value the ledger
    had already superseded at its `asserted_ts`, for the actor and the key's owner, with
-   what the actor had last been told). Before either lane, a reader sees an item only through evidence from a channel they
+   what the actor had last been told; and an absence for each reader its source names in
+   step 5, such as the asker and the owner of an ask absence). An absence reaches no other
+   reader and never enters the ranked lane. Before either lane, a reader sees an item only through evidence from a channel they
    can see (public, or private with the reader a member); the check fails closed, and an
    access drop is recorded per impression so "why not shown" can name it. Each reader
    has a ledger view: the ledger rules of section 4 (authority, supersession, pending,
@@ -340,14 +365,18 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    lines are never cut by a section cap; the caps bound the ranked lane. Ranked lane:
    `score = importance * role_phase_prior * personal_relevance * decision_exposure *
    dependency_distance * sender_affinity * novelty * urgency`, each term stored per
-   impression. Every term is 1 when the project or the profile does not supply its input
+   impression. `personal_relevance` is 1.0 for an owned entity, 0.8 for the reader's role,
+   else 0.4. An item at 0.4 that shares an entity with the reader's recent activity gets
+   `daily.recent_activity.relevance` (default 0.8, never above the role level). Recent
+   activity is the entities of current items whose visible evidence cites one of the
+   reader's messages from the last `daily.recent_activity.working_days` working days
+   (default 3). It is a step window over the reader's own messages, not the decayed
+   interest of section 2, and with no recent messages it changes nothing. Every term is 1 when the project or the profile does not supply its input
    (no `depends_on` edges, no watch prompts) and stays within a band above zero, set per
    term in `config/priors.yaml`, so no single input takes a score to zero. Must-see rules
    run over all open items. A ranked-lane candidate is an item whose newest evidence
    falls in the digest window (step 9), or, whatever the age of its evidence, an open
-   blocker, unanswered ask (in v1, the ask absence of step 5 once the reply cadence
-   passes; an ask made of the reader is must-see), absence, stale belief, open
-   contradiction, item with a
+   blocker, stale belief, open contradiction, item with a
    `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
    been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an
@@ -360,9 +389,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    `conditions`, is not compared with it. An item not in `seen` is also 1 when it has no
    compared claim or carries a current claim that is not compared. For any item in `seen`, it is also 1 when its
    `last_updated` is later than its `seen` time. Otherwise it is a floor (default 0.3). Novelty is held at 1 for
-   absences, open blockers, unanswered asks, stale-belief items, open contradictions and
-   items that carry a `pending` claim, because these stay true until someone acts and
-   their rank rises with age (section 5 step 5). Stretch term
+   open blockers, stale-belief items, open contradictions and items that carry a
+   `pending` claim, because these stay true until someone acts and their rank rises with
+   age. Absences are must-see for their audience and are not ranked (step 6). Stretch term
    `last_to_know`: rises when every other reader in the fact's audience has been exposed
    to it and this reader has not. Stretch term `window_recency`: when the window (from
    its start, step 9, to `as_of`) is longer than 36 hours, the term falls linearly with
@@ -392,7 +421,12 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    entity does not fill a section; items that differ in a discriminating field (rev,
    qty, date, status, owner) are exempt from the penalty. Each line: fact, specific id and rev, buffer
    or deadline math, consequence, owner, source link, and a history label when the item
-   is not new (ongoing N days, escalated from risk to blocker, resurfaced). The
+   is not new (ongoing N days, escalated from risk to blocker, resurfaced). An absence
+   line states what was not found and where the system looked (no reply from the person
+   asked in the thread since the ask), and never states that the event did not happen;
+   the rule applies to the line body, and the section key and title `not_happened`
+   stay. Target, 2026-10-13: today the terminal and Slack lines start with "Not
+   happened:"; the reword is step 1 of the Interaction section in `docs/later.md`. The
    consequence clause comes from a template table per role and item type; the fact,
    ids, values and link are identical for every reader. An item the reader was shown
    while open and that has since resolved appears once more with its closing evidence,
@@ -401,7 +435,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    see the closing evidence.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
-   with nothing to say sends one line that says so. Rationale on demand.
+   with nothing to say sends one line that says so. Rationale on demand. Under the
+   header, the digest names its window (step 9) and the project phase with the next gate
+   and how many working days away it is (step 4); the gate date is the configured one.
 8. Feedback: button, web or CLI feedback updates the profile, records exposure, and is
    logged with run_id, item_id and the profile version in force (a counter that every
    profile edit increments). Feedback is an event
@@ -412,7 +448,16 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    exposure for that reader only; on a checklist absence it records exposure only,
    section 4), snooze until a date, not mine (reader removed from the
    audience), and, on a contradiction line, confirm (the owner picks a value, which
-   writes an `owner_stated` claim).
+   writes an `owner_stated` claim). An ask absence in `needs_you` carries `it happened`
+   in place of done. Absence lines carry `it happened`, with an optional
+   permalink to the evidence. The click records two things. A dated feedback event,
+   keyed by the absence's own key (D26) and the day shown, is a candidate false-alarm
+   label for the evaluation (D27). A suppression hides that absence episode from the
+   reader's later digests until the reader undoes it. An episode is the absence's source,
+   its task, ask or (for source h) part and revision, and the last evidence it cites, so
+   new evidence followed by a new silence is a new episode and shows again. The click
+   does not change a task's state, the ledger or another reader's digest; a linked
+   message becomes evidence only when extraction reads it on a later run.
 9. Delivery: a two-tier policy. Items in the must-see lane whose urgency crosses the
    interrupt threshold (a blocker on an owned entity, an ask with a same-day due) may be
    sent in real time when the user has enabled it; everything else waits for the digest
@@ -603,7 +648,7 @@ reads it is built.
   `kind`, `conditions` and `scope`, channel `external`, document revision histories); field-level verification; loud-noise negatives; the `ticket`
   reaction rule; the tracker bot persona.
 - M3. Core: the visibility filter; the feedback event log. Stretch: the certainty, kind
-  and conditions rules; `depends_on` edges with fan-out; absence sources (d), (f) and (g); stale-reference items; the action-time
+  and conditions rules; `depends_on` edges with fan-out; absence sources (d), (f), (g) and (h); stale-reference items; the action-time
   audit; scoped claims; the external-channel stale-reference rule; ledger values in the
   extraction prompt; decision exposure; contradiction routing with the confirm action;
   the per-subsystem phase override; history labels; resolved-since lines; per-role

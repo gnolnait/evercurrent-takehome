@@ -321,6 +321,13 @@ def test_blocks_control_flow_prefixed_bypass():
     assert _verdict("! git commit --no-verify -m x") == "BLOCK"
     assert _verdict("{ git commit --no-verify -m x; }") == "BLOCK"
     assert _verdict("until git commit --no-verify -m x; do sleep 1; done") == "BLOCK"
+    assert _verdict("while git commit --no-verify -m x; do sleep 1; done") == "BLOCK"
+    assert _verdict("if false; then :; elif git commit --no-verify -m x; then :; fi") == "BLOCK"
+
+
+def test_blocks_coproc_prefixed_bypass():
+    """`coproc` runs the command that follows it."""
+    assert _verdict("coproc git commit --no-verify -m x") == "BLOCK"
 
 
 def test_blocks_real_command_on_heredoc_opener_line():

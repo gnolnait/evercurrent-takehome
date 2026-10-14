@@ -1,8 +1,9 @@
 """Choose a reader's lines: the visibility filter, the must-see lane and the ranked lane (plan B5.2 to B5.5).
 
 The ranked lane takes items whose newest evidence is in the digest window, plus open blockers
-and ask absences of any age (SPEC section 5 steps 6 and 9). When the digest shows an ask
-absence line, the line of the ask its id names is left out.
+of any age (SPEC section 5 steps 6 and 9). An absence reaches only the readers its must-see
+rule names and never enters the ranked lane. When the digest shows an ask absence line, the
+line of the ask its id names is left out.
 """
 
 from __future__ import annotations
@@ -85,12 +86,15 @@ def select(
     day: date,
     previous_digest: date | None,
     newest_evidence: Mapping[str, int],
+    recent_messages: frozenset[tuple[str, str]],
 ) -> Selection:
     """Choose the reader's lines for the day. Items must be open and updated by the end of the day.
 
     `newest_evidence` maps an item id to its newest evidence in microseconds since the epoch.
-    An absence, or an item not in the map, uses its `last_updated`. A checklist absence that
-    is not must-see for the reader is left out. It is not counted in `hidden`.
+    An absence, or an item not in the map, uses its `last_updated`. An absence that is not
+    must-see for the reader is left out. It is not counted in `hidden`. `recent_messages`
+    holds (channel_id, ts) of the reader's recent messages; the entities of each current item
+    whose visible evidence cites one lift the relevance of ranked items that share them.
     """
     zone = ZoneInfo(world.timezone)
     end = micros_since_epoch(datetime.combine(day, time.max, zone))
@@ -102,6 +106,13 @@ def select(
         item for item in items if item.status == "open" and ts_micros(item.last_updated) <= end
     ]
     gates = {gate.id for gate in world.project.gates}
+    active: set[str] = set()  # entities of the reader's recent activity, from visible evidence
+    for item in current:
+        trimmed = _visible(world, profile, item)
+        if trimmed is not None and any(
+            (entry.channel_id, entry.message_ts) in recent_messages for entry in trimmed.evidence
+        ):
+            active.update(trimmed.entities)
     hidden = 0
     must_see: dict[Section, list[Line]] = {section: [] for section in SECTION_CAPS}
     ranked: dict[Section, list[Line]] = {section: [] for section in SECTION_CAPS}
@@ -116,13 +127,12 @@ def select(
             line = Line(item=trimmed, section=section, must_see=True, reason=rule, score=0)
             must_see[section].append(line)
             continue
-        if _is_checklist_absence(trimmed):
-            continue  # a checklist absence never enters the ranked lane (plan B5.5)
+        if trimmed.absence is not None:
+            continue  # an absence never enters the ranked lane (SPEC section 5 step 6)
         newest = newest_evidence.get(item.item_id, ts_micros(item.last_updated))
-        aged = trimmed.type == "blocker" or _cited_ask(trimmed) is not None
-        if not (aged or start < newest <= end):
+        if not (trimmed.type == "blocker" or start < newest <= end):
             continue
-        line = _ranked_line(trimmed, section, profile, priors)
+        line = _ranked_line(trimmed, section, profile, priors, active)
         if line.score >= priors.daily.min_score:
             ranked[section].append(line)
     lines: list[Line] = []
@@ -142,11 +152,6 @@ def select(
         previous_digest=previous_digest,
         first_working_days=window.first_working_days,
     )
-
-
-def _is_checklist_absence(item: Item) -> bool:
-    """True when the item is a checklist absence."""
-    return item.absence is not None and item.absence.source == "checklist"
 
 
 def _cited_ask(item: Item) -> str | None:
@@ -180,7 +185,8 @@ def _section_of(item: Item, profile: Profile) -> Section:
     """The item's section (plan B5.5).
 
     An ask and an ask absence go to needs_you only when the reader is the person asked (the
-    item's `owner`). Any other ask goes to fyi. Any other ask absence goes to not_happened.
+    item's `owner`). Any other ask goes to fyi. An ask absence reaches only its asker
+    otherwise, in not_happened.
     """
     asked = item.type == "ask" or (item.absence is not None and item.absence.source == "ask")
     if asked and item.owner == profile.user_id:
@@ -227,8 +233,14 @@ def _must_see_rule(item: Item, profile: Profile, gates: set[str]) -> str | None:
     return None
 
 
-def _ranked_line(item: Item, section: Section, profile: Profile, priors: Priors) -> Line:
-    """Score the item as importance * role_prior * personal_relevance (plan B5.4)."""
+def _ranked_line(
+    item: Item, section: Section, profile: Profile, priors: Priors, active: set[str]
+) -> Line:
+    """Score the item as importance * role_prior * personal_relevance (plan B5.4).
+
+    An item that is neither owned nor in the reader's role gets the recent-activity relevance
+    when it shares an entity with `active`.
+    """
     importance = TYPE_WEIGHTS[item.type] * SEVERITY_WEIGHTS[item.severity]
     role_prior = priors.daily.role_priors.get(profile.role, {}).get(item.type, DEFAULT_ROLE_PRIOR)
     if set(item.entities) & set(profile.owned_entities):
@@ -237,9 +249,13 @@ def _ranked_line(item: Item, section: Section, profile: Profile, priors: Priors)
         relevance = 0.8
     else:
         relevance = 0.4
+    shared = sorted(set(item.entities) & active) if relevance == 0.4 else []
+    if shared:
+        relevance = priors.daily.recent_activity.relevance
+    lift = f" (recent activity: {', '.join(shared)})" if shared else ""
     reason = (
         f"importance={round(importance, 3)} role_prior={round(role_prior, 3)} "
-        f"personal_relevance={relevance}"
+        f"personal_relevance={relevance}{lift}"
     )
     score = importance * role_prior * relevance
     return Line(item=item, section=section, must_see=False, reason=reason, score=score)

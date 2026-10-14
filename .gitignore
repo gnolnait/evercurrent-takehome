@@ -38,3 +38,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# digest seed maps: one per Slack workspace
+.slack-seed/

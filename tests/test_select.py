@@ -227,6 +227,7 @@ def choose(
     day: date = DAY,
     previous_digest: date | None = None,
     newest_evidence: Mapping[str, int] | None = None,
+    recent_messages: frozenset[tuple[str, str]] = frozenset(),
 ) -> Selection:
     return select(
         world(),
@@ -237,6 +238,7 @@ def choose(
         day,
         previous_digest=previous_digest,
         newest_evidence=newest_evidence if newest_evidence is not None else {},
+        recent_messages=recent_messages,
     )
 
 
@@ -425,6 +427,8 @@ def test_checklist_absence_reaches_only_task_role_and_em(
     selection = choose(absences=[missing], profile=profile, table=table)
 
     assert tuple((line.item.item_id, line.must_see) for line in selection.lines) == expected
+    assert all(line.section == "not_happened" for line in selection.lines)
+    assert selection.hidden == 0
 
 
 def test_role_owned_entity_makes_blocker_must_see_when_persona_omits_it() -> None:
@@ -459,14 +463,17 @@ def test_role_owned_entity_makes_blocker_must_see_when_persona_omits_it() -> Non
     ],
     ids=["blocker-not-owned", "gate-not-owned", "owned-part-not-gate", "ask-third-party"],
 )
-def test_items_outside_must_see_rules_are_ranked(row: Item, profile: Profile) -> None:
+def test_items_outside_must_see_rules_rank_only_non_absences(row: Item, profile: Profile) -> None:
     selection = choose(
         absences=[row] if row.type == "absence" else [],
         items=[] if row.type == "absence" else [row],
         profile=profile,
     )
 
-    assert selection.lines[0].must_see is False
+    if row.type == "absence":
+        assert selection.lines == ()
+    else:
+        assert selection.lines[0].must_see is False
 
 
 def test_must_see_line_is_kept_above_section_cap() -> None:
@@ -564,9 +571,12 @@ def test_ranked_score_uses_type_and_severity_weights(
         table=priors(role_priors={"ME": {}}),
     )
 
-    line = selection.lines[0]
-    importance = type_weight * severity_weight
-    assert line.score == pytest.approx(importance * 0.5 * 0.4)
+    if item_type == "absence":
+        assert selection.lines == ()
+    else:
+        line = selection.lines[0]
+        importance = type_weight * severity_weight
+        assert line.score == pytest.approx(importance * 0.5 * 0.4)
 
 
 def test_ranked_score_uses_default_role_prior() -> None:
@@ -693,40 +703,179 @@ def test_ask_in_another_thread_keeps_line_beside_absence() -> None:
     ]
 
 
-def test_ask_absence_for_asker_goes_to_not_happened() -> None:
+@pytest.mark.parametrize(
+    ("user_id", "section", "reason"),
+    [
+        ("UASKER", "not_happened", "must see: an ask absence, you asked"),
+        ("UEMPTY", "needs_you", "must see: an ask absence, you were asked"),
+    ],
+    ids=["asker", "asked"],
+)
+def test_ask_absence_reaches_named_readers_as_must_see(
+    user_id: str, section: str, reason: str
+) -> None:
+    """AA2: both named readers keep the absence above the score threshold."""
     ask = item("ask", type="ask", owner="UEMPTY")
     missing = absence(
         f"absence:ask:{ask.item_id}",
         source="ask",
-        asker="UREADER",
+        asker="UASKER",
         owner="UEMPTY",
         affected_roles=(),
     ).model_copy(update={"thread_id": ask.thread_id})
 
-    selection = choose([ask], [missing])
+    selection = choose(
+        [ask], [missing], profile=profile_for(world(), user_id), table=priors(min_score=1.1)
+    )
 
     assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("absence:ask:ask", "not_happened")
+        ("absence:ask:ask", section)
     ]
+    assert selection.lines[0].must_see is True
+    assert selection.lines[0].score == 0
+    assert selection.lines[0].reason == reason
+    assert selection.hidden == 0
 
 
-def test_ranked_ask_absence_replaces_ask_without_fyi_copy_for_third_party_reader() -> None:
-    ask = item("ask", type="ask", owner="UREADER")
+@pytest.mark.parametrize("in_window", [True, False], ids=["in-window", "before-window"])
+def test_third_reader_keeps_only_ask_in_window(in_window: bool) -> None:
+    """AA4: an absence outside the audience cannot replace the cited ask."""
+    previous = date(2026, 10, 13)
+    boundary = datetime.combine(previous, time.max, ZoneInfo(world().timezone))
+    stamp = slack_ts(boundary + timedelta(hours=1 if in_window else -1))
+    cited = evidence("CPUBLIC").model_copy(update={"message_ts": stamp})
+    ask = item(
+        "ask",
+        type="ask",
+        owner="UREADER",
+        evidence=(cited,),
+        first_seen=stamp,
+        last_updated=stamp,
+    )
     missing = absence(
         f"absence:ask:{ask.item_id}",
         source="ask",
         asker="UASKER",
         owner="UREADER",
         affected_roles=(),
-    ).model_copy(update={"thread_id": ask.thread_id})
+    ).model_copy(
+        update={
+            "thread_id": ask.thread_id,
+            "evidence": (cited,),
+            "first_seen": stamp,
+            "last_updated": stamp,
+        }
+    )
+    profile = profile_for(world(), "UEMPTY")
+    table = priors(role_priors={"FW": {"ask": 1.0, "absence": 1.0}}, min_score=0.1)
+    assert can_see(world(), profile, "CPUBLIC")
+    assert table.daily.min_score < 0.6 * 0.7 * 0.4
+    assert table.daily.min_score < 0.9 * 0.7 * 0.4
+    assert SECTION_CAPS["fyi"] > 1 and SECTION_CAPS["not_happened"] > 1
 
-    selection = choose([ask], [missing], profile=profile_for(world(), "UEMPTY"))
+    selection = choose(
+        [ask],
+        [missing],
+        profile=profile,
+        table=table,
+        previous_digest=previous,
+        newest_evidence={ask.item_id: ts_micros(stamp), missing.item_id: ts_micros(stamp)},
+    )
 
-    assert [(line.item.item_id, line.section) for line in selection.lines] == [
-        ("absence:ask:ask", "not_happened")
+    assert [(line.item.item_id, line.section) for line in selection.lines] == (
+        [("ask", "fyi")] if in_window else []
+    )
+    assert all(line.section != "not_happened" for line in selection.lines)
+    assert all(line.must_see is False for line in selection.lines)
+    assert selection.hidden == 0
+
+
+@pytest.mark.parametrize("in_window", [True, False], ids=["in-window", "before-window"])
+@pytest.mark.parametrize(
+    ("role", "owned_entities", "affected_roles"),
+    [("EM", (), ()), ("ME", (), ("ME",)), ("ME", ("PN-OTHER",), ())],
+    ids=["em", "affected-role", "entity-owner"],
+)
+def test_ask_absence_excludes_third_reader_but_reaches_asker(
+    role: Role,
+    owned_entities: tuple[str, ...],
+    affected_roles: tuple[Role, ...],
+    in_window: bool,
+) -> None:
+    """AA1: role and entity ownership do not extend the ask audience."""
+    previous = date(2026, 10, 13)
+    boundary = datetime.combine(previous, time.max, ZoneInfo(world().timezone))
+    stamp = slack_ts(boundary + timedelta(hours=1 if in_window else -1))
+    missing = absence(
+        "absence:ask:audience",
+        source="ask",
+        asker="UASKER",
+        owner="UEMPTY",
+        affected_roles=affected_roles,
+    ).model_copy(
+        update={
+            "first_seen": stamp,
+            "last_updated": stamp,
+            "evidence": (evidence("CPUBLIC").model_copy(update={"message_ts": stamp}),),
+        }
+    )
+    profile = reader(owned_entities=owned_entities).model_copy(update={"role": role})
+    table = priors(role_priors={role: {"absence": 1.0}}, min_score=0.1)
+    assert can_see(world(), profile, missing.evidence[0].channel_id)
+    assert table.daily.min_score < 0.9 * 0.7 * 0.4
+    assert SECTION_CAPS["not_happened"] > 1
+    newest = {missing.item_id: ts_micros(stamp)}
+
+    paired = choose(
+        absences=[missing],
+        profile=profile_for(world(), "UASKER"),
+        table=table,
+        previous_digest=previous,
+        newest_evidence=newest,
+    )
+    assert [(line.item.item_id, line.section, line.must_see) for line in paired.lines] == [
+        (missing.item_id, "not_happened", True)
     ]
-    assert all(line.section != "fyi" for line in selection.lines)
-    assert selection.lines[0].must_see is False
+    assert paired.hidden == 0
+
+    selection = choose(
+        absences=[missing],
+        profile=profile,
+        table=table,
+        previous_digest=previous,
+        newest_evidence=newest,
+    )
+    assert selection.hidden == 0
+    assert selection.lines == ()
+
+
+@pytest.mark.parametrize(
+    ("channel", "named_reader", "hidden"),
+    [
+        ("CPUBLIC", "neither", 0),
+        ("CHIDDEN", "neither", 1),
+        ("CHIDDEN", "asker", 1),
+        ("CHIDDEN", "asked", 1),
+    ],
+    ids=["visible-third-reader", "hidden-third-reader", "hidden-asker", "hidden-asked"],
+)
+def test_ask_absence_visibility_precedes_audience(
+    channel: str, named_reader: str, hidden: int
+) -> None:
+    """AA3: only the visibility filter increases the hidden count."""
+    missing = absence(
+        "absence:ask:visibility",
+        source="ask",
+        channel_ids=(channel,),
+        asker="UREADER" if named_reader == "asker" else "UASKER",
+        owner="UREADER" if named_reader == "asked" else "UEMPTY",
+        affected_roles=(),
+    )
+
+    selection = choose(absences=[missing], table=priors(min_score=0.01))
+
+    assert selection.hidden == hidden
+    assert selection.lines == ()
 
 
 def test_ranked_ask_stays_when_ask_absence_is_below_minimum_score() -> None:
@@ -836,7 +985,6 @@ def test_each_section_caps_only_ranked_lines() -> None:
 
     assert counts == {
         "needs_you": 7,
-        "not_happened": 3,
         "decisions": 5,
         "risks": 6,
         "fyi": 5,
@@ -952,7 +1100,7 @@ def test_window_uses_newest_evidence_after_previous_day_end(
 
 @pytest.mark.parametrize("kind", ["blocker", "ask", "ask-absence", "checklist-absence", "decision"])
 def test_window_keeps_only_open_ranked_exceptions(kind: str) -> None:
-    """W3: only old blockers and ask absences remain ranked candidates."""
+    """W3: only old blockers remain ranked candidates."""
     old = slack_ts(datetime(2026, 9, 1, tzinfo=UTC))
     row = (
         absence(
@@ -973,7 +1121,7 @@ def test_window_keeps_only_open_ranked_exceptions(kind: str) -> None:
     )
 
     assert [(line.item.item_id, line.must_see) for line in selected.lines] == (
-        [("old", False)] if kind in {"blocker", "ask-absence"} else []
+        [("old", False)] if kind == "blocker" else []
     )
 
 
@@ -1143,3 +1291,156 @@ def test_ranked_ties_use_newest_event_time(edited_first: bool) -> None:
     assert all(not line.must_see for line in selected.lines)
     assert selected.lines[0].score == selected.lines[1].score
     assert [line.item.item_id for line in selected.lines] == [edited.item_id, newer.item_id]
+
+
+@pytest.mark.parametrize("relevance", [0.6, 0.8])
+@pytest.mark.parametrize("source_first", [False, True])
+def test_ra1_shared_entities_lift_with_configured_reason(
+    relevance: float, source_first: bool
+) -> None:
+    data = priors().model_dump()
+    data["daily"]["recent_activity"] = {"working_days": 3, "relevance": relevance}
+    table = Priors.model_validate(data)
+    source = item("source", entities=("Z", "A", "SOURCE-ONLY"))
+    target = item("target", entities=("Z", "TARGET-ONLY", "A"), evidence=(evidence("CPUBLIC", 9),))
+    rows = [source, target] if source_first else [target, source]
+    for messages, expected, suffix in [
+        (frozenset(), 0.4, ""),
+        (frozenset({("CPUBLIC", BASE_TS)}), relevance, " (recent activity: A, Z)"),
+    ]:
+        lines = choose(rows, table=table, recent_messages=messages).lines
+        line = next(line for line in lines if line.item.item_id == "target")
+        assert line.score == pytest.approx(0.9 * 0.7 * 0.5 * expected)
+        assert line.reason == (
+            f"importance=0.63 role_prior=0.5 personal_relevance={expected}{suffix}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("entities", "roles", "relevance"),
+    [(("PN-OWNED",), (), 1.0), (("PN-OTHER",), ("ME",), 0.8)],
+    ids=["owned", "affected-role"],
+)
+def test_ra2_owned_and_role_relevance_is_preserved(
+    entities: tuple[str, ...], roles: tuple[Role, ...], relevance: float
+) -> None:
+    row = item("target", entities=entities, affected_roles=roles)
+    before = choose([row]).lines
+    after = choose([row], recent_messages=frozenset({("CPUBLIC", BASE_TS)})).lines
+    assert len(after) == 1
+    assert after == before
+    assert after[0].score == pytest.approx(0.63 * 0.5 * relevance)
+    assert after[0].reason == f"importance=0.63 role_prior=0.5 personal_relevance={relevance}"
+
+
+def test_ra3_item_without_entities_gets_no_lift() -> None:
+    for entities, expected in [((), 0.4), (("PN-OTHER",), 0.8)]:
+        row = item("target", entities=entities)
+        line = choose([row], recent_messages=frozenset({("CPUBLIC", BASE_TS)})).lines[0]
+        assert line.score == pytest.approx(0.63 * 0.5 * expected)
+        assert ("recent activity:" in line.reason) is bool(entities)
+
+
+@pytest.mark.parametrize("case", ["hidden", "mixed", "wrong-channel", "resolved", "future"])
+def test_ra4_ra5_excluded_source_pairs_with_qualifying_source(case: str) -> None:
+    source = item("source")
+    if case == "hidden":
+        source = item("source", channel_ids=("CHIDDEN",))
+    elif case == "mixed":
+        source = item("source", channel_ids=("CPUBLIC", "CHIDDEN"))
+    elif case == "resolved":
+        source = item("source", status="resolved")
+    elif case == "future":
+        source = item("source", last_updated=slack_ts(datetime(2026, 10, 16, tzinfo=UTC)))
+    cited = source.evidence[-1]
+    messages = frozenset({(cited.channel_id, cited.message_ts)})
+    if case == "wrong-channel":
+        messages = frozenset({("CPRIVATE", cited.message_ts)})
+    target = item("target", evidence=(evidence("CPUBLIC", 9),))
+    for qualifies in [False, True]:
+        active_source = source
+        profile = reader()
+        active_messages = messages
+        if qualifies:
+            if case == "hidden":
+                profile = profile.model_copy(update={"channels": (*profile.channels, "CHIDDEN")})
+            elif case in {"mixed", "wrong-channel"}:
+                active_messages = frozenset({("CPUBLIC", BASE_TS)})
+            else:
+                active_source = item("source")
+        lines = choose(
+            [target, active_source], profile=profile, recent_messages=active_messages
+        ).lines
+        line = next(line for line in lines if line.item.item_id == "target")
+        assert line.score == pytest.approx(0.63 * 0.5 * (0.8 if qualifies else 0.4))
+        assert ("recent activity: PN-OTHER" in line.reason) is qualifies
+
+
+@pytest.mark.parametrize("case", ["must-see", "outside-window", "below-threshold", "past-cap"])
+def test_ra5_sources_supply_entities_before_rank_filters(case: str) -> None:
+    source = item("z-source", type="fyi", severity="low")
+    extra = []
+    newest = {}
+    minimum = 0.0
+    if case == "must-see":
+        source = item("source", type="ask", owner="UREADER")
+    elif case == "outside-window":
+        newest[source.item_id] = ts_micros(slack_ts(datetime(2026, 9, 1, tzinfo=UTC)))
+    elif case == "below-threshold":
+        minimum = 0.1
+    else:
+        extra = [item(f"fyi-{i}", type="fyi", severity="high", entities=()) for i in range(5)]
+    target = item("target", evidence=(evidence("CPUBLIC", 9),))
+    for messages, expected in [(frozenset(), 0.4), (frozenset({("CPUBLIC", BASE_TS)}), 0.8)]:
+        lines = choose(
+            [target, *extra, source],
+            table=priors(min_score=minimum),
+            newest_evidence=newest,
+            recent_messages=messages,
+        ).lines
+        line = next(line for line in lines if line.item.item_id == "target")
+        assert line.score == pytest.approx(0.63 * 0.5 * expected)
+        if case == "must-see":
+            assert next(line for line in lines if line.item.item_id == "source").must_see
+        else:
+            assert source.item_id not in {line.item.item_id for line in lines}
+
+
+def test_ra6_absences_neither_supply_nor_receive_lift() -> None:
+    missing = absence("missing", affected_roles=())
+    target = item("target", evidence=(evidence("CPUBLIC", 9),))
+    messages = frozenset({("CPUBLIC", BASE_TS)})
+    for source_is_absence in [True, False]:
+        rows = [target] if source_is_absence else [target, item("source")]
+        lines = choose(rows, [missing], recent_messages=messages).lines
+        assert "missing" not in {line.item.item_id for line in lines}
+        line = next(line for line in lines if line.item.item_id == "target")
+        assert line.score == pytest.approx(0.63 * 0.5 * (0.4 if source_is_absence else 0.8))
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        item("ask", type="ask", owner="UREADER"),
+        item("blocker", type="blocker", entities=("PN-OWNED",)),
+        item("gate", type="schedule_change", entities=("G-DVT1",)),
+        absence("checklist", affected_roles=("ME",)),
+        absence("asker", source="ask", asker="UREADER"),
+        absence("asked", source="ask", asker="UASKER", owner="UREADER"),
+    ],
+    ids=["ask", "blocker", "gate", "checklist", "asker", "asked"],
+)
+def test_ra7_must_see_lines_are_preserved(row: Item) -> None:
+    rows, absent = ([], [row]) if row.absence else ([row], [])
+    before = choose(rows, absent, table=priors(min_score=1.1)).lines
+    after = choose(
+        rows,
+        absent,
+        table=priors(min_score=1.1),
+        recent_messages=frozenset({("CPUBLIC", BASE_TS)}),
+    ).lines
+    assert len(after) == 1
+    assert after == before
+    assert after[0].must_see
+    assert after[0].score == 0
+    assert "recent activity" not in after[0].reason

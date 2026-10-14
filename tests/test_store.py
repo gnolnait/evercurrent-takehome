@@ -2,7 +2,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from hypothesis import given, settings
@@ -83,6 +83,95 @@ def test_upsert_key_includes_channel(store: Store) -> None:
     assert store.upsert_events([first, first, second]) == 3
     assert store.events_in_thread(first.thread_id, AS_OF) == [first]
     assert store.events_in_thread(second.thread_id, AS_OF) == [second]
+
+
+def test_copy_to_includes_uncheckpointed_wal_rows_and_keeps_base_unchanged(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.sqlite"
+    copy = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        writer = sqlite3.connect(base)
+        try:
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("INSERT INTO meta (key, value) VALUES ('wal_marker', 'present')")
+            writer.commit()
+            assert Path(f"{base}-wal").stat().st_size > 0
+            base_rows = list(writer.execute("SELECT key, value FROM meta ORDER BY key"))
+
+            copied = store.copy_to(copy)
+
+            with copied:
+                assert copied.get_meta("wal_marker") == "present"
+            assert store.get_meta("wal_marker") == "present"
+            assert list(writer.execute("SELECT key, value FROM meta ORDER BY key")) == base_rows
+        finally:
+            writer.close()
+
+
+def test_copy_to_removes_target_when_backup_fails(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+
+        class FailingBackupConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self.connection = connection
+
+            def backup(self, target_connection: sqlite3.Connection) -> None:
+                Path(f"{target}-wal").write_bytes(b"partial wal")
+                Path(f"{target}-shm").write_bytes(b"partial shm")
+                raise sqlite3.OperationalError("forced backup failure")
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self.connection, name)
+
+        store._db = cast(sqlite3.Connection, FailingBackupConnection(store._db))
+        with pytest.raises(sqlite3.OperationalError, match="forced backup failure"):
+            store.copy_to(target)
+
+    assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
+def test_copy_to_removes_target_when_opening_finished_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    with Store.open(base) as store:
+        original_open = Store.open
+
+        def fail_target_open(path: Path | Literal[":memory:"]) -> Store:
+            if path == target:
+                Path(f"{target}-wal").write_bytes(b"partial wal")
+                Path(f"{target}-shm").write_bytes(b"partial shm")
+                raise sqlite3.OperationalError("forced finished-copy open failure")
+            return original_open(path)
+
+        monkeypatch.setattr(Store, "open", fail_target_open)
+
+        with pytest.raises(sqlite3.OperationalError, match="finished-copy open failure"):
+            store.copy_to(target)
+
+    assert not any(Path(f"{target}{suffix}").exists() for suffix in ("", "-wal", "-shm"))
+
+
+def test_copy_to_refuses_existing_target_without_changing_its_files(tmp_path: Path) -> None:
+    base = tmp_path / "base.sqlite"
+    target = tmp_path / "copy.sqlite"
+    existing = {
+        target: b"existing target",
+        Path(f"{target}-wal"): b"existing wal",
+        Path(f"{target}-shm"): b"existing shm",
+    }
+    for path, contents in existing.items():
+        path.write_bytes(contents)
+
+    with Store.open(base) as store, pytest.raises(FileExistsError):
+        store.copy_to(target)
+
+    assert {path: path.read_bytes() for path in existing} == existing
 
 
 @pytest.mark.parametrize("deleted", [False, True])
@@ -304,6 +393,83 @@ def test_file_store_refuses_unrelated_database_without_modifying_it(tmp_path: Pa
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
     assert tables == [("t",)]
     assert journal_mode == ("delete",)
+
+
+@pytest.mark.parametrize(
+    ("method", "sql_fragment", "error_type"),
+    [
+        ("execute", "SELECT name FROM sqlite_master", sqlite3.OperationalError),
+        ("execute", "PRAGMA journal_mode=WAL", sqlite3.OperationalError),
+        ("read_text", "schema.sql", OSError),
+        ("executescript", "CREATE TABLE IF NOT EXISTS meta", sqlite3.OperationalError),
+        (
+            "execute",
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            sqlite3.OperationalError,
+        ),
+    ],
+    ids=("version-query", "journal-mode", "schema-read", "schema", "schema-version"),
+)
+def test_open_closes_connection_when_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    sql_fragment: str,
+    error_type: type[BaseException],
+) -> None:
+    path = tmp_path / "store.sqlite"
+    real_connect = sqlite3.connect
+    closed = False
+
+    class FailingConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            object.__setattr__(self, "connection", connection)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.connection, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self.connection, name, value)
+
+        def __enter__(self) -> "FailingConnection":
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return self.connection.__exit__(*exc)
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            if method == "execute" and sql_fragment in sql:
+                raise sqlite3.OperationalError("forced store setup failure")
+            return self.connection.execute(sql, *args, **kwargs)
+
+        def executescript(self, sql: str) -> sqlite3.Cursor:
+            if method == "executescript" and sql_fragment in sql:
+                raise sqlite3.OperationalError("forced store setup failure")
+            return self.connection.executescript(sql)
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+            self.connection.close()
+
+    def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, FailingConnection(real_connect(*args, **kwargs)))
+
+    real_read_text = Path.read_text
+
+    def read_text(file: Path, *args: Any, **kwargs: Any) -> str:
+        if method == "read_text" and file.name == sql_fragment:
+            raise OSError("forced store setup failure")
+        return real_read_text(file, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    with pytest.raises(error_type, match="forced store setup failure"):
+        Store.open(path)
+
+    assert closed
 
 
 @settings(max_examples=30, derandomize=True)
@@ -585,3 +751,64 @@ def test_triage_for_thread_orders_revisions_and_excludes_other_threads(store: St
 
 def test_triage_decision_missing_from_empty_store(store: Store) -> None:
     assert store.triage_decision(f"C1:{ROOT}", ROOT, "m2.1", "classify") is None
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [-1, 0, 1, 999999, 1000000, 1000001],
+    ids=["before-start", "at-start", "after-start", "before-end", "at-end", "after-end"],
+)
+def test_ra9_authored_messages_exact_bounds(store: Store, offset: int) -> None:
+    start = EPOCH + timedelta(seconds=1760000000)
+    end = start + timedelta(seconds=1)
+    seconds, micros = divmod(1760000000 * 1000000 + offset, 1000000)
+    ts = f"{seconds}.{micros:06d}"
+    store.upsert_events([event(ts), event(ts, channel_id="C2")])
+    authored = getattr(store, "authored_messages", None)
+    assert callable(authored), "Store must expose authored_messages(user_id, start, end)"
+    result = authored("U1", start, end)
+    assert isinstance(result, frozenset)
+    assert result == (frozenset({("C1", ts), ("C2", ts)}) if 0 < offset <= 1000000 else frozenset())
+    assert authored("unknown", start, end) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "case", ["other-author", "deleted", "old-edit", "reaction", "reply", "recent-edit"]
+)
+def test_ra8_authored_messages_use_current_author_and_original_time(
+    store: Store, case: str
+) -> None:
+    start = EPOCH + timedelta(seconds=1760000000)
+    end = start + timedelta(seconds=10)
+    original = event("1760000001.000001", thread_ts="1760000001.000001")
+    candidate = original
+    if case == "other-author":
+        candidate = original.model_copy(update={"user_id": "U2"})
+    elif case == "deleted":
+        candidate = original.model_copy(update={"deleted": True, "event_ts": "1760000002.000001"})
+    elif case == "old-edit":
+        candidate = event("1759999999.000001", edited=True, event_ts="1760000002.000001")
+    elif case == "reaction":
+        candidate = original.model_copy(
+            update={
+                "user_id": "U2",
+                "reactions": (Reaction(name="eyes", user_id="U1", ts="1760000002.000001"),),
+            }
+        )
+    elif case == "reply":
+        candidate = original.model_copy(update={"thread_ts": ROOT})
+    else:
+        candidate = original.model_copy(update={"edited": True, "event_ts": "1760000002.000001"})
+    authored = getattr(store, "authored_messages", None)
+    assert callable(authored), "Store must expose authored_messages(user_id, start, end)"
+    for row, qualifies in [(candidate, case in {"reply", "recent-edit"}), (original, True)]:
+        # A new store keeps each pair independent, including a change to message identity.
+        with Store.open(":memory:") as current:
+            current.upsert_events(
+                [row.model_copy(update={"deleted": False, "edited": False, "event_ts": row.ts})]
+            )
+            current.upsert_events([row])
+            authored_current = getattr(current, "authored_messages", None)
+            assert callable(authored_current)
+            result = authored_current("U1", start, end)
+            assert result == (frozenset({("C1", row.ts)}) if qualifies else frozenset())

@@ -23,3 +23,8 @@ daily:
   window:
     first_working_days: 5
     max_working_days: 10
+  # The reader's own messages in the last working_days lift personal_relevance from 0.4 to
+  # relevance for an item that shares an entity with them; never above the role level 0.8.
+  recent_activity:
+    working_days: 3
+    relevance: 0.8

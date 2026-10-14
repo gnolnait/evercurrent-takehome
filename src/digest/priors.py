@@ -40,11 +40,19 @@ class WindowPriors(Frozen):
         return self
 
 
+class RecentActivityPriors(Frozen):
+    """The reader's own recent messages lift `personal_relevance` (SPEC section 5 step 6)."""
+
+    working_days: int = Field(default=3, ge=1)  # the window, back from the digest day
+    relevance: float = Field(default=0.8, gt=0.4, le=0.8)  # never above the affected-role level
+
+
 class DailyPriors(Frozen):
     # Each value is above 0 and at most 1. The ranked lane uses 0.5 for a missing entry.
     role_priors: dict[Role, dict[ItemType, RoleWeight]] = Field(default_factory=dict)
     min_score: float = Field(default=0.15, ge=0)  # a ranked line below this is left out
     window: WindowPriors = WindowPriors()
+    recent_activity: RecentActivityPriors = RecentActivityPriors()
 
 
 class Priors(Frozen):

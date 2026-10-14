@@ -20,8 +20,9 @@ from digest.daily.select import Line, Section, Selection
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport
 from digest.extract.verify import DROP_FIELDS
-from digest.models import AbsenceDetail, Claim, Event, Evidence, Item
+from digest.models import AbsenceDetail, Claim, Event, Evidence, Item, Reaction
 from digest.priors import load_priors
+from digest.project import Gate, PhaseWindow
 from digest.settings import Settings
 from digest.store import StageRun, Store
 from digest.world.load import load_world
@@ -166,6 +167,8 @@ def test_render_digest_exact_normal_line(world: World, profile: Profile) -> None
     assert rendered == (
         "Daily digest for Nadia Brenner (ME) - 2026-10-14\n"
         "First digest: the last 5 working days\n"
+        "Phase: EVT since 2026-08-03. Next gate: G-TR1 "
+        "Top-cover tooling and texture release (PN-51010), in 4 working days.\n"
         "\n"
         "Decisions\n"
         "- Drawing released (PN-51010, G-TR1) - owner Hamid Rostami [must see]\n"
@@ -256,7 +259,10 @@ def test_render_digest_empty_day_and_hidden_footer(world: World, profile: Profil
 
     assert empty == (
         "Daily digest for Nadia Brenner (ME) - 2026-10-14\n"
-        "First digest: the last 5 working days\n\nNothing new for Nadia Brenner."
+        "First digest: the last 5 working days\n"
+        "Phase: EVT since 2026-08-03. Next gate: G-TR1 "
+        "Top-cover tooling and texture release (PN-51010), in 4 working days."
+        "\n\nNothing new for Nadia Brenner."
     )
     assert "hidden by the visibility filter" not in empty
     assert "Nothing new for Nadia Brenner." in hidden
@@ -829,3 +835,241 @@ def test_select_digest_uses_max_event_time_across_cited_messages(
         )
 
     assert [(line.item.item_id, line.must_see) for line in selected.lines] == [(row.item_id, False)]
+
+
+@pytest.mark.parametrize("working_days", [None, 1], ids=["default-three", "configured-one"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "at-start",
+        "after-start",
+        "reply",
+        "other-author",
+        "deleted",
+        "old-edit",
+        "recent-edit",
+        "reaction",
+        "at-end",
+    ],
+)
+def test_ra8_select_digest_recent_activity_window(
+    world: World, working_days: int | None, case: str
+) -> None:
+    """On Monday, count from Wednesday or Friday's end in the world zone."""
+    day = date(2026, 10, 19)
+    zone = ZoneInfo(world.timezone)
+    until = datetime.combine(day, time.max, zone)
+    # These dates are independent examples of three and one working days before Monday.
+    boundary = datetime(2026, 10, 14 if working_days is None else 16, 23, 59, 59, 999999, zone)
+    start_ts = f"{int(boundary.timestamp())}.999999"
+    after_ts = f"{int(boundary.timestamp()) + 1}.000000"
+    end_ts = f"{int(until.timestamp())}.999999"
+    table = load_priors()
+    data = table.model_dump()
+    data["daily"]["min_score"] = 0.0
+    if working_days is not None:
+        data["daily"]["recent_activity"] = {"working_days": working_days, "relevance": 0.8}
+    table = type(table).model_validate(data)
+    for qualifying in [False, True]:
+        ts = after_ts
+        if not qualifying and case in {"at-start", "old-edit"}:
+            ts = start_ts
+        elif not qualifying and case == "at-end":
+            ts = end_ts
+        event = pending_event().model_copy(
+            update={
+                "ts": ts,
+                "event_ts": ts,
+                "thread_ts": ts,
+                "user_id": "U0ME01",
+                "text": "Work on the shared part.",
+            }
+        )
+        if not qualifying:
+            changes: dict[str, Any] = {}
+            if case == "reply":
+                changes["thread_ts"] = start_ts
+            elif case in {"other-author", "reaction"}:
+                changes["user_id"] = "U0EE01"
+                if case == "reaction":
+                    changes["reactions"] = (Reaction(name="eyes", user_id="U0ME01", ts=end_ts),)
+            elif case == "deleted":
+                changes.update(deleted=True, event_ts=end_ts)
+            elif case in {"old-edit", "recent-edit"}:
+                changes.update(edited=True, event_ts=end_ts)
+            event = event.model_copy(update=changes)
+        source = item(
+            item_id="activity-source",
+            thread_id=event.thread_id,
+            type="fyi",
+            entities=("ACTIVITY-PART",),
+            affected_roles=(),
+            first_seen=ts,
+            last_updated=ts,
+            evidence=(
+                Evidence(
+                    channel_id=event.channel_id,
+                    message_ts=ts,
+                    quote=event.text,
+                    permalink=event.permalink,
+                ),
+            ),
+        )
+        target = item(
+            item_id="activity-target",
+            entities=("ACTIVITY-PART",),
+            affected_roles=(),
+            first_seen=end_ts,
+            last_updated=end_ts,
+            evidence=(
+                Evidence(
+                    channel_id="C0ENGME",
+                    message_ts=end_ts,
+                    quote="Target update.",
+                    permalink=evidence().permalink,
+                ),
+            ),
+        )
+        # The target citation must never itself match the reader's source message.
+        target = target.model_copy(
+            update={
+                "thread_id": f"C0KPROG:{end_ts}",
+                "evidence": (target.evidence[0].model_copy(update={"channel_id": "C0KPROG"}),),
+            }
+        )
+        with Store.open(":memory:") as store:
+            set_replay_meta(store, until=until.astimezone(UTC).isoformat())
+            store.upsert_events(
+                [event.model_copy(update={"edited": False, "deleted": False, "event_ts": ts})]
+            )
+            store.upsert_events([event])
+            store.record_stage_run(
+                StageRun(
+                    stage="extract",
+                    thread_id=event.thread_id,
+                    last_ts=event.event_ts,
+                    prompt_version=EXTRACT_PROMPT_VERSION,
+                    model="extract",
+                    run_at=until,
+                    status="ok",
+                )
+            )
+            store.upsert_items(
+                [source, target], prompt_version=EXTRACT_PROMPT_VERSION, model="extract"
+            )
+            selected = daily_render.select_digest(
+                store, world, table, "U0ME01", day, previous_digest=date(2026, 10, 16)
+            )
+        line = next(line for line in selected.lines if line.item.item_id == target.item_id)
+        lifts = qualifying or case in {"after-start", "reply", "recent-edit", "at-end"}
+        assert line.score == pytest.approx(0.9 * 0.9 * (0.8 if lifts else 0.4))
+        assert line.reason == (
+            f"importance=0.9 role_prior=0.9 personal_relevance={0.8 if lifts else 0.4}"
+            + (" (recent activity: ACTIVITY-PART)" if lifts else "")
+        )
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [
+        (8, "Phase: EVT since 2026-08-03. Next gate: G-DVT1 DVT-1 go/no-go, in 1 working day."),
+        (9, "Phase: DVT since 2026-10-22. Next gate: G-DVT1 DVT-1 go/no-go, today."),
+    ],
+    ids=["day-8-EVT", "day-9-DVT"],
+)
+def test_phase_line_bundled_phase_boundary(world: World, day: int, expected: str) -> None:
+    """PL1: name the phase and gate on each side of the DVT start."""
+    phase_line = getattr(daily_render, "phase_line", None)
+
+    assert callable(phase_line), "daily.render must expose phase_line(world, day)"
+    assert phase_line(world, world.date_of(day)) == expected
+
+
+@pytest.mark.parametrize(
+    ("gate_date", "when"),
+    [
+        (date(2026, 10, 19), "in 1 working day"),
+        (date(2026, 10, 20), "in 2 working days"),
+        (date(2026, 10, 17), "in 1 working day"),
+    ],
+    ids=["Friday-to-Monday", "Friday-to-Tuesday", "Friday-to-Saturday"],
+)
+def test_phase_line_counts_working_days(world: World, gate_date: date, when: str) -> None:
+    """PL2: cross a weekend and use the singular or plural noun."""
+    gate = Gate(id="G-NEXT", name="Build review", date=gate_date, buffer_days=0)
+    world = world.model_copy(
+        update={"project": world.project.model_copy(update={"gates": (gate,)})}
+    )
+    phase_line = getattr(daily_render, "phase_line", None)
+
+    assert callable(phase_line), "daily.render must expose phase_line(world, day)"
+    assert phase_line(world, date(2026, 10, 16)) == (
+        f"Phase: EVT since 2026-08-03. Next gate: G-NEXT Build review, {when}."
+    )
+
+
+@pytest.mark.parametrize("empty", [False, True], ids=["all-past", "no-gates"])
+def test_phase_line_without_gate_ahead(world: World, empty: bool) -> None:
+    """PL3: end after the phase when no gate remains."""
+    if empty:
+        world = world.model_copy(update={"project": world.project.model_copy(update={"gates": ()})})
+    phase_line = getattr(daily_render, "phase_line", None)
+
+    assert callable(phase_line), "daily.render must expose phase_line(world, day)"
+    assert phase_line(world, date(2026, 10, 23)) == "Phase: DVT since 2026-10-22."
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["unsorted", "reversed"])
+def test_phase_line_gate_ties_use_id_order(world: World, reverse: bool) -> None:
+    """PL4: choose the earliest future date, then the lowest string id."""
+    gates = tuple(
+        Gate(id=gate_id, name=name, date=day, buffer_days=0)
+        for gate_id, name, day in [
+            ("G-0", "Later", date(2026, 10, 20)),
+            ("G-2", "Second", date(2026, 10, 19)),
+            ("G-PAST", "Past", date(2026, 10, 15)),
+            ("G-10", "First", date(2026, 10, 19)),
+        ]
+    )
+    world = world.model_copy(
+        update={
+            "project": world.project.model_copy(update={"gates": gates[::-1] if reverse else gates})
+        }
+    )
+    phase_line = getattr(daily_render, "phase_line", None)
+
+    assert callable(phase_line), "daily.render must expose phase_line(world, day)"
+    assert phase_line(world, date(2026, 10, 16)) == (
+        "Phase: EVT since 2026-08-03. Next gate: G-10 First, in 1 working day."
+    )
+
+
+def test_phase_line_repeated_phase_uses_latest_start(world: World) -> None:
+    """PL4: take the start from the active window, not the first matching label."""
+    phases = (
+        PhaseWindow(phase="EVT", from_date=date(2026, 8, 3)),
+        PhaseWindow(phase="DVT", from_date=date(2026, 9, 1)),
+        PhaseWindow(phase="EVT", from_date=date(2026, 10, 12)),
+        PhaseWindow(phase="DVT", from_date=date(2026, 10, 22)),
+    )
+    world = world.model_copy(
+        update={"project": world.project.model_copy(update={"phases": phases, "gates": ()})}
+    )
+    phase_line = getattr(daily_render, "phase_line", None)
+
+    assert callable(phase_line), "daily.render must expose phase_line(world, day)"
+    assert phase_line(world, DAY) == "Phase: EVT since 2026-10-12."
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [(date(2026, 8, 2), None), (date(2026, 8, 3), "Phase: EVT since 2026-08-03.")],
+    ids=["before-first-phase", "first-phase-start"],
+)
+def test_phase_line_before_first_window(world: World, day: date, expected: str | None) -> None:
+    """PL7: return None before the first window and text at its start."""
+    world = world.model_copy(update={"project": world.project.model_copy(update={"gates": ()})})
+    phase_line = getattr(daily_render, "phase_line", None)
+
+    assert callable(phase_line), "daily.render must expose phase_line(world, day)"
+    assert phase_line(world, day) == expected
