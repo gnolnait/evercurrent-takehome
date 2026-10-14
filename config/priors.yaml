@@ -28,3 +28,7 @@ daily:
   recent_activity:
     working_days: 3
     relevance: 0.8
+# The ranking ablation keeps a term when switching it off lowers must-see recall or mean
+# nDCG at 5 by at least min_effect of the value with the term on (SPEC section 7).
+ablation:
+  min_effect: 0.01
