@@ -577,7 +577,12 @@ Offline, on the simulated world, reported in `reports/eval-<date>.md`:
   least `ablation.min_effect` of the value with the term on (a fraction in
   `config/priors.yaml`, default 0.01, mean across personas); until person-days is built,
   must-see recall or mean nDCG at 5 decide, nDCG by the same rule (D21). Otherwise it is
-  removed.
+  removed. The ranker reads `daily.terms_off`, a set of names that the ablation sets and
+  that is empty otherwise: the terms `importance`, `role_prior` and
+  `personal_relevance`, and `recent_activity`, the lift inside `personal_relevance`
+  (step 6). Switching `recent_activity` off removes only the lift; switching
+  `personal_relevance` off sets the whole term to 1, lift included. `min_effect` is a
+  relative fraction: 0.01 means a drop of 1% of the value with the term on.
 - Profile scrutability: for every persona and every single-field profile edit (role,
   owned subsystem, a watch prompt) and the project-state edit of a subsystem phase,
   re-run the day on cassettes and check the digest changes in the expected direction
