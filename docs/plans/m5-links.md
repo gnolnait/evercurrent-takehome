@@ -50,8 +50,9 @@ L5. **No new reach.** The map changes only where a shown link points. The visibi
 filter, the selection and every line's text stay as they are without a map.
 
 L6. **Limits and safety.** The 3000-character section cut and the 50-block limit hold as
-today. A cut never leaves part of a link (the existing `_cut` rule). The `&` in a reply
-link is written as `&amp;` inside the `<...>` link, as Slack's text format requires.
+today. A cut never leaves part of a link (the existing `_cut` rule). A reply link is
+written as `chat.getPermalink` returns it, with a plain `&`: in the 2026-10-13 link spike,
+a labelled reply link of that form resolved (Slack unfurled the reply it points to).
 
 ## Interface (stubs land before tests)
 
@@ -74,8 +75,9 @@ contract, so no contract change.
 
 ## Acceptance
 
-A1 (L1). A root source and a reply source in the map render as Slack permalinks; the
-reply link carries `thread_ts` and `cid`, with `&amp;` between them.
+A1 (L1). A root source and a reply source in the map render as Slack permalinks of the
+map's workspace; the root link has no query; the reply link ends with
+`?thread_ts=<root ts>&cid=<channel>`.
 A2 (L2). A line with two mapped sources in one channel shows one `<#C...>`; with sources
 in two channels it shows both, in source order.
 A3 (L3). A source whose message has two files in the map shows both file links, named;
