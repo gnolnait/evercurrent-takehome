@@ -1,6 +1,7 @@
 # Plan: M4 unit 14, the ranking metrics and the ablation table
 
-Status: v0.3.1, 2026-10-14, 06:45 PT (R3, R6a and R8a from an independent review) (R10 and R11: admission apart from order, after the
+Status: v0.3.2, 2026-10-14, 08:10 PT (final review: one assignment in R6a, RankingRefused);
+v0.3.1, 06:45 PT (R3, R6a and R8a from an independent review) (R10 and R11: admission apart from order, after the
 ranking owner's confound check). Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Stacked on the ablation switch (branch
 `ablation-switch`, PR #80), which adds `daily.terms_off` and `ablation.min_effect`.
@@ -65,7 +66,9 @@ digest for d with `select_digest(store, world, priors_C, P, d, previous_digest=d
   removed, top 5 of what is left), against P's set without the facts that C0's must-see
   lane delivers on (P, d). Before the cut at five, the ranked-lane list also drops the
   lines that deliver one of those removed facts (send-everything has no must-see lane, so
-  such lines would take slots at grade 0). The switch never touches the must-see lane (ablation-switch
+  such lines would take slots at grade 0). Deliveries are assigned once, on the whole
+  ranked list by R3; the kept lines keep the facts assigned there (a second assignment
+  after the drop could move a removed fact onto a kept line). The switch never touches the must-see lane (ablation-switch
   AB9). Sections come in order with must-see lines first in each, so on a day where
   must-see lines take the first five places the overall top 5 is the same in every
   configuration, and only the ranked lane can show a term's effect there. Per persona, the
@@ -90,8 +93,10 @@ Configurations:
   C0's. A term whose row is 0
   cannot move any metric on this world, and the table says so.
 - R7b. A day that `select_digest` refuses (for example extract deltas left pending by a
-  failed extraction) stops `run_ranking_eval` with that refusal. `digest eval` then
-  writes the extraction report without the Ranking section and names the refusal in the
+  failed extraction) stops `run_ranking_eval` with `RankingRefused`, a `ValueError`
+  subclass that carries the refusal; only a `select_digest` refusal raises it, and any
+  other error propagates. `digest eval` catches only `RankingRefused`, then writes the
+  extraction report without the Ranking section and names the refusal in the
   report's "Not run" table, so a failed extraction still yields a report (an existing
   eval test pins that). On cassettes no day is refused.
 
@@ -218,6 +223,11 @@ facts in P's set. Both helpers and `verdict` are pure, so their tests need no st
   in the ranked-lane top 5 (U0SC01 on day 4 is a named case).
 - B14.12 R8a: `moved` equals the test's own count of differing persona-days per term and
   metric, and the section prints it.
+- B14.13 R6a: two ranked items that qualify for golden facts A then B, with A delivered
+  by C0's must-see lane: the first line drops and the second keeps B's grade.
+- B14.14 R7b: a refused day gives a "ranking" Not run row and exit 0; a non-refusal
+  `ValueError` inside the ranking eval propagates and the command fails; a stale
+  `data/eval-ranking-<world>.sqlite` (with `-wal` and `-shm`) is removed before the run.
 - B14.7 `digest eval` writes the Ranking section with seven configuration rows, four
   ablation rows and one row per human persona; the run is offline (cassettes); the
   committed report matches.

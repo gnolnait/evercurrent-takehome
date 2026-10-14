@@ -60,6 +60,10 @@ _Top5 = tuple[tuple[str, ...], tuple[str, ...]]
 _Candidates = Callable[[Item], list[_FactKey]]
 
 
+class RankingRefused(ValueError):
+    """select_digest refused a day, so the ranking eval cannot run (plan R7b)."""
+
+
 class Scores(Frozen):
     recall_at_5: float | None
     recall_n: int  # persona-days with a value
