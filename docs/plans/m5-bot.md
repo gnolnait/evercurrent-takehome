@@ -257,7 +257,8 @@ the `PostedItem` and calls `feedback.record`. A None result (a repeated delivery
 calls `chat.update` with the row's channel, ts, `text` and metadata, and the blocks of
 I14. When the store write raises (`sqlite3.Error`), the worker logs `bot_store_failed`
 with the exception type, makes no update and no retry, and goes on to the next job: the
-line shows no mark, so the reader sees that the click did not apply.
+line shows no mark, so the reader sees that the click did not apply. The order is a rule: `chat.update` runs only after `record` or `undo` has committed. So a
+mark on a line always has its event in the store, and a lost click never shows a mark.
 
 I14. **The updated message.** The blocks are the row's posted blocks, with every item
 block id carrying the new revision, and, for each item `<n>` whose key is in
@@ -309,6 +310,15 @@ I17. **Safety.**
   `item_undo`, text `Undo` and a decimal value. No element has a `url`. Item block ids
   have the I9 form. There is still no `actions` block. Without the flag, the helper is
   unchanged.
+
+### Docs (land with this unit)
+
+- `docs/decisions.md` D7: a dated amendment. Interactive actions ack first, then a serial
+  worker applies them; a crash can lose a queued click, which the clicker sees as no mark;
+  Events API events still go to the store before the ack.
+- `ANSWERS.md` (the Slack answer, near "Write the raw event to the store before the ack"):
+  one clause that a button click is acked first and applied by a serial worker, with the
+  same reason.
 
 ## Data
 
@@ -576,6 +586,8 @@ otherwise.
   in the update carries the next revision, and the row's `revision` grows by 1; an undo
   click restores the posted blocks of that item (with the new revision); marks on two
   items of one message both show; a repeated delivery makes no update.
+- A20 (I13, order). With a fake `update` that reads the store when it is called, the
+  event row is committed before each `update` call, for done, snooze and undo.
 - A13 (I15). Two jobs on one message, through `run_worker`: both rows are written, and
   the last update shows both marks. A store write that raises `sqlite3.OperationalError`
   logs `bot_store_failed`, makes no update, and the next job is still applied.
