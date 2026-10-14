@@ -78,6 +78,11 @@ def verdict(
     raise NotImplementedError
 
 
+def write_ranking_section(report: RankingReport) -> str:
+    """The "Ranking" section of the eval report, as Markdown (plan R9)."""
+    raise NotImplementedError
+
+
 def run_ranking_eval(world_dir: Path, llm: LLM, priors: Priors, store_path: Path) -> RankingReport:
     """Run the world day by day in a fresh store and score every configuration (plan R1 to R7b)."""
     raise NotImplementedError

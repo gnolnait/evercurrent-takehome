@@ -1,6 +1,6 @@
 # Plan: M4 unit 14, the ranking metrics and the ablation table
 
-Status: v0.2.1, 2026-10-14, 03:20 PT. Process stage 1 (`docs/process.md`), the full process
+Status: v0.2.2, 2026-10-14, 05:00 PT (test review: the report interface and format). Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Stacked on the ablation switch (branch
 `ablation-switch`, PR #80), which adds `daily.terms_off` and `ablation.min_effect`.
 
@@ -149,6 +149,12 @@ facts in P's set. Both helpers and `verdict` are pure, so their tests need no st
   lane), and the line "Labels come from the world script; personas are simulated." The
   committed report `reports/eval-2026-10-23.md` is regenerated in this unit, since
   `tests/test_corpus_data.py` compares it byte for byte.
+  The section is written by `write_ranking_section(report: RankingReport) -> str`;
+  `write_report(report, path, ranking=None)` appends it when `ranking` is given, and
+  `tests/test_corpus_data.py` passes the ranking report so the byte comparison covers it.
+  Numbers print with 3 decimals; a missing value prints as "n/a". The `min_effect` line
+  reads exactly "Keep rule: a term stays when a metric drops by at least <min_effect>
+  of its value with the term on." with `min_effect` printed as given in the priors.
 
 ## Behaviours
 
