@@ -634,6 +634,84 @@ def test_save_refuses_paths_outside_room_before_any_write(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    ("link", "redirect"),
+    [
+        ("symlink", None),
+        ("junction", None),
+        ("root", "elsewhere"),
+        ("root", "data/world"),
+        ("child", "data/world"),
+        ("child", "data/world/kestrel"),
+        ("external", "data/world/kestrel"),
+    ],
+    ids=[
+        "root-symlink",
+        "root-junction",
+        "root-resolves-elsewhere",
+        "root-resolves-to-world",
+        "child-resolves-to-world-root",
+        "child-resolves-to-world-copy",
+        "external-alias-resolves-to-world-copy",
+    ],
+)
+@pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
+def test_save_refuses_links_and_world_aliases_before_any_write(
+    base: RoomBase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    link: str,
+    redirect: str | None,
+    absolute: bool,
+) -> None:
+    room = Room(base)
+    monkeypatch.chdir(tmp_path)
+    cwd = Path.cwd().resolve()
+    root = cwd / ".room"
+    alias = cwd / "world-alias" if link == "external" else root / "copy"
+    source = root if link == "root" else alias
+    path = alias if absolute else alias.relative_to(cwd)
+    resolve = Path.resolve
+    is_symlink = Path.is_symlink
+    is_junction = Path.is_junction
+
+    def resolve_alias(path: Path, strict: bool = False) -> Path:
+        resolved = resolve(path, strict=strict)
+        if redirect is not None and resolved.is_relative_to(source):
+            return cwd / redirect / resolved.relative_to(source)
+        return resolved
+
+    def refuse_write(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Save attempted a file system write before refusing the path")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "resolve", resolve_alias)
+        patch.setattr(
+            Path, "is_symlink", lambda p: (p == root and link == "symlink") or is_symlink(p)
+        )
+        patch.setattr(
+            Path, "is_junction", lambda p: (p == root and link == "junction") or is_junction(p)
+        )
+        for name in (
+            "mkdir",
+            "open",
+            "write_text",
+            "write_bytes",
+            "rename",
+            "replace",
+            "rmdir",
+            "unlink",
+        ):
+            patch.setattr(Path, name, refuse_write)
+        patch.setattr(tempfile, "mkdtemp", refuse_write)
+        patch.setattr(shutil, "copytree", refuse_write)
+        patch.setattr(shutil, "rmtree", refuse_write)
+        with pytest.raises(ValueError):
+            room.save(path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_save_warns_when_previous_copy_cannot_be_deleted(
     base: RoomBase,
     tmp_path: Path,
