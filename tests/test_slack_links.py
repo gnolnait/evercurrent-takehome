@@ -472,7 +472,16 @@ def test_cli_rejects_invalid_seed_map_before_build_or_send(
 
 
 @pytest.mark.parametrize("delivery", ["webhook", "dm"])
-@pytest.mark.parametrize("map_case", ["dotenv", "invalid-field"])
+@pytest.mark.parametrize(
+    "map_case",
+    [
+        "dotenv",
+        "invalid-field",
+        "token-message-key",
+        "token-file-key",
+        "token-channel-key",
+    ],
+)
 def test_cli_invalid_seed_map_never_discloses_file_value(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -484,7 +493,13 @@ def test_cli_invalid_seed_map_never_discloses_file_value(
         content = f"BOT_TOKEN={BOT_TOKEN}"
     else:
         content_value = seed_map().model_dump(mode="json")
-        content_value["version"] = BOT_TOKEN
+        if map_case == "invalid-field":
+            content_value["version"] = BOT_TOKEN
+        elif map_case == "token-channel-key":
+            content_value["channels"] = {BOT_TOKEN: 5}
+        else:
+            field = "messages" if map_case == "token-message-key" else "files"
+            content_value[field] = {BOT_TOKEN: {}}
         content = json.dumps(content_value)
     path.write_text(content, encoding="utf-8")
     builds: list[int] = []
