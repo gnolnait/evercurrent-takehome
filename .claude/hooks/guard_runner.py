@@ -3,9 +3,11 @@
 
 Replaced one bash-wrapper + python-parser spawn per guard with ONE python
 process: read the payload once through hook_payload, then run each guard's pure
-evaluate() entry. First blocking verdict wins. Fail-closed is owned by the bash
-wrapper (guard_runner) which coerces any non-{0,2} exit to a block; this
-module's own job is to never exit 0 when a check says block.
+evaluate() entry. First blocking verdict wins. Fail-closed is owned by the
+launcher, which coerces any non-{0,2} exit to a block: the project's
+settings.json fence, which runs this file directly when CLAUDE_HOOK_PYTHON is
+an interpreter path, and otherwise the bash wrapper (guard_runner) it runs.
+This module's own job is to never exit 0 when a check says block.
 
 Standalone guards remain (their test suites invoke them directly); this is the
 production dispatch path wired in settings.json.

@@ -365,6 +365,11 @@ def render_resume(root):
     return preface + "\n" + "\n".join(parts)
 
 
+def behind_count(start):
+    """The commits HEAD is behind origin/main as a digit string, or ""."""
+    return (run(["git", "rev-list", "--count", "HEAD..origin/" + BASE], start) or "").strip()
+
+
 def render_startup(start, root):
     """The startup report: commits behind origin/main and open PR titles.
 
@@ -372,8 +377,12 @@ def render_startup(start, root):
     """
     lines = ["Session start: freshness check. Read it before you start new work."]
     # The PR list does not need the fetch, so the two run at the same time.
-    pool = ThreadPoolExecutor(max_workers=1)
+    pool = ThreadPoolExecutor(max_workers=2)
     prs = pool.submit(pr_lines, root, False)
+    # The count from the last fetch also runs during the fetch. A timed-out
+    # fetch spends most of the budget, and on a loaded machine the count after
+    # it was skipped or killed. This count is then the fallback.
+    last = pool.submit(behind_count, start)
     pool.shutdown(wait=False)
     fetch = _proc(
         # An explicit destination: a single-branch clone does not map main.
@@ -386,9 +395,13 @@ def render_startup(start, root):
         # git-remote-https outlives a killed git and holds a captured pipe.
         capture=False,
     )
+    # Count again after any fetch: a fetch killed after it moved origin/main
+    # (git waits for `maintenance run --auto` after the ref update) leaves a
+    # newer count. After a good fetch, do not wait for the obsolete count.
+    out = behind_count(start)
     if fetch is None or fetch.returncode != 0:
         lines.append("- git fetch failed or timed out. The count below uses the last fetch.")
-    out = (run(["git", "rev-list", "--count", "HEAD..origin/" + BASE], start) or "").strip()
+        out = out or last.result()
     if not out.isdigit():
         lines.append("- No behind count: git rev-list HEAD..origin/%s failed." % BASE)
     elif out == "0":
