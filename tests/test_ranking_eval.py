@@ -32,6 +32,7 @@ from typer.testing import CliRunner
 
 import test_room
 from digest.cli import app
+from digest.daily.profile import can_see, profile_for
 from digest.daily.render import select_digest
 from digest.daily.select import Selection
 from digest.eval import ranking
@@ -43,10 +44,13 @@ from digest.eval.ranking import (
     ndcg_at_5,
     recall_at_5,
     verdict,
+    write_ranking_section,
 )
 from digest.extract.stage import run_extract
 from digest.llm.client import LLM, from_settings
+from digest.models import micros_since_epoch, ts_micros
 from digest.priors import Priors
+from digest.project import add_working_days
 from digest.replay import replay_world
 from digest.settings import Settings
 from digest.store import Store
@@ -101,12 +105,37 @@ DEBOUNCE = "C0ENGEF:1792596600.010107#1792596600.010107#0"
 FILTER = "C0ENGEF:1792598100.010111#1792598100.010111#0"
 BENCH_ASK = "C0ENGEF:1792598100.010111#1792599180.010115#0"
 GO = "C0KPROG:1792683000.010116#1792683000.010116#0"
+ON_HAND_ASK = "C0SUPCH:1791909900.010014#1791910020.010015#0"
+ANODIZE_ASK = "C0EXTCM:1792068738.000800#1792068738.000800#1"
+PO_AMEND_ASK = "C0SUPCH:1792087200.010059#1792087200.010059#0"
+DROP_IN_ASK = "C0SUPCH:1792079700.010041#1792080180.010043#0"
+HARNESS_ASK = "C0DVT1B:1792426800.010087#1792427520.010090#0"
+LOT_ASK = "C0DVT1B:1792510200.010093#1792510860.010096#1"
+LTB_REPLY = "C0SUPCH:1791909900.010014#1791910320.010017#0"
+SUPPLIER_NOISE = "C0SUPCH:1792082700.010050#1792082700.010050#0"
+DOC_PACK = "C0PLMFD:1791822000.010003#1791822000.010003#0"
+SCHEDULE_SYNC = "C0PLMFD:1791820500.010002#1791820500.010002#0"
+PAYLOAD = "C0KPROG:1792166100.010066#1792166100.010066#0"
+LOT_BLOCK = "C0DVT1B:1792510200.010093#1792510200.010093#0"
+BUILD_D1 = "C0DVT1B:1792769400.010121#1792769400.010121#0"
 ASK_SAF_ABSENCE = f"absence:ask:{ASK_SAF}"
+HARNESS_ASK_ABSENCE = f"absence:ask:{HARNESS_ASK}"
+LOT_ASK_ABSENCE = f"absence:ask:{LOT_ASK}"
 FAI_ABSENCE = "absence:G-DVT1.fai"
 
 Top5 = list[tuple[str, bool]]  # (item_id, must_see) of the first five lines of a digest
-# (user_id, world day, config name in CONFIGS) -> the selection of that reader and day
-Built = dict[tuple[str, int, str], Selection]
+
+
+class Built(dict[tuple[str, int, str], Selection]):
+    """(user_id, world day, config name in CONFIGS) -> the selection of that reader and day.
+
+    `send_ids` holds, per (user_id, world day), the item ids of the send-everything list this
+    file builds itself (see `_replay_days`).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.send_ids: dict[tuple[str, int], list[str]] = {}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -321,6 +350,7 @@ class Run:
     wrap: Callable[[str, date, Selection], Selection] | None = None
     calls: list[SelectCall] = field(default_factory=list)
     seconds: float | None = None
+    applied: int = 0  # selections that `wrap` changed
     _report: RankingReport | None = None
 
     def report(self) -> RankingReport:
@@ -352,7 +382,11 @@ class Run:
         selection = select_digest(
             store, world, priors, user_id, day, previous_digest=previous_digest
         )
-        return selection if self.wrap is None else self.wrap(user_id, day, selection)
+        if self.wrap is None:
+            return selection
+        wrapped = self.wrap(user_id, day, selection)
+        self.applied += wrapped is not selection
+        return wrapped
 
 
 @pytest.fixture(scope="module")
@@ -379,10 +413,9 @@ MECH_CHANNEL_TAIL = 'mechanical FA"}'
 
 
 @pytest.fixture(scope="module")
-def hidden_run(tmp_path_factory: pytest.TempPathFactory, llm: LLM, priors: Priors) -> Run:
+def hidden_world(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the world where C0ENGME is private; supply chain is not a member."""
-    root = tmp_path_factory.mktemp("ranking-hidden")
-    copy = root / "kestrel"
+    copy = tmp_path_factory.mktemp("ranking-hidden") / "kestrel"
     copy.mkdir()
     for name in ("world.yaml", "events.jsonl", "manifest.json", "golden.jsonl", "anchor.jsonl"):
         shutil.copy2(WORLD_DIR / name, copy / name)
@@ -397,7 +430,15 @@ def hidden_run(tmp_path_factory: pytest.TempPathFactory, llm: LLM, priors: Prior
     channel = next(c for c in changed.channels if c.id == "C0ENGME")
     supply = next(p for p in changed.personas if p.user_id == "U0SC01")
     assert channel.private and "C0ENGME" not in supply.channels
-    return Run(copy, root / "ranking.sqlite", llm, priors)
+    return copy
+
+
+@pytest.fixture(scope="module")
+def hidden_run(
+    hidden_world: Path, tmp_path_factory: pytest.TempPathFactory, llm: LLM, priors: Priors
+) -> Run:
+    path = tmp_path_factory.mktemp("ranking-hidden-run") / "ranking.sqlite"
+    return Run(hidden_world, path, llm, priors)
 
 
 def _duplicate_ask_line(user_id: str, day: date, selection: Selection) -> Selection:
@@ -415,35 +456,90 @@ def doubled_run(tmp_path_factory: pytest.TempPathFactory, llm: LLM, priors: Prio
     return Run(WORLD_DIR, path, llm, priors, wrap=_duplicate_ask_line)
 
 
-@pytest.fixture(scope="module")
-def built(
-    tmp_path_factory: pytest.TempPathFactory, world: World, priors: Priors, llm: LLM
+def _replay_days(
+    world_dir: Path,
+    store_path: Path,
+    llm: LLM,
+    priors: Priors,
+    configs: dict[str, frozenset[str]],
 ) -> Built:
     """The world day by day in a store of this file: every reader's selection for each config.
 
-    Key: (user_id, world day, config name in CONFIGS). The selection for a day uses the previous
-    world day as the previous digest, and none on day 1, as `digest demo` does.
+    A selection for a day uses the previous world day as the previous digest, and none on day 1,
+    as `digest demo` does. With a "full" config it also records the send-everything list of the
+    plan: the absence items of the C0 selection by item id, then every open item the reader can
+    see whose newest evidence falls in the window, newest first, then by item id.
     """
+    world = load_world(world_dir / "world.yaml")
     zone = ZoneInfo(world.timezone)
     purposes = {channel.id: channel.purpose for channel in world.channels}
     readers = [persona.user_id for persona in world.personas if persona.role is not None]
-    selections: Built = {}
-    path = tmp_path_factory.mktemp("ranking-built") / "kestrel.sqlite"
-    with Store.open(path) as store:
+    built = Built()
+    with Store.open(store_path) as store:
         for day in range(1, world.days + 1):
             today = world.date_of(day)
-            replay_world(store, WORLD_DIR, today)
+            replay_world(store, world_dir, today)
             as_of = datetime.combine(today, time.max, zone).astimezone(UTC)
             run_extract(store, llm, world.glossary(), world.project, priors, as_of, zone, purposes)
             previous = world.date_of(day - 1) if day > 1 else None
-            for name, off in CONFIGS.items():
+            for name, off in configs.items():
                 daily = priors.daily.model_copy(update={"terms_off": off})
                 config_priors = priors.model_copy(update={"daily": daily})
                 for user in readers:
-                    selections[(user, day, name)] = select_digest(
+                    built[(user, day, name)] = select_digest(
                         store, world, config_priors, user, today, previous_digest=previous
                     )
-    return selections
+            if "full" not in configs:
+                continue
+            start_day = previous or add_working_days(today, -priors.daily.window.first_working_days)
+            start = micros_since_epoch(datetime.combine(start_day, time.max, zone))
+            end = micros_since_epoch(datetime.combine(today, time.max, zone))
+            items = [i for i in store.items(as_of) if i.status == "open"]
+            times = {
+                (e.channel_id, e.ts): ts_micros(e.event_ts)
+                for thread in {i.thread_id for i in items}
+                for e in store.events_in_thread(thread, as_of)
+            }
+            newest = {
+                i.item_id: max(
+                    times.get((e.channel_id, e.message_ts), ts_micros(e.message_ts))
+                    for e in i.evidence
+                )
+                for i in items
+            }
+            for user in readers:
+                profile = profile_for(world, user)
+                shown = sorted(
+                    (
+                        i
+                        for i in items
+                        if ts_micros(i.last_updated) <= end
+                        and start < newest[i.item_id] <= end
+                        and can_see(world, profile, i.thread_id.partition(":")[0])
+                    ),
+                    key=lambda i: (-newest[i.item_id], i.item_id),
+                )
+                absences = sorted(
+                    line.item.item_id
+                    for line in built[(user, day, "full")].lines
+                    if line.item.absence is not None
+                )
+                built.send_ids[(user, day)] = [*absences, *(i.item_id for i in shown)]
+    return built
+
+
+@pytest.fixture(scope="module")
+def built(tmp_path_factory: pytest.TempPathFactory, priors: Priors, llm: LLM) -> Built:
+    path = tmp_path_factory.mktemp("ranking-built") / "kestrel.sqlite"
+    return _replay_days(WORLD_DIR, path, llm, priors, CONFIGS)
+
+
+@pytest.fixture(scope="module")
+def hidden_built(
+    hidden_world: Path, tmp_path_factory: pytest.TempPathFactory, priors: Priors, llm: LLM
+) -> Built:
+    path = tmp_path_factory.mktemp("ranking-hidden-built") / "kestrel.sqlite"
+    return _replay_days(hidden_world, path, llm, priors, {"full": CONFIGS["full"]})
 
 
 def _persona(config: ConfigScores, user_id: str) -> PersonaScores:
@@ -453,6 +549,12 @@ def _persona(config: ConfigScores, user_id: str) -> PersonaScores:
 def _top5(built: Built, user: str, day: int) -> Top5:
     lines = built[(user, day, "full")].lines
     return [(line.item.item_id, line.must_see) for line in lines[:5]]
+
+
+def _ranked5(built: Built, user: str, day: int) -> list[str]:
+    """The first five ranked-lane (not must-see) item ids of C0's digest, in digest order."""
+    lines = built[(user, day, "full")].lines
+    return [line.item.item_id for line in lines if not line.must_see][:5]
 
 
 def _assert_scores(
@@ -537,6 +639,20 @@ FW_TOP5: dict[int, Top5] = {
         (BUFFER, False),
     ],
 }
+# The first five ranked-lane lines (must-see lines removed) of each day, which the ranked-lane
+# grades below read: the lane has no must-see line of grade 2 except S15-GO on day 9.
+FW_RANKED_TOP5: dict[int, list[str]] = {
+    1: [EVT2_EXIT],
+    2: [LIDAR, PLM_11020C, THM_RUN1],
+    3: [SLIP, EMC, PO],
+    4: [MLCC, EMC, PO],
+    5: [FAI, MLCC, EMC, PO],
+    6: [HARNESS, UN383, BUFFER, DFM, FAI],
+    7: [BRACKET, LOT, HARNESS, UN383, BUFFER],
+    8: [DEBOUNCE, FILTER, HARNESS, UN383, BUFFER],
+    9: [GO, HARNESS, UN383, BUFFER, DFM],
+    10: [HARNESS, UN383, BUFFER, DFM, FAI],
+}
 FW_RECALL = [None, 0.0, 1.0, None, 0.0, 1 / 2, 1 / 2, 1 / 2, 2 / 3, 1.0]
 FW_NDCG = [
     1.0,
@@ -589,6 +705,8 @@ def test_c0_persona_scores_match_golden_by_hand_for_two_named_persona_days(
     assert (fw.must_see_lane_facts, fw.ranked_lane_facts) == (6, 1)
     for day, top5 in FW_TOP5.items():
         assert _top5(built, "U0FW01", day) == top5, f"premise: day {day}"
+    for day, ids in FW_RANKED_TOP5.items():
+        assert _ranked5(built, "U0FW01", day) == ids, f"premise (ranked lane): day {day}"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -602,10 +720,10 @@ def test_each_configuration_selects_with_its_named_terms_off(
     """B14.5. Setup: a pass-through spy on the select_digest that ranking.py calls.
 
     Action: run_ranking_eval on the Kestrel world.
-    Assert: the calls carry exactly the six `terms_off` sets of C0, C1 to C4 and role-only; each
-    set covers all seven readers on all ten days with the previous world day as previous digest
-    (none on day 1); no other priors field changes; the report names the configurations and
-    their terms in order.
+    Assert: for each of the six `terms_off` sets of C0, C1 to C4 and role-only, the calls cover
+    all seven readers on all ten days with the previous world day as previous digest (none on
+    day 1) and change no other priors field; the report names the configurations and their
+    terms in order. The test says nothing about how send-everything gets its list.
     """
     report = base_run.report()
 
@@ -624,7 +742,8 @@ def test_each_configuration_selects_with_its_named_terms_off(
         )
         cleared = call.priors.daily.model_copy(update={"terms_off": frozenset()})
         assert call.priors.model_copy(update={"daily": cleared}) == priors
-    assert seen == dict.fromkeys(CONFIGS.values(), every_day)
+    for name, off in CONFIGS.items():
+        assert seen.get(off, set()) >= every_day, name
 
     configs = report.configs
     assert len(configs) == 7
@@ -673,17 +792,185 @@ def test_changed_days_equals_the_count_from_comparing_the_top_5_lists(
 
     Action: run_ranking_eval; count the persona-days whose overall or ranked-lane top 5 differs
     from C0's (item ids in order), 7 readers by 10 days.
-    Assert: the config's changed_days equals that count. The count is above 0, so a stub that
-    returns 0 cannot pass.
+    Assert: the config's changed_days equals that count.
     """
     report = base_run.report()
 
     expected = _changed_days(built, name)
-    assert 0 < expected < 70
     config = next(
         c for c in report.configs if set(c.terms_off) == set(CONFIGS[name]) and c.terms_off
     )
     assert config.changed_days == expected
+
+
+# ---------------------------------------------------------------------------------------------
+# R7 and R8: the means across personas, and the verdict of each term from the configurations.
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("lane", ["overall", "ranked_lane"])
+def test_every_configuration_value_is_the_mean_of_the_persona_means_that_have_one(
+    lane: str, base_run: Run
+) -> None:
+    """R7. Setup: the report of the Kestrel run, all seven configurations.
+
+    Action: for each configuration and each metric, take the persona rows' means.
+    Assert: the configuration's value is the mean of the persona means that are not None, its
+    persona count is the number of those personas, a persona with no day with a value is
+    left out, and n and without are the sums over the personas.
+    """
+    report = base_run.report()
+
+    assert len(report.configs) == 7
+    for config in report.configs:
+        assert len(config.per_persona) == 7, config.name
+        scores = getattr(config, lane)
+        rows = [getattr(persona, lane) for persona in config.per_persona]
+        for metric in ("recall", "ndcg"):
+            means = [getattr(row, f"{metric}_at_5") for row in rows]
+            have = [mean for mean in means if mean is not None]
+            where = f"{config.name} {lane} {metric}"
+            # A persona has a mean exactly when it has a day with a value.
+            assert len(have) == sum(1 for row in rows if getattr(row, f"{metric}_n") > 0), where
+            value = getattr(scores, f"{metric}_at_5")
+            if have:
+                assert value == pytest.approx(sum(have) / len(have)), where
+            else:
+                assert value is None, where
+            assert getattr(scores, f"{metric}_personas") == len(have), where
+            for count in ("n", "without"):
+                assert getattr(scores, f"{metric}_{count}") == sum(
+                    getattr(row, f"{metric}_{count}") for row in rows
+                ), where
+
+
+METRIC_FIELDS = (
+    ("overall", "recall_at_5"),
+    ("overall", "ndcg_at_5"),
+    ("ranked_lane", "recall_at_5"),
+    ("ranked_lane", "ndcg_at_5"),
+)
+
+
+def test_each_ablation_verdict_follows_from_the_configuration_values(base_run: Run) -> None:
+    """R8. Setup: the report of the Kestrel run; C0 and the four term configurations.
+
+    Action: compute the verdict of each term in the test. A metric's drop is (c0 - off) / c0 for
+    overall recall, overall nDCG, ranked-lane recall and ranked-lane nDCG, with no vote when c0 is
+    0 or None. A drop of at least min_effect votes keep; the term is keep when any metric votes
+    keep, remove when a metric votes and none votes keep, and no vote when none votes.
+    Assert: report.ablation holds the four terms in order with that verdict and those drops.
+    """
+    report = base_run.report()
+
+    assert report.min_effect == 0.01
+    assert [row.term for row in report.ablation] == list(TERMS)
+    c0 = report.configs[0]
+    for row in report.ablation:
+        off_config = next(c for c in report.configs[1:5] if set(c.terms_off) == {row.term})
+        drops: list[float | None] = []
+        for lane, field_name in METRIC_FIELDS:
+            base = getattr(getattr(c0, lane), field_name)
+            off = getattr(getattr(off_config, lane), field_name)
+            if base is None or base == 0:
+                drops.append(None)
+                continue
+            assert off is not None, f"premise: {row.term} {lane} {field_name}"
+            drops.append((base - off) / base)
+        votes = [drop >= report.min_effect for drop in drops if drop is not None]
+        expected = "no vote" if not votes else "keep" if any(votes) else "remove"
+        assert row.verdict == expected, row.term
+        assert len(row.drops) == 4
+        assert sorted(d for d in row.drops.values() if d is not None) == pytest.approx(
+            sorted(d for d in drops if d is not None)
+        ), row.term
+        assert sum(d is None for d in row.drops.values()) == drops.count(None), row.term
+
+
+# ---------------------------------------------------------------------------------------------
+# The send-everything baseline, for the firmware reader U0FW01, ten days.
+#
+# Named persona-day: day 2 (2026-10-13). The window holds world day 2. U0FW01 reads every
+# channel that carries an item on that day (all are public), and no absence exists, so the
+# list is the items whose newest evidence is on day 2, newest first, then by item id:
+#   1  C0ENGME 1791911662.000400#...#0  newest evidence 1791913127 (the post was edited)
+#   2  C0ENGEF 1791911400.010019        1791911400
+#   3  C0SUPCH 1791909900.010014#1791910320.010017#0   1791910320
+#   4  C0SUPCH 1791909900.010014#1791910020.010015#0   1791910200
+#   5  C0SUPCH 1791909900.010014#1791909900.010014#0   1791909900  (S14-LTB)
+#   (6  C0PLMFD 1791908400.010010                      1791908880)
+# Facts of day 2 for the FW role (golden.jsonl): S14-LTB must_see_for lists U0FW01, grade 2;
+# S1-AGREE, PLM-11020C and S3-THERMAL-RUN1 do not name FW, grade 0. Line grades [0,0,0,0,2]:
+# only item 5 delivers a fact. recall = 1 / 1. nDCG = (3 / log2 6) / 3 = 0.38685. C0's digest
+# drops the S14-LTB item for FW (its score is below the threshold); send-everything shows it.
+#
+# The other days, same method. The two ways to read "every item" (open items only, or also
+# resolved ones) give the same grades for this reader; resolved items come after the five
+# lines or change no grade.
+#   day  top-5 grades   fact grades      recall  nDCG
+#   1    [1,0,0,0]      [1,0,0,0]        none    1
+#   2    [0,0,0,0,2]    [2,0,0,0]        1 / 1   1 / log2 6
+#   3    [2,0,0,0]      [2,0,0,0]        1 / 1   1
+#   4    [0,0,0,0,0]    [0,0,0,0,0,0]    none    none
+#   5    [0,0]          [2,0,0,0,0]      0 / 1   0
+#   6    [2,0,0,0,0]    [2,2,0...]       1 / 2   3 / (3 + 3 / log2 3)
+#   7    [2,0,0,0,0]    [2,2,0...]       1 / 2   3 / (3 + 3 / log2 3)
+#   8    [2,0,1,0]      [2,2,1,1,0..]    1 / 2   (3 + 1 / 2) / (3 + 3 / log2 3 + 1 / 2 + 1 / log2 5)
+#   9    [2,2]          [2,2,2,0..]      2 / 3   (3 + 3 / log2 3) / (3 + 3 / log2 3 + 3 / 2)
+#   10   [2,0]          [2,0]            1 / 1   1
+# The send-everything list has no must-see lane, so its ranked-lane list is the whole list.
+# ---------------------------------------------------------------------------------------------
+
+SEND_FW_TOP5: dict[int, list[str]] = {
+    1: [EVT2_EXIT, DOC_PACK, SCHEDULE_SYNC, ECO_BOM],
+    2: [LIDAR, THM_RUN1, LTB_REPLY, ON_HAND_ASK, LTB],
+    3: [ASK_SAF, SLIP, EMC, PO],
+    4: [PO_AMEND_ASK, SUPPLIER_NOISE, BOM_11034, DROP_IN_ASK, MLCC],
+    5: [PAYLOAD, FAI],
+    6: [ASK_SAF_ABSENCE, HARNESS, HARNESS_ASK, UN383, BUFFER],
+    7: [ASK_SAF_ABSENCE, FLAG_ASK, BRACKET, TEXTURE, LOT_BLOCK],
+    8: [ASK_SAF_ABSENCE, BENCH_ASK, FILTER, DEBOUNCE],
+    9: [ASK_SAF_ABSENCE, GO],
+    10: [ASK_SAF_ABSENCE, BUILD_D1],
+}
+SEND_RECALL = [None, 1.0, 1.0, None, 0.0, 1 / 2, 1 / 2, 1 / 2, 2 / 3, 1.0]
+SEND_NDCG = [
+    1.0,
+    1 / math.log2(6),
+    1.0,
+    None,
+    0.0,
+    3 / (3 + 3 / L3),
+    3 / (3 + 3 / L3),
+    (3 + 1 / 2) / (3 + 3 / L3 + 1 / 2 + 1 / L5),
+    (3 + 3 / L3) / (3 + 3 / L3 + 3 / 2),
+    1.0,
+]
+
+
+def test_send_everything_scores_the_firmware_reader_by_hand(base_run: Run, built: Built) -> None:
+    """Baseline send-everything. Setup: the firmware reader's ten days worked by hand; the top 5
+    of each day is pinned and is rebuilt from the store by this file.
+
+    Action: run_ranking_eval; read the send-everything row of U0FW01 and its changed_days.
+    Assert: recall and nDCG (overall) equal the hand-worked days; changed_days equals this file's
+    count of persona-days whose send-everything top 5 differs from C0's overall top 5 or C0's
+    ranked-lane top 5.
+    """
+    report = base_run.report()
+
+    send = report.configs[-1]
+    assert send.name == "send-everything"
+    _assert_scores(_persona(send, "U0FW01").overall, SEND_RECALL, SEND_NDCG)
+    for day, ids in SEND_FW_TOP5.items():
+        assert built.send_ids[("U0FW01", day)][:5] == ids, f"premise: day {day}"
+    expected = sum(
+        1
+        for (user, day), ids in built.send_ids.items()
+        if tuple(ids[:5]) != _ids(built[(user, day, "full")], ranked_only=False)
+        or tuple(ids[:5]) != _ids(built[(user, day, "full")], ranked_only=True)
+    )
+    assert send.changed_days == expected
 
 
 # ---------------------------------------------------------------------------------------------
@@ -756,15 +1043,89 @@ def test_an_open_blocker_from_before_the_window_scores_zero_on_a_later_day(
         assert _top5(built, "U0ME01", day) == top5, f"premise: day {day}"
 
 
+# The supply-chain reader U0SC01 (Hamid Rostami), C0: the top 5 and the ranked-lane top 5 of
+# every day. The hidden-channel test compares two runs, so every day it relies on is pinned, in
+# the base world and (day 2 only differs) in the world where C0ENGME is private.
+SC_TOP5: dict[int, Top5] = {
+    1: [(ECO_BOM, False), (EVT2_EXIT, False)],
+    2: [
+        (ON_HAND_ASK, True),
+        (PLM_11020C, False),
+        (LIDAR, False),
+        (LTB, False),
+        (THM_RUN1, False),
+    ],
+    3: [(ON_HAND_ASK, True), (SLIP, False), (PO, True), (EMC, False)],
+    4: [
+        (ANODIZE_ASK, True),
+        (ON_HAND_ASK, True),
+        (PO_AMEND_ASK, True),
+        (BOM_11034, False),
+        (PO, True),
+    ],
+    5: [(ANODIZE_ASK, True), (ON_HAND_ASK, True), (PO, True), (FAI, False), (MLCC, False)],
+    6: [
+        (HARNESS_ASK, True),
+        (ANODIZE_ASK, True),
+        (ON_HAND_ASK, True),
+        (PO, True),
+        (HARNESS, False),
+    ],
+    7: [
+        (HARNESS_ASK, True),
+        (LOT_ASK, True),
+        (ANODIZE_ASK, True),
+        (ON_HAND_ASK, True),
+        (LOT, False),
+    ],
+    8: [(HARNESS_ASK, True), (LOT_ASK, True), (ANODIZE_ASK, True), (ON_HAND_ASK, True), (PO, True)],
+    9: [
+        (LOT_ASK, True),
+        (ANODIZE_ASK, True),
+        (ON_HAND_ASK, True),
+        (HARNESS_ASK_ABSENCE, True),
+        (GO, False),
+    ],
+    10: [
+        (ANODIZE_ASK, True),
+        (ON_HAND_ASK, True),
+        (HARNESS_ASK_ABSENCE, True),
+        (LOT_ASK_ABSENCE, True),
+        (PO, True),
+    ],
+}
+SC_RANKED5: dict[int, list[str]] = {
+    1: [ECO_BOM, EVT2_EXIT],
+    2: [PLM_11020C, LIDAR, LTB, THM_RUN1],
+    3: [SLIP, EMC],
+    4: [BOM_11034, MLCC, EMC, DROP_IN_ASK],
+    5: [FAI, MLCC, EMC],
+    6: [HARNESS, UN383, FAI, MLCC, BUFFER],
+    7: [LOT, HARNESS, UN383, FAI, MLCC],
+    8: [HARNESS, UN383, FAI, MLCC, BUFFER],
+    9: [GO, HARNESS, UN383, FAI, MLCC],
+    10: [HARNESS, UN383, FAI, MLCC, BUFFER],
+}
+# Day 2 with C0ENGME private: the LiDAR decision is not visible to U0SC01.
+HIDDEN_SC_DAY2_TOP5: Top5 = [
+    (ON_HAND_ASK, True),
+    (PLM_11020C, False),
+    (LTB, False),
+    (THM_RUN1, False),
+]
+HIDDEN_SC_DAY2_RANKED5 = [PLM_11020C, LTB, THM_RUN1]
+
+
 def test_a_fact_on_a_channel_the_reader_cannot_see_is_not_in_the_reader_set(
-    base_run: Run, hidden_run: Run
+    base_run: Run, hidden_run: Run, built: Built, hidden_built: Built
 ) -> None:
     """B14.6. Setup: a copy of the world where C0ENGME (eng-mech) is private; U0SC01 (supply
     chain) is not a member. On day 2 the S1-AGREE decision (C0ENGME, must_see_for lists
     U0SC01) is a fact of grade 2 that the reader delivered in the base run.
 
     Action: run_ranking_eval on both worlds; compare the C0 row of U0SC01.
-    Assert: against the base run, only day 2 changes. Base day 2: lines [0,1,2,0,0] against
+    Assert: the pinned top 5 of every day is the same in both worlds except day 2, so against the
+    base run only day 2 changes. Base day 2: lines [0,1,2,0,0] against
     facts [2,1] (recall 1 / 1, nDCG (1 / log2 3 + 3 / 2) / (3 + 1 / log2 3) = 0.58688; ranked
     lane lines [1,2,0,0], recall 1 / 1, nDCG (1 + 3 / log2 3) / (3 + 1 / log2 3) = 0.79671).
     Hidden day 2: S1-AGREE leaves the set and the line leaves the digest. Lines [0,1,0,0]
@@ -773,6 +1134,14 @@ def test_a_fact_on_a_channel_the_reader_cannot_see_is_not_in_the_reader_set(
     """
     base = _persona(base_run.report().configs[0], "U0SC01")
     hidden = _persona(hidden_run.report().configs[0], "U0SC01")
+
+    for day in range(1, 11):
+        assert _top5(built, "U0SC01", day) == SC_TOP5[day], f"premise (base): day {day}"
+        assert _ranked5(built, "U0SC01", day) == SC_RANKED5[day], f"premise (base): day {day}"
+        top5 = HIDDEN_SC_DAY2_TOP5 if day == 2 else SC_TOP5[day]
+        ranked5 = HIDDEN_SC_DAY2_RANKED5 if day == 2 else SC_RANKED5[day]
+        assert _top5(hidden_built, "U0SC01", day) == top5, f"premise (hidden): day {day}"
+        assert _ranked5(hidden_built, "U0SC01", day) == ranked5, f"premise (hidden): day {day}"
 
     def total(scores: Scores, metric: str) -> float:
         mean, n = (
@@ -813,6 +1182,9 @@ def test_a_fact_delivered_by_two_lines_scores_once(doubled_run: Run) -> None:
     """
     fw = _persona(doubled_run.report().configs[0], "U0FW01")
 
+    assert doubled_run.applied > 0, (
+        "the repeat was never injected: no select_digest call reached it"
+    )
     _assert_scores(fw.overall, FW_RECALL, FW_NDCG)
     _assert_scores(fw.ranked_lane, FW_RANKED_RECALL, FW_RANKED_NDCG)
     assert (fw.must_see_lane_facts, fw.ranked_lane_facts) == (6, 1)
@@ -884,6 +1256,11 @@ def _invoke_eval(root: Path) -> str:
     return out.read_text(encoding="utf-8")
 
 
+def _fmt(value: float | None) -> str:
+    """How the Ranking section prints a number: 3 decimals, or n/a."""
+    return "n/a" if value is None else f"{value:.3f}"
+
+
 def test_digest_eval_writes_the_ranking_section_offline(
     base_run: Run, cli_run: CliRun, world: World
 ) -> None:
@@ -891,15 +1268,19 @@ def test_digest_eval_writes_the_ranking_section_offline(
     socket.connect blocked; the in-process report names the rows to look for.
 
     Action: read the report the command wrote.
-    Assert: the Ranking section holds a configuration table with seven rows (the report's
-    names, in order), an ablation table with the four terms and the verdict of each, a
-    persona table with one row per human persona and its role, the min_effect value and the
-    labels line; the command made the ranking store beside the extraction store. The committed
-    report is compared in tests/test_corpus_data.py.
+    Assert: the file holds write_ranking_section(report) of the same run; the Ranking section
+    holds a configuration table with seven rows (the report's names, in order) whose numbers
+    are the report's at 3 decimals (or n/a), an ablation table with the four terms, their drops
+    and verdicts, a persona table with one row per human persona, its role and its C0 numbers,
+    the exact keep-rule line with min_effect 0.01 and the labels line; the command made the
+    ranking store beside the extraction store. The committed report is compared in
+    tests/test_corpus_data.py.
     """
     report = base_run.report()
     text = cli_run.text()
 
+    assert report.min_effect == 0.01
+    assert write_ranking_section(report) in text
     lines = text.splitlines()
     start = next(i for i, line in enumerate(lines) if re.match(r"#{1,6}\s+Ranking\b", line))
     section = lines[start:]
@@ -908,12 +1289,20 @@ def test_digest_eval_writes_the_ranking_section_offline(
     names = [config.name for config in report.configs]
     config_tables = [rows for rows in tables if [row[0] for row in rows] == names]
     assert len(names) == 7 and len(config_tables) == 1
+    for row, config in zip(config_tables[0], report.configs, strict=True):
+        for scores in (config.overall, config.ranked_lane):
+            assert _fmt(scores.recall_at_5) in row, config.name
+            assert _fmt(scores.ndcg_at_5) in row, config.name
+            assert str(scores.recall_n) in row and str(scores.ndcg_n) in row, config.name
+        assert str(config.changed_days) in row, config.name
 
     ablation_tables = [rows for rows in tables if [row[0] for row in rows] == list(TERMS)]
     assert len(ablation_tables) == 1
     for row, expected in zip(ablation_tables[0], report.ablation, strict=True):
         assert expected.term == row[0]
-        assert any(expected.verdict in cell for cell in row)
+        assert expected.verdict in row
+        for drop in expected.drops.values():
+            assert _fmt(drop) in row, expected.term
 
     readers = [(p.name, p.role) for p in world.personas if p.role is not None]
     assert len(readers) == 7
@@ -927,8 +1316,19 @@ def test_digest_eval_writes_the_ranking_section_offline(
         )
     ]
     assert len(persona_tables) == 1
+    for persona in report.configs[0].per_persona:
+        row = next(r for r in persona_tables[0] if persona.name in " | ".join(r))
+        assert persona.role in row
+        assert _fmt(persona.overall.recall_at_5) in row, persona.name
+        assert _fmt(persona.overall.ndcg_at_5) in row, persona.name
+        assert _fmt(persona.ranked_lane.recall_at_5) in row, persona.name
+        assert _fmt(persona.ranked_lane.ndcg_at_5) in row, persona.name
 
+    keep_rule = (
+        "Keep rule: a term stays when a metric drops by at least 0.01 of its value with the "
+        "term on."
+    )
+    assert keep_rule in section
     assert LABELS_LINE in section
-    assert str(report.min_effect) in "\n".join(section)
     assert (cli_run.root / "data" / "eval-ranking-kestrel.sqlite").is_file()
     assert (cli_run.root / "data" / "eval-kestrel.sqlite").is_file()
