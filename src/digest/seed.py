@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from digest.models import Event, ts_datetime
+from digest.models import Event, permalink_for, ts_datetime
 from digest.world.schema import World
 
 ROLE_EMOJI: dict[str, str] = {
@@ -426,10 +426,7 @@ def message_permalink(seed_map: SeedMap, key: str) -> str | None:
     message = seed_map.messages.get(key)
     if message is None:
         return None
-    link = f"{seed_map.workspace_url}/archives/{message.channel}/p{message.ts.replace('.', '')}"
-    if message.ts != message.thread_ts:
-        link += f"?thread_ts={message.thread_ts}&cid={message.channel}"
-    return link
+    return permalink_for(seed_map.workspace_url, message.channel, message.ts, message.thread_ts)
 
 
 def channel_of(seed_map: SeedMap, key: str) -> str | None:

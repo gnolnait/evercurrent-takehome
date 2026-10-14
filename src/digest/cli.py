@@ -241,10 +241,7 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
         if failure is not None:
             _refuse(failure)
         if team_id != links.team_id:
-            _refuse(
-                f"the seed map is for team_id {links.team_id}, "
-                f"but the bot token is for team_id {team_id}"
-            )
+            _refuse("the seed map is for another Slack workspace (team) than the bot token")
     _echo_unmapped(selections, links)
     typer.echo(f"sending {len(messages)} digests by DM to {user_id}")
     try:
@@ -266,21 +263,31 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
 
 
 def _load_seed_map(path: Path) -> SeedMap:
-    """The seed map at `path`. A missing or unreadable map, or one for another world, exits 1."""
+    """The seed map at `path`. A missing or unreadable map, or one for another world, exits 1.
+
+    A refusal prints no value read from the file, because a wrong path such as `.env` can
+    hold a token. A validation error shows the location and message of each problem only.
+    """
     # Each refusal comes after its try statement, so no exception chains to it.
     failure: str | None = None
     try:
         links = SeedMap.load(path)
     except OSError as error:
         failure = f"{path}: {error.strerror or error}"
-    except (UnicodeDecodeError, ValidationError) as error:
+    except UnicodeDecodeError as error:
         failure = f"{path}: not a seed map: {error}"
+    except ValidationError as error:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in problem['loc']) or 'map'}: {problem['msg']}"
+            for problem in error.errors(include_input=False, include_url=False)
+        )
+        failure = f"{path}: not a seed map: {problems}"
     if failure is not None:
         _refuse(failure)
     if links is None:
         _refuse(f"{path}: the seed map does not exist")
     if links.world != _DEMO_WORLD:
-        _refuse(f"{path}: the seed map is for world {links.world}, not {_DEMO_WORLD}")
+        _refuse(f"{path}: the seed map is for another world, not {_DEMO_WORLD}")
     return links
 
 
