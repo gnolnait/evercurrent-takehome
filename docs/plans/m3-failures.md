@@ -35,7 +35,7 @@ unchanged:
   either as a failed thread (it catches `LLMOutputError`), and the wrapper does not retry
   it (it retries only `LLMOutputInvalid`).
   The `LLMOutputError` docstring ("The backend answered") changes to cover a backend that
-  did not answer. Effect on the CLI: `digest extract` prints the failed count and exits 0,
+  did not answer. Effect on the CLI with the gateway backend (the default): `digest extract` prints the failed count and exits 0,
   as it does today for an HTTP status error, and the thread stays pending for the next
   run. Today it crashes with a traceback. `digest demo` replays only, so it never
   reaches the gateway.
