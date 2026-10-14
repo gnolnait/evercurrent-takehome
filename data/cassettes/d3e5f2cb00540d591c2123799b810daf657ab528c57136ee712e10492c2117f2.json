@@ -1,0 +1,46 @@
+{
+  "key": "d3e5f2cb00540d591c2123799b810daf657ab528c57136ee712e10492c2117f2",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Program status, schedule, gate reviews and decisions\n\nThread root:\n[ts 1792423800.010077] author U0EM01: G-DVT1 is on day 9 and we're 4 days into the 7-day buffer. TST-THM-02 is still open, and the top-cover DFM review is still open too.\nChanged messages, oldest first:\n[ts 1792458060.000000] author U0EE01: TST-THM-02 rerun with the new vent layout passed: 61 C max at 35 C ambient. The thermal review is closed."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message reports that the TST-THM-02 thermal rerun passed at 61 C max and that the thermal review is closed. This is a status update that changes a previously open test item on the G-DVT1 schedule, so a program member needs it. It is project information, not small talk.\", \"probability\": 0.9}",
+    "data": {
+      "rationale": "The changed message reports that the TST-THM-02 thermal rerun passed at 61 C max and that the thermal review is closed. This is a status update that changes a previously open test item on the G-DVT1 schedule, so a program member needs it. It is project information, not small talk.",
+      "probability": 0.9
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 651,
+    "output_tokens": 105
+  },
+  "recorded_at": "2026-10-14T04:17:30.487211+00:00"
+}

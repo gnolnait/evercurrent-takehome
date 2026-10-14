@@ -99,9 +99,9 @@ def select(
     zone = ZoneInfo(world.timezone)
     end = micros_since_epoch(datetime.combine(day, time.max, zone))
     window = priors.daily.window
-    start_day = previous_digest or add_working_days(day, -window.first_working_days)
-    start_day = max(start_day, add_working_days(day, -window.max_working_days))
-    start = micros_since_epoch(datetime.combine(start_day, time.max, zone))
+    start = micros_since_epoch(
+        datetime.combine(window_start(window, day, previous_digest), time.max, zone)
+    )
     current = [
         item for item in items if item.status == "open" and ts_micros(item.last_updated) <= end
     ]
@@ -152,6 +152,15 @@ def select(
         previous_digest=previous_digest,
         first_working_days=window.first_working_days,
     )
+
+
+def window_start(window: WindowPriors, day: date, previous_digest: date | None) -> date:
+    """The day whose end opens the digest window: the previous digest, or the first-digest days.
+
+    The window reaches at most `max_working_days` back.
+    """
+    start = previous_digest or add_working_days(day, -window.first_working_days)
+    return max(start, add_working_days(day, -window.max_working_days))
 
 
 def _cited_ask(item: Item) -> str | None:

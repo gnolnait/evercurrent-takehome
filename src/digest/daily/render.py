@@ -5,7 +5,7 @@ See plan B6.1 and B6.2.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -13,7 +13,7 @@ from digest.absence import detect_absences
 from digest.daily.profile import profile_for
 from digest.daily.select import Line, Section, Selection, select
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
-from digest.models import ts_micros
+from digest.models import Item, ts_micros
 from digest.priors import Priors
 from digest.project import ChecklistTask, add_working_days
 from digest.store import Store
@@ -104,15 +104,41 @@ def select_digest(
     without one, the digest is a first digest. An item's newest evidence is the greatest `event_ts` among the stored messages
     its evidence cites, so an edit counts as new evidence.
 
-    Raise ValueError for a store without `meta.until`, a store whose `meta.until` is not
-    exactly the end of `day` in the world's zone, or a store with extract deltas pending.
-    The store keeps only the latest version of each item, so a store replayed past `day`
-    cannot show `day`: its refusal names a fresh store as the remedy. Raise KeyError for an unknown user and ValueError for a bot. The
-    caller checks that the store holds the world: replay stores the world directory name,
-    and `world` does not carry it.
+    Raise ValueError for a store that `check_store_day` refuses. Raise KeyError for an
+    unknown user and ValueError for a bot.
     """
+    check_store_day(store, world, day)
+    try:
+        profile = profile_for(world, user_id)
+    except ValueError as error:
+        raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
     zone = ZoneInfo(world.timezone)
     as_of = datetime.combine(day, time.max, zone).astimezone(UTC)
+    items = store.items(as_of)
+    absences = detect_absences(store, world.project, priors, as_of, zone)
+    recent_start = datetime.combine(
+        add_working_days(day, -priors.daily.recent_activity.working_days), time.max, zone
+    )
+    recent_messages = store.authored_messages(profile.user_id, recent_start, as_of)
+    return select(
+        world,
+        profile,
+        items,
+        absences,
+        priors,
+        day,
+        previous_digest,
+        newest_evidence(store, items, as_of),
+        recent_messages,
+    )
+
+
+def replayed_until(store: Store) -> datetime:
+    """The instant in the store's `meta.until`.
+
+    Raise ValueError for a store without `meta.until`, or for a value that is not an ISO
+    timestamp with a UTC offset.
+    """
     until = store.get_meta("until")
     if until is None:
         raise ValueError(f"store {store.path} has no meta key 'until'; run digest replay first")
@@ -125,6 +151,22 @@ def select_digest(
             f"store {store.path} meta key 'until' is {until!r}, "
             "not an ISO timestamp with a UTC offset"
         )
+    return replayed
+
+
+def check_store_day(store: Store, world: World, day: date) -> None:
+    """Refuse a store that cannot show `day`.
+
+    Raise ValueError for a store that `replayed_until` refuses, a store whose `meta.until`
+    is not exactly the end of `day` in the world's zone, or a store with extract deltas
+    pending. The store keeps only the latest version of each item, so a store replayed
+    past `day` cannot show `day`: its refusal names a fresh store as the remedy. The
+    caller checks that the store holds the world: replay stores the world directory name,
+    and `world` does not carry it.
+    """
+    as_of = datetime.combine(day, time.max, ZoneInfo(world.timezone)).astimezone(UTC)
+    replayed = replayed_until(store)
+    until = store.get_meta("until")  # the stored text, so a refusal quotes it as it is
     if replayed > as_of:
         raise ValueError(
             f"store {store.path} is replayed until {until}, past the end of day {day} "
@@ -141,41 +183,26 @@ def select_digest(
             f"store {store.path} has extract deltas pending as of day {day}; "
             "run digest extract first"
         )
-    try:
-        profile = profile_for(world, user_id)
-    except ValueError as error:
-        raise ValueError(f"{user_id} is a bot, not a human reader: {error}") from error
-    items = store.items(as_of)
-    absences = detect_absences(store, world.project, priors, as_of, zone)
-    # Extract cites only messages of the item's own thread. A cited message the store does not
-    # hold counts at its `message_ts`.
+
+
+def newest_evidence(store: Store, items: Sequence[Item], as_of: datetime) -> dict[str, int]:
+    """Item id to the greatest `event_ts` among the stored messages its evidence cites.
+
+    The value is in microseconds since the epoch. Extract cites only messages of the item's own
+    thread. A cited message the store does not hold counts at its `message_ts`.
+    """
     event_times = {
         (event.channel_id, event.ts): ts_micros(event.event_ts)
         for thread_id in {item.thread_id for item in items}
         for event in store.events_in_thread(thread_id, as_of)
     }
-    newest_evidence = {
+    return {
         item.item_id: max(
             event_times.get((entry.channel_id, entry.message_ts), ts_micros(entry.message_ts))
             for entry in item.evidence
         )
         for item in items
     }
-    recent_start = datetime.combine(
-        add_working_days(day, -priors.daily.recent_activity.working_days), time.max, zone
-    )
-    recent_messages = store.authored_messages(profile.user_id, recent_start, as_of)
-    return select(
-        world,
-        profile,
-        items,
-        absences,
-        priors,
-        day,
-        previous_digest,
-        newest_evidence,
-        recent_messages,
-    )
 
 
 def line_parts(

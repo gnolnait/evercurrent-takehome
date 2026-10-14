@@ -1,0 +1,46 @@
+{
+  "key": "53b51fd5f9fa782bd0e40d8d6099dd827c5359cb9646779a399c09f2fe14ae36",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Shared channel with Sunrise Precision Mfg\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792164600.010061] author U0CM01: FAI photos + CMM for PN-11020 came back with the Rev B hole pattern. We built from the attached drawing pack."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message reports that first-article inspection photos and CMM data for PN-11020 show the Rev B hole pattern, built from the attached drawing pack. This is a manufacturing status update on a specific part and drawing revision, which a program member would need to know, especially if the pattern conflicts with the intended revision. It is not small talk, so it carries project information, though it does not explicitly state a blocker or decision.\", \"probability\": 0.8}",
+    "data": {
+      "rationale": "The changed message reports that first-article inspection photos and CMM data for PN-11020 show the Rev B hole pattern, built from the attached drawing pack. This is a manufacturing status update on a specific part and drawing revision, which a program member would need to know, especially if the pattern conflicts with the intended revision. It is not small talk, so it carries project information, though it does not explicitly state a blocker or decision.",
+      "probability": 0.8
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 588,
+    "output_tokens": 149
+  },
+  "recorded_at": "2026-10-14T04:17:45.904885+00:00"
+}

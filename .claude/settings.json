@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi"
+            "command": "w=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; s=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner.py\"; p=\"${CLAUDE_HOOK_PYTHON-}\"; case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; if [ -n \"$p\" ] && [ -f \"$s\" ]; then if \"$p\" \"$s\"; then rc=0; else rc=$?; fi; elif [ -x \"$w\" ]; then if \"$w\"; then rc=0; else rc=$?; fi; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished, broken mid-run, or a bad CLAUDE_HOOK_PYTHON?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\""
           }
         ]
       },
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi"
+            "command": "w=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; s=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner.py\"; p=\"${CLAUDE_HOOK_PYTHON-}\"; case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; if [ -n \"$p\" ] && [ -f \"$s\" ]; then if \"$p\" \"$s\"; then rc=0; else rc=$?; fi; elif [ -x \"$w\" ]; then if \"$w\"; then rc=0; else rc=$?; fi; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished, broken mid-run, or a bad CLAUDE_HOOK_PYTHON?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\""
           }
         ]
       },
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: prove-test-gate-actions exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: prove-test-gate-actions missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi",
+            "command": "w=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions\"; s=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove_test_gate_actions.py\"; p=\"${CLAUDE_HOOK_PYTHON-}\"; case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; if [ -n \"$p\" ] && [ -f \"$s\" ]; then if \"$p\" \"$s\"; then rc=0; else rc=$?; fi; elif [ -x \"$w\" ]; then if \"$w\"; then rc=0; else rc=$?; fi; else echo \"BLOCKED: prove-test-gate-actions missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: prove-test-gate-actions exited $rc (vanished, broken mid-run, or a bad CLAUDE_HOOK_PYTHON?); failing closed. Retry shortly. Bypass: export BYPASS_PROVE_TEST=1 before launching the session.\" >&2 || :; rc=2; fi; exit \"$rc\"",
             "timeout": 15
           }
         ]
@@ -39,11 +39,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi"
+            "command": "w=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner\"; s=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner.py\"; p=\"${CLAUDE_HOOK_PYTHON-}\"; case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; if [ -n \"$p\" ] && [ -f \"$s\" ]; then if \"$p\" \"$s\"; then rc=0; else rc=$?; fi; elif [ -x \"$w\" ]; then if \"$w\"; then rc=0; else rc=$?; fi; else echo \"BLOCKED: guard_runner missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/guard_runner (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: guard_runner exited $rc (vanished, broken mid-run, or a bad CLAUDE_HOOK_PYTHON?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\""
           },
           {
             "type": "command",
-            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions\"; if [ -x \"$f\" ]; then if \"$f\"; then rc=0; else rc=$?; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: prove-test-gate-actions exited $rc (vanished or broken mid-run?); failing closed. Retry shortly.\" >&2 || :; rc=2; fi; exit \"$rc\"; else echo \"BLOCKED: prove-test-gate-actions missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi",
+            "command": "w=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions\"; s=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove_test_gate_actions.py\"; p=\"${CLAUDE_HOOK_PYTHON-}\"; case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; if [ -n \"$p\" ] && [ -f \"$s\" ]; then if \"$p\" \"$s\"; then rc=0; else rc=$?; fi; elif [ -x \"$w\" ]; then if \"$w\"; then rc=0; else rc=$?; fi; else echo \"BLOCKED: prove-test-gate-actions missing or not executable at ${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-gate-actions (checkout mid-update?); failing closed. Retry shortly.\" >&2 || :; exit 2; fi; if [ \"$rc\" != 0 ] && [ \"$rc\" != 2 ]; then echo \"BLOCKED: prove-test-gate-actions exited $rc (vanished, broken mid-run, or a bad CLAUDE_HOOK_PYTHON?); failing closed. Retry shortly. Bypass: export BYPASS_PROVE_TEST=1 before launching the session.\" >&2 || :; rc=2; fi; exit \"$rc\"",
             "timeout": 15
           }
         ]
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-track-edit\"; if [ -x \"$f\" ]; then \"$f\" || :; fi; exit 0",
+            "command": "w=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove-test-track-edit\"; s=\"${CLAUDE_PROJECT_DIR-}/.claude/hooks/prove_test_track_edit.py\"; p=\"${CLAUDE_HOOK_PYTHON-}\"; case \"$p\" in */* | *'\\'*) ;; *) p= ;; esac; if [ -n \"$p\" ] && [ -f \"$s\" ]; then \"$p\" \"$s\" || :; elif [ -x \"$w\" ]; then \"$w\" || :; fi; exit 0",
             "timeout": 15
           }
         ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import io
 import json
 import logging
 import os
@@ -10,13 +12,13 @@ import sqlite3
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Set
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
 from statistics import median
 from time import sleep
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 from zoneinfo import ZoneInfo
 
 import typer
@@ -39,6 +41,7 @@ from digest.driver import (
     make_event,
 )
 from digest.eval.extraction import run_extraction_eval, write_report
+from digest.eval.ranking import RankingRefused, RankingReport, run_ranking_eval
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
@@ -530,13 +533,24 @@ def run(
 @app.command()
 def serve(
     port: int = typer.Option(8000, help="Port on 127.0.0.1."),
+    record: bool = typer.Option(
+        False,
+        "--record",
+        help="Allow model calls for a message change with no cassette, and record them.",
+    ),
+    slack: bool = typer.Option(
+        False, "--slack", help="Show the Seed panel; a reseed reads SLACK_BOT_TOKEN."
+    ),
 ) -> None:
-    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world (offline).
+    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world.
 
     The command builds the day-6 store as `digest demo` does, in a temporary directory
     that lasts until the server stops. It closes its own connection to the store before
-    the server starts; the room opens the store for each rebuild. The command never
-    constructs the settings object, so it reads no API key and no `.env` file.
+    the server starts; the room opens the store for each rebuild. Without `--record` the
+    room is offline and reads no API key. With `--record`, the room constructs the
+    settings object only when a message change has no cassette. With `--slack`, the
+    command reads SLACK_BOT_TOKEN as `digest seed` does, and the page can reseed the
+    workspace from the saved corpus copy.
     """
     # The web extra is optional. A top-level import would break `digest demo` on a plain
     # `uv sync`, as `post` avoids for slack-sdk. digest.room is imported here beside the
@@ -553,19 +567,99 @@ def serve(
         installed = True
     if not installed:
         _refuse("digest serve needs the web extra; run uv sync --extra web")
+    reseed: _RoomReseed | None = None
+    if slack:
+        token = _env_value("SLACK_BOT_TOKEN")
+        if token is None:
+            _refuse(_not_set("SLACK_BOT_TOKEN"))
+        if not token.startswith(_BOT_TOKEN_PREFIX):
+            _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
+        reseed = _RoomReseed(_seed_client(token), Path("data") / "world" / _DEMO_WORLD)
     failure: str | None = None
     # build_base reads world day 6; the store must end on that day.
     with _demo_store(6) as (loaded, priors, store):
         try:
             base = build_base(store, loaded, priors)
             store.close()
-            room = Room(base)
+            room = Room(base, record=record)
         except (ValueError, OSError) as error:  # a refused store
             failure = str(error)
         if failure is not None:
             _refuse(failure)
         typer.echo(f"serving the demo room at http://127.0.0.1:{port}/")
-        uvicorn.Server(server_config(create_app(room), port)).run()
+        uvicorn.Server(server_config(create_app(room, reseed=reseed), port)).run()
+
+
+class _RoomReseed:
+    """The room's reseed (plan m3-room-edits S2): the seeder over a saved corpus copy.
+
+    The reference is the corpus that Slack holds now: the last pushed corpus at
+    `.room/pushed-<world>.jsonl` when that file exists, else the committed corpus. After a
+    real run that ends without an error, the copy's corpus becomes the pushed corpus. A dry
+    run or an error never writes that file. It returns the seeder's lines and a summary
+    line as text.
+    """
+
+    def __init__(self, client: SlackSeedClient, world_dir: Path) -> None:
+        self._client = client
+        self._world_dir = world_dir
+
+    def __call__(self, copy_dir: Path, *, dry_run: bool) -> str:
+        """Run the seeder; ValueError with a plain reason for a refusal."""
+        if "reference" not in inspect.signature(seed_corpus).parameters:
+            raise ValueError(
+                "the seeder cannot update messages yet: digest.seed.seed takes no reference"
+            )
+        world = load_world(self._world_dir / "world.yaml")
+        copy_path = copy_dir / "events.jsonl"
+        copy = list(read_events(copy_path, world.workspace_url))
+        pushed = Path(".room") / f"pushed-{world.name}.jsonl"
+        source = pushed if pushed.is_file() else self._world_dir / "events.jsonl"
+        reference = list(read_events(source, world.workspace_url))
+        # The seeder adds `reference` in a later change; the dict keeps this call valid until then.
+        options: dict[str, Any] = {
+            "reference": plan_seed(world, reference, None),
+            "pace": 1.2,
+            "sleep": sleep,
+            "dry_run": dry_run,
+        }
+        lines = io.StringIO()
+        try:
+            with redirect_stdout(lines):
+                report = seed_corpus(
+                    world, plan_seed(world, copy, None), self._client, None, **options
+                )
+        except ValueError:  # SeedBlocked and plan refusals; the message holds no token
+            raise
+        # The message of any other error can hold the token, so the refusal shows
+        # _slack_failure only.
+        except Exception as error:
+            raise ValueError(_slack_failure(error)) from None
+        if not dry_run:
+            _replace_file(pushed, copy_path.read_bytes())
+        # The seeder adds `updated` to its report in a later change.
+        updated = getattr(report, "updated", None)
+        counts = "" if updated is None else f"updated {updated}; "
+        summary = (
+            f"dry run: {counts}complete {report.complete}"
+            if dry_run
+            else f"{counts}seeded {report.posts} posts and {report.files} files in "
+            f"{report.channels} channels; map {report.map_path}"
+        )
+        return f"{lines.getvalue()}{summary}"
+
+
+def _replace_file(path: Path, content: bytes) -> None:
+    """Write `content` to `path` atomically: a temporary file in the same directory, then
+    a replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as handle:
+        handle.write(content)
+    try:
+        os.replace(handle.name, path)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 @app.command("eval")
@@ -579,20 +673,33 @@ def eval_cmd(
 ) -> None:
     """Run the evaluation suite against the golden corpus and write the report.
 
-    The eval runs in a fresh store at data/eval-<world>.sqlite. The command deletes that file
+    The extraction eval runs in a fresh store at data/eval-<world>.sqlite, and the ranking eval
+    after it in a fresh store at data/eval-ranking-<world>.sqlite. The command deletes each file
     and its -wal and -shm files first.
     """
     settings = Settings()
     name = world or settings.world
     world_dir = Path("data") / "world" / name
     store_path = Path("data") / f"eval-{name}.sqlite"
+    ranking_path = Path("data") / f"eval-ranking-{name}.sqlite"
     try:
         loaded = load_world(world_dir / "world.yaml")
         priors = load_priors()
         llm = from_settings(settings)
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{store_path}{suffix}").unlink(missing_ok=True)
+        for fresh in (store_path, ranking_path):
+            for suffix in ("", "-wal", "-shm"):
+                Path(f"{fresh}{suffix}").unlink(missing_ok=True)
         report = run_extraction_eval(world_dir, llm, priors, store_path)
+        ranking: RankingReport | None = None
+        try:
+            ranking = run_ranking_eval(world_dir, llm, priors, ranking_path)
+        # select_digest refuses a day, for example after a failed extract call leaves deltas
+        # pending (plan R7b). The extraction report still holds, so it names the refusal.
+        except RankingRefused as error:
+            typer.echo(f"ranking eval not run: {error}", err=True)
+            report = report.model_copy(
+                update={"not_run": {**report.not_run, "ranking": str(error)}}
+            )
     # CassetteMiss: replay found no recording. ValueError: a stale golden.jsonl, a manifest
     # with no thread for an event, a golden thread never run, a missing API key or a
     # malformed file. OSError: a missing world, manifest or golden file.
@@ -600,7 +707,7 @@ def eval_cmd(
         _refuse(_with_notes(error))
     path = out or Path("reports") / f"eval-{loaded.date_of(loaded.days)}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_report(report, path)
+    write_report(report, path, ranking=ranking)
     typer.echo(str(path))
     for label, value in [
         ("thread recall", report.thread_recall),

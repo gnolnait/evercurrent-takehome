@@ -19,6 +19,7 @@ from digest.eval.extraction import (
     run_extraction_eval,
     write_report,
 )
+from digest.eval.ranking import RankingReport
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION, extract_request, triage_request
 from digest.extract.schema import Extraction, TriageOutput
 from digest.extract.verify import DROP_FIELDS
@@ -1312,3 +1313,90 @@ def test_cli_eval_removes_all_store_files_before_the_run(
     assert result.exit_code == 0, result.output
     assert sidecars_existed_at_run_start is False
     assert not any(path.exists() for path in sidecars)
+
+
+def test_cli_eval_reports_a_refused_ranking_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B14.14(a). Setup: an invalid extraction response leaves deltas pending.
+
+    Action: run the eval command against the tiny world.
+    Assert: exit 0, no Ranking section, and a ranking refusal in the Not run table.
+    """
+    case = _build_case(tmp_path)
+    _replace_recorded_data(
+        case,
+        model="classify",
+        prompt_text="When review?",
+        data={"rationale": "invalid probability", "probability": 2},
+    )
+    _set_cli_eval_environment(monkeypatch, case)
+    report_path = tmp_path / "refused-ranking.md"
+
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(report_path)])
+
+    assert result.exit_code == 0, result.output
+    text = report_path.read_text(encoding="utf-8")
+    not_run = _section(text, "not run")
+    row = _row_with_label(not_run, "ranking")
+    assert re.search(r"^\|\s*ranking\s*\|", row, re.IGNORECASE)
+    assert "pending" in row.lower()
+    assert re.search(r"^##\s+Ranking\s*$", text, re.MULTILINE) is None
+
+
+def test_cli_eval_fails_on_a_non_refusal_ranking_value_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B14.14(b). Setup: the ranking eval raises a plain ValueError.
+
+    Action: run the eval command against the tiny world.
+    Assert: the command fails and writes no report.
+    """
+    case = _build_case(tmp_path)
+    _set_cli_eval_environment(monkeypatch, case)
+    report_path = tmp_path / "broken-ranking.md"
+
+    def broken_ranking(world_dir: Path, llm: LLM, priors: Priors, path: Path) -> RankingReport:
+        raise ValueError("ranking calculation broke")
+
+    monkeypatch.setattr(cli_module, "run_ranking_eval", broken_ranking)
+
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(report_path)])
+
+    assert "ranking calculation broke" in result.output
+    assert result.exit_code != 0, result.output
+    assert not report_path.exists()
+
+
+def test_cli_eval_removes_all_ranking_store_files_before_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B14.14(c). Setup: a stale ranking store and its WAL and SHM files exist.
+
+    Action: run eval with a wrapper that checks the files before ranking starts.
+    Assert: all three files are gone at entry, ranking runs once, and the command succeeds.
+    """
+    case = _build_case(tmp_path)
+    _set_cli_eval_environment(monkeypatch, case)
+    store_path = tmp_path / "data" / "eval-ranking-tiny.sqlite"
+    stale_paths = [Path(f"{store_path}{suffix}") for suffix in ("", "-wal", "-shm")]
+    for path in stale_paths:
+        path.write_bytes(b"leftover ranking store")
+    original_run = cli_module.run_ranking_eval
+    calls = 0
+
+    def run_after_cleanup(world_dir: Path, llm: LLM, priors: Priors, path: Path) -> RankingReport:
+        nonlocal calls
+        calls += 1
+        assert path.resolve() == store_path
+        assert not any(stale.exists() for stale in stale_paths)
+        return original_run(world_dir, llm, priors, path)
+
+    monkeypatch.setattr(cli_module, "run_ranking_eval", run_after_cleanup)
+    report_path = tmp_path / "fresh-ranking.md"
+
+    result = runner.invoke(app, ["eval", "--world", "tiny", "--out", str(report_path)])
+
+    assert result.exit_code == 0, result.output
+    assert calls == 1
+    assert _section(report_path.read_text(encoding="utf-8"), "ranking")
