@@ -23,7 +23,6 @@ from digest.models import Role
 from digest.room import (
     Edit,
     EditMessage,
-    FreshRoom,
     PostMessage,
     ReseedLike,
     RoomLike,
@@ -88,14 +87,9 @@ def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
         # Each refusal is a ValueError: a bad form field here, an R3 check in the room.
         form = await request.form()
         # A curated or scenario form sends fresh=true; any other value or none is false.
+        fresh = form.get("fresh") == "true"
         try:
-            change = _edit_from(form)
-            if form.get("fresh") != "true":
-                room.apply(change)
-            elif isinstance(room, FreshRoom):
-                room.apply(change, fresh=True)
-            else:
-                raise ValueError("This room cannot apply a change as the first one.")
+            room.apply(_edit_from(form), fresh=fresh)
         except ValueError as error:
             return render(str(error))
         return RedirectResponse("/", status_code=303)

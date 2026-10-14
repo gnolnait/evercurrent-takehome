@@ -390,21 +390,11 @@ def _tasks(world: World) -> dict[tuple[str, str], ChecklistTask]:
 class RoomLike(Protocol):
     """What the web app needs from a room."""
 
-    def apply(self, edit: Edit) -> RoomState: ...
+    def apply(self, edit: Edit, *, fresh: bool = False) -> RoomState: ...
 
     def reset(self) -> RoomState: ...
 
     def state(self) -> RoomState: ...
-
-
-@runtime_checkable
-class FreshRoom(RoomLike, Protocol):
-    """A room that applies a message change as the first one after a reset.
-
-    The web app calls `apply` with `fresh` only for a curated or scenario form.
-    """
-
-    def apply(self, edit: Edit, *, fresh: bool = False) -> RoomState: ...
 
 
 @runtime_checkable
