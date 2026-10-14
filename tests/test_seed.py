@@ -1761,15 +1761,16 @@ def test_rs2_updates_roots_and_replies_and_skips_uncompared_text(
         ],
         None,
     )
-    changed_root = replace(root, text="new root", metadata={"event_type": "new metadata"})
+    changed_root = replace(root, text=reply.text, metadata={"event_type": "new metadata"})
     changed_reply = replace(reply, text="new reply")
+    changed_metadata = replace(same, metadata={"event_type": "changed metadata only"})
     path = tmp_path / "seed.json"
     saved = reseed_map(path, world, [unreferenced, reply, same, root])
     client = FakeSlackSeedClient(world)
 
     report = seed(
         world,
-        [changed_root, changed_reply, same, replace(unreferenced, text="also changed")],
+        [changed_root, changed_reply, changed_metadata, replace(unreferenced, text="also changed")],
         client,
         path,
         pace=0,
@@ -2052,6 +2053,11 @@ def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
     saved = reseed_map(path, world, [other, root])
     saved.complete = loaded_complete
     write_map(path, saved)
+    before = path.read_bytes()
+    available = [
+        replace(channel, is_member=False) if channel.name == "eng-mech" else channel
+        for channel in slack_channels(world)
+    ]
     snapshots: list[SeedMap] = []
     save = SeedMap.save
 
@@ -2060,6 +2066,9 @@ def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
         save(value, target)
 
     def before_update(method: str, attempt: int) -> None:
+        if method == "join":
+            assert path.read_bytes() == before
+            assert snapshots == []
         if method == "update":
             current = SeedMap.load(path)
             assert current is not None and current.complete is False
@@ -2067,8 +2076,29 @@ def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
             assert len(snapshots) == 1
 
     monkeypatch.setattr(SeedMap, "save", record_save)
-    client = FakeSlackSeedClient(world, before_call=before_update)
     changed = [replace(root, text="new root"), replace(other, text="new other")]
+    failed = FakeSlackSeedClient(
+        world,
+        channels=available,
+        before_call=before_update,
+        failures={("join", 1): RuntimeError("join stopped")},
+    )
+    with pytest.raises(RuntimeError, match="join stopped"):
+        seed(
+            world,
+            changed,
+            failed,
+            path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+            reference=[other, root],
+        )
+    assert path.read_bytes() == before
+    assert snapshots == []
+    assert reseed_writes(failed) == [{"method": "join", "channel_id": "S-C0ENGME"}]
+    assert (RESUME_LIMIT in capsys.readouterr().out) is (not loaded_complete)
+    client = FakeSlackSeedClient(world, channels=available, before_call=before_update)
 
     report = seed(
         world,
@@ -2081,13 +2111,104 @@ def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
         reference=[other, root],
     )
 
-    assert reseed_writes(client) == [update_call(item, saved) for item in changed]
+    assert reseed_writes(client) == [
+        {"method": "join", "channel_id": "S-C0ENGME"},
+        *[update_call(item, saved) for item in changed],
+    ]
     assert report.updated == 2 and report.complete is True
     assert [value.complete for value in snapshots] == [False, True]
     assert all(
         value.messages == saved.messages and value.files == saved.files for value in snapshots
     )
     assert (RESUME_LIMIT in capsys.readouterr().out) is (not loaded_complete)
+
+
+@pytest.mark.parametrize("operation", ["post", "upload"])
+def test_rs7_acknowledged_post_or_upload_is_saved_before_interruption_and_skipped_on_resume(
+    tmp_path: Path, world: World, operation: str
+) -> None:
+    first = post()
+    middle = post(
+        key="C0ENGME:1791819001.100000",
+        root_key=first.key,
+        files=("new.pdf",) if operation == "upload" else (),
+    )
+    last = post(key="C0ENGME:1791819002.100000")
+    reference = [first, last, middle] if operation == "upload" else [first, last]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, reference)
+    file_key = f"{middle.key}/new.pdf"
+    if operation == "upload":
+        del saved.files[file_key]
+        write_map(path, saved)
+    changed_first, changed_last = replace(first, text="new first"), replace(last, text="new last")
+    selected_middle = replace(middle, text="new middle") if operation == "upload" else middle
+    selected = [changed_first, selected_middle, changed_last]
+    stop_attempt = 3 if operation == "upload" else 2
+
+    def interrupt_after_acknowledgement(method: str, attempt: int) -> None:
+        if method != "update" or attempt != stop_attempt:
+            return
+        current = SeedMap.load(path)
+        assert current is not None and current.complete is False
+        acknowledged = successful_calls(stopped, operation)
+        assert len(acknowledged) == 1
+        if operation == "post":
+            assert current.messages[middle.key] == MappedMessage(
+                channel="S-C0ENGME",
+                ts=acknowledged[0]["result"],
+                thread_ts=saved.messages[first.key].ts,
+            )
+            assert current.files == saved.files
+        else:
+            assert current.files[file_key].permalink == acknowledged[0]["result"]
+            assert current.messages == saved.messages
+        raise RuntimeError("stopped after acknowledgement")
+
+    stopped = FakeSlackSeedClient(world, before_call=interrupt_after_acknowledgement)
+    with pytest.raises(RuntimeError, match="stopped after acknowledgement"):
+        seed(
+            world,
+            selected,
+            stopped,
+            path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+            reference=reference,
+        )
+
+    checkpoint = SeedMap.load(path)
+    assert checkpoint is not None and checkpoint.complete is False
+    assert [call["method"] for call in reseed_writes(stopped)] == (
+        ["update", "update", "upload"] if operation == "upload" else ["update", "post"]
+    )
+    resumed = FakeSlackSeedClient(world)
+    report = seed(
+        world,
+        selected,
+        resumed,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=reference,
+    )
+    repeated = (
+        [changed_first, selected_middle, changed_last]
+        if operation == "upload"
+        else [changed_first, changed_last]
+    )
+    assert reseed_writes(resumed) == [update_call(item, saved) for item in repeated]
+    assert (report.posts, report.files, report.updated, report.complete) == (
+        0,
+        0,
+        len(repeated),
+        True,
+    )
+    after = SeedMap.load(path)
+    assert after is not None and after.complete is True
+    assert after.messages == checkpoint.messages and after.files == checkpoint.files
 
 
 def test_rs7_stopped_update_is_repeated_on_resume_against_the_reference(
@@ -2203,8 +2324,9 @@ def test_rs7a_placement_check_precedes_all_writes_even_for_unchanged_text(
 
 
 @pytest.mark.parametrize("mapped_reply", [False, True])
+@pytest.mark.parametrize("changed_text", [False, True])
 def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
-    tmp_path: Path, world: World, mapped_reply: bool
+    tmp_path: Path, world: World, mapped_reply: bool, changed_text: bool
 ) -> None:
     first = post()
     root = post(key="C0ENGME:1791819001.100000")
@@ -2217,7 +2339,7 @@ def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
         del saved.messages[reply.key]
     write_map(path, saved)
     changed = replace(first, text="first update")
-    changed_reply = replace(reply, text="reply update")
+    changed_reply = replace(reply, text="reply update") if changed_text else reply
     blocked = FakeSlackSeedClient(world)
     before = path.read_bytes()
 
@@ -2257,9 +2379,9 @@ def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
         "icon_emoji": root.icon_emoji,
         "metadata": root.metadata,
     }
-    if mapped_reply:
+    if mapped_reply and changed_text:
         assert writes[2] == update_call(changed_reply, saved)
-    else:
+    elif not mapped_reply:
         assert writes[2] == {
             "method": "post",
             "channel_id": "S-C0ENGME",
@@ -2269,18 +2391,19 @@ def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
             "icon_emoji": reply.icon_emoji,
             "metadata": reply.metadata,
         }
-    assert len(writes) == 3
-    assert report.updated == 1 + int(mapped_reply)
+    assert len(writes) == 2 + int(not mapped_reply or changed_text)
+    assert report.updated == 1 + int(mapped_reply and changed_text)
 
 
 @pytest.mark.parametrize(
     "guard", ["channel", "scope", "files-scope", "team", "world", "channel-id"]
 )
+@pytest.mark.parametrize("changed_text", [False, True])
 def test_rs7a_checks_mapped_posts_before_the_first_update(
-    tmp_path: Path, world: World, guard: str
+    tmp_path: Path, world: World, guard: str, changed_text: bool
 ) -> None:
     original = post(files=("already-mapped.pdf",))
-    changed = replace(original, text="edited")
+    changed = replace(original, text="edited") if changed_text else original
     path = tmp_path / "seed.json"
     saved = reseed_map(path, world, [original])
     available = slack_channels(world)
@@ -2332,8 +2455,8 @@ def test_rs7a_checks_mapped_posts_before_the_first_update(
         dry_run=False,
         reference=[original],
     )
-    assert reseed_writes(allowed) == [update_call(changed, saved)]
-    assert report.updated == 1
+    assert reseed_writes(allowed) == ([update_call(changed, saved)] if changed_text else [])
+    assert report.updated == int(changed_text)
 
 
 def test_rs7a_reference_only_channels_do_not_select_channels(tmp_path: Path, world: World) -> None:
