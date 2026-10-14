@@ -316,9 +316,10 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    item citing that last evidence. Task links are read from every item, whatever its
    status. A task is open until an item carries a `done` link to it. Its last evidence is
    the newest `tasks` link to it; with no link, it is the earliest claim on the task's
-   gate (the gate anchor); with neither, nothing is emitted. (b) An open ask
+   gate (the gate anchor); with neither, nothing is emitted. It is an absence for the
+   readers in the task's owner role and for the EM, who runs the gate. (b) An open ask
    addressed to a person with no reply from them after a cadence is an absence for the
-   asker and the owner, citing the ask. A reply is any message by the person asked, not
+   asker and the owner only, citing the ask. A reply is any message by the person asked, not
    deleted, later in the same thread than the ask message; the cadence is
    `absence.ask_reply_cadence_days` in `config/priors.yaml`. (c, stretch) A promise with an owner and a due date
    (an item with `owner` and `due`) whose due date passes with no later evidence from
@@ -351,7 +352,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    external channel for the document's owner, and an action taken against a superseded
    value: a PO, tooling PO, release or build start whose claim names a value the ledger
    had already superseded at its `asserted_ts`, for the actor and the key's owner, with
-   what the actor had last been told). Before either lane, a reader sees an item only through evidence from a channel they
+   what the actor had last been told; and an absence for each reader its source names in
+   step 5, such as the asker and the owner of an ask absence). An absence reaches no other
+   reader and never enters the ranked lane. Before either lane, a reader sees an item only through evidence from a channel they
    can see (public, or private with the reader a member); the check fails closed, and an
    access drop is recorded per impression so "why not shown" can name it. Each reader
    has a ledger view: the ledger rules of section 4 (authority, supersession, pending,
@@ -367,9 +370,7 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    term in `config/priors.yaml`, so no single input takes a score to zero. Must-see rules
    run over all open items. A ranked-lane candidate is an item whose newest evidence
    falls in the digest window (step 9), or, whatever the age of its evidence, an open
-   blocker, unanswered ask (in v1, the ask absence of step 5 once the reply cadence
-   passes; an ask made of the reader is must-see), absence, stale belief, open
-   contradiction, item with a
+   blocker, stale belief, open contradiction, item with a
    `pending` claim, or resolved item whose closing line (step 7) the reader has not yet
    been shown. `decision_exposure` rises when the reader owns a checklist task inside
    its gate buffer that touches the item's entities; `dependency_distance` is 1 when one `depends_on` edge joins an item entity to an

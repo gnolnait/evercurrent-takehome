@@ -147,8 +147,8 @@ one ask never shows twice. The absence names that item in its id
 (`absence:ask:<ask item_id>`, as `digest.absence` builds it). Every other ask keeps its
 line, in the same thread or another, and an ask whose absence line is not shown keeps
 its line. The ask absence goes to
-`needs_you` when the reader is the person asked, else to `not_happened`, as every other
-absence does; `decision`, `schedule_change`, `spec_change`,
+`needs_you` when the reader is the person asked and to `not_happened` when the reader is
+the asker; no other reader gets it (amended 2026-10-13, `docs/plans/ask-audience.md`); `decision`, `schedule_change`, `spec_change`,
 `bom_change` to `decisions`; `blocker` and `risk` to `risks`; `fyi` to `fyi`. Each
 section holds its must-see lines plus up to its cap of ranked lines. A checklist absence reaches only the readers its must-see rule names (the task's owner
 role and the EM); it never enters another reader's ranked lane (user ruling, 2026-10-12).

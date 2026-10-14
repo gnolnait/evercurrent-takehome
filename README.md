@@ -120,7 +120,8 @@ stricter matching on golden threads only, so it does not establish whether keyin
 precision meets 0.8. The cut is a conservative scope decision under that uncertainty.
 
 A digest covers what is new since the reader's previous digest, plus must-see items and
-open blockers and ask absences of any age; the header names the window. Delivery is not
+open blockers of any age; the header names the window. An absence goes only to the
+readers it names: an unanswered ask to the asker and the person asked. Delivery is not
 recorded yet, so the caller states the previous digest (the demo uses the previous world
 day).
 
