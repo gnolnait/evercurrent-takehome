@@ -280,11 +280,22 @@ def test_search_limit(ctx: QueryContext, limit: int) -> None:
         {"status": "nonsense"},
         {"text": "CMM", "limit": 0},
         {"text": "CMM", "limit": 101},
+        {"entity": "NO-SUCH-ENTITY"},
+        {"owner": "U0NOBODY"},
     ],
-    ids=["no-filter", "bad-type", "bad-status", "low-limit", "high-limit"],
+    ids=[
+        "no-filter",
+        "bad-type",
+        "bad-status",
+        "low-limit",
+        "high-limit",
+        "unknown-entity",
+        "unknown-owner",
+    ],
 )
 def test_search_refuses_invalid_filters(ctx: QueryContext, filters: dict[str, Any]) -> None:
-    """Setup invalid search inputs / Action search / Assert ValueError under Q1."""
+    """Setup invalid search inputs, an unknown entity and an unknown owner / Action search /
+    Assert ValueError under Q1."""
     with pytest.raises(ValueError):
         queries.search_items(ctx, **filters)
 
@@ -811,12 +822,47 @@ def test_query_invalid_limits(ctx: QueryContext, options: dict[str, Any]) -> Non
         ("SELECT 1; SELECT 2", "one statement at a time"),
         ("SELECT length(hex(zeroblob(2000000)))", "string or blob too big"),
         ("SELECT FROM items", 'near "FROM": syntax error'),
+        ("", "one SQL statement is required"),
+        ("-- only a comment", "one SQL statement is required"),
     ],
+    ids=["multiple", "oversized", "syntax", "empty", "comment-only"],
 )
 def test_query_rejects_invalid_sql(ctx: QueryContext, sql: str, message: str) -> None:
     """Setup multiple, oversized or invalid SQL / Action query / Assert ValueError."""
     with pytest.raises(ValueError, match=message):
         queries.query(ctx, sql)
+
+
+@pytest.mark.parametrize("width", [100, 101])
+def test_query_column_limit(ctx: QueryContext, width: int) -> None:
+    """Setup a SELECT of `width` columns / Action query / Assert 100 run and 101 are refused."""
+    sql = "SELECT " + ", ".join(f"{n} AS c{n}" for n in range(width))
+    if width > 100:
+        with pytest.raises(ValueError, match="too many columns"):
+            queries.query(ctx, sql)
+        return
+    actual = queries.query(ctx, sql)
+    assert actual.columns == tuple(f"c{n}" for n in range(width))
+    assert actual.rows == (tuple(range(width)),)
+
+
+@pytest.mark.parametrize("rows_count", [8, 20])
+def test_query_result_budget(ctx: QueryContext, rows_count: int) -> None:
+    """Setup 0.9 MB BLOB rows under the row cap / Action query / Assert the 8 MB budget bites
+    at 20 rows (18 MB), fast, and not at 8 rows (7.2 MB)."""
+    sql = (
+        "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c "
+        f"WHERE n < {rows_count}) SELECT zeroblob(900000) FROM c"
+    )
+    start = perf_counter()
+    if rows_count == 20:
+        with pytest.raises(ValueError, match="query result is too large"):
+            queries.query(ctx, sql, row_cap=1000, timeout_s=10)
+        assert perf_counter() - start < 5
+        return
+    actual = queries.query(ctx, sql, row_cap=1000, timeout_s=10)
+    assert len(actual.rows) == rows_count
+    assert actual.truncated is False
 
 
 def test_query_cells(ctx: QueryContext) -> None:
