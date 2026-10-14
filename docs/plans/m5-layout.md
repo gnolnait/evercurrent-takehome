@@ -1,7 +1,7 @@
 # Plan: M5 slice, the Slack digest layout (v6)
 
-Status: v0.3, 2026-10-13 (rebased on main after #73, #74, #75 and #77; choice 6 settled:
-a folded ask absence keeps its absence wording). Process stage 1
+Status: v0.4, 2026-10-13 (second plan review applied: header scan scope, ts only for a
+reply, a synthetic map for the real-data row, two ask-absence titles). Process stage 1
 (`docs/process.md`). Stacked on PR #73 (`digest post --seed-map`, branch `m5-links`);
 rebased onto `main` after #73 merges. The design comes from a design pass on the real day-6
 payloads; three readers' mock payloads (v6) were posted to the user's DM in Scratch on
@@ -517,7 +517,9 @@ the count line of unmapped sources, which still counts every evidence entry as
   response. Then `posted the digest for <reader>`.
 - A failure of the top message gives today's refusal: `cannot post the digest for
   <reader>: <failure><rerun note>`, with `_rerun_note(sent, total)`.
-- A top response with no string `ts`, or a failure of the reply, gives:
+- A digest with no thread reply needs no `ts`: its top message alone is a success, even
+  when the response has no string `ts`. Only when a reply is to be posted:
+- a top response with no string `ts`, or a failure of the reply, gives:
   `cannot post the thread reply of the digest for <reader>: <failure>; its top message was
   sent<note>`. `<failure>` is `_dm_failure(...)`, or `the top message has no ts`. `<note>`
   is `, and a rerun sends all <total> again` when `sent` is 0, else `_rerun_note(sent,
@@ -605,7 +607,7 @@ covers.
   whose key is not in `authors` is skipped; with no ask message, the body is the summary's
   first sentence, the link is the thread root, and no `Asked` or `You replied` tag shows.
   Title, body, link and tags all agree on the same entry.
-- A9 (5.2, D6). The checklist absence title and noun rule; each of the three ask-absence
+- A9 (5.2, D6). The checklist absence title and noun rule; each of the two ask-absence
   titles; `1 working day`; `checked: #<channel> threads` on a checklist absence with and
   without a member.
 - A10 (5.3, D10). First-sentence split at `.`, `?`, `!` before whitespace or the end, not
@@ -635,12 +637,13 @@ covers.
   header not escaped and cut to 150.
 - A17 (9.2, safety helper). On every message the rows above build, the helper checks: at
   most 50 blocks; only `header`, `section`, `context`, `divider`; no accessory and no
-  `actions`; a header only as block 0 of a top message, plain_text, at most 150 characters;
-  every other text object mrkdwn, verbatim, 1 to 3000 characters; a context block at most
-  10 elements; `text` at most 150 characters; every link URL starts with the seed map's
-  `workspace_url`, and no `<http` link at all without a map; after the allowed tokens of 9.2
-  are removed, no `<`, no `>`, and `&` only in `&amp;`, `&lt;`, `&gt;`; no `<@` and no
-  `<!`. The helper fails on each kind of broken payload: a cut link, unescaped text, an
+  `actions`; a header only as block 0 of a top message, plain_text, at most 150 characters
+  (the header is checked for type, place and length only: it is plain text, so a raw `&`,
+  `<` or `>` in a program name is allowed there); every other text object mrkdwn, verbatim,
+  1 to 3000 characters; a context block at most 10 elements; `text` at most 150 characters;
+  every link URL starts with the seed map's `workspace_url`, and no `<http` link at all
+  without a map; in each mrkdwn text and in `text`, after the allowed tokens of 9.2 are
+  removed, no `<`, no `>`, and `&` only in `&amp;`, `&lt;`, `&gt;`; no `<@` and no `<!`. The helper fails on each kind of broken payload: a cut link, unescaped text, an
   accessory, a long header, a link to another host.
 - A18 (11.2, D5). Webhook: per reader, the top message then the reply as a second send,
   with the webhook wording; nothing sent when a build fails; the second-message refusals.
@@ -649,8 +652,11 @@ covers.
   `sent` > 0; no output holds the token.
 - A20 (12, D14). `_demo_selections` returns the authors of every evidence message;
   `digest demo` output does not change.
-- A21 (real data). The day-6 demo selections with the Scratch seed map build messages that
-  pass the A17 helper. The comparison with the approved mocks in
+- A21 (real data). The day-6 demo selections, with a deterministic synthetic seed map
+  built in the test from the replayed store (each evidence key mapped to channel `S-<world
+  channel>`, ts = the world ts, thread_ts = the world thread_ts, and one file per world file
+  name), build messages that pass the A17 helper. The real Scratch map stays in the manual
+  check (A22). The comparison with the approved mocks in
   `notes/research/slack-layout/v6-*.json` is a manual check recorded in the PR (that folder
   is local scratch; the test builds from the store). Expected differences from v6: the
   absence titles (D6), `checked: #<channel> threads` on each checklist absence, and Grace's
