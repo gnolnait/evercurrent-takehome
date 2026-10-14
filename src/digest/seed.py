@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from digest.models import Event, permalink_for, ts_datetime
 from digest.world.schema import World
@@ -100,14 +100,25 @@ class SlackSeedClient(Protocol):
         ...
 
 
+# Map values go inside Slack `<...>` tokens (docs/plans/m5-layout.md 9.2), so each value
+# must match its Slack form in full. A value that does not match makes the map fail to load.
+TeamId = Annotated[str, StringConstraints(pattern=r"^T[A-Z0-9]+$")]
+WorkspaceUrl = Annotated[str, StringConstraints(pattern=r"^https://[a-z0-9-]+\.slack\.com$")]
+ChannelId = Annotated[str, StringConstraints(pattern=r"^C[A-Z0-9]+$")]
+SlackTs = Annotated[str, StringConstraints(pattern=r"^[0-9]+\.[0-9]+$")]
+FilePermalink = Annotated[
+    str, StringConstraints(pattern=r"^https://[a-z0-9-]+\.slack\.com/files/[A-Za-z0-9_.%/-]+$")
+]
+
+
 class MappedMessage(BaseModel):
-    channel: str
-    ts: str
-    thread_ts: str
+    channel: ChannelId
+    ts: SlackTs
+    thread_ts: SlackTs
 
 
 class MappedFile(BaseModel):
-    permalink: str
+    permalink: FilePermalink
 
 
 class SeedMap(BaseModel):
@@ -117,11 +128,11 @@ class SeedMap(BaseModel):
     """
 
     version: int = 1
-    team_id: str
-    workspace_url: str
+    team_id: TeamId
+    workspace_url: WorkspaceUrl
     world: str
     complete: bool = False
-    channels: dict[str, str] = Field(default_factory=dict)  # world channel -> Slack id
+    channels: dict[str, ChannelId] = Field(default_factory=dict)  # world channel -> Slack id
     messages: dict[str, MappedMessage] = Field(default_factory=dict)  # "<ch>:<ts>"
     files: dict[str, MappedFile] = Field(default_factory=dict)  # "<ch>:<ts>/<name>"
 

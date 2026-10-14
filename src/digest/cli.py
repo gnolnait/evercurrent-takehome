@@ -169,7 +169,14 @@ def post(
         _refuse(f"SLACK_WEBHOOK_URL must start with {_WEBHOOK_PREFIX} and hold no whitespace")
     loaded, selections, authors = _demo_selections(day)
     digests = [
-        slack_digest(loaded, selection, links=links, authors=authors, threaded=False)
+        slack_digest(
+            loaded,
+            selection,
+            links=links,
+            authors=authors,
+            threaded=False,
+            reader_in_header=True,
+        )
         for selection in selections
     ]
     client = _webhook_client(url)
@@ -251,7 +258,14 @@ def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
         _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
     loaded, selections, authors = _demo_selections(day)
     digests = [
-        slack_digest(loaded, selection, links=links, authors=authors, threaded=True)
+        slack_digest(
+            loaded,
+            selection,
+            links=links,
+            authors=authors,
+            threaded=True,
+            reader_in_header=True,
+        )
         for selection in selections
     ]
     client = _slack_web_client(token)
