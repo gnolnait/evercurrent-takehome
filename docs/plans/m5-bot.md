@@ -1,6 +1,6 @@
 # Plan: M5 slice, feedback recording and Slack interaction (`digest bot`)
 
-Status: v0.5 (re-baselined: ack first, one serial worker), 2026-10-13. Process stage 1 (`docs/process.md`).
+Status: v0.6 (final plan review applied as rules and stated limits), 2026-10-13. Process stage 1 (`docs/process.md`).
 Stacked on the layout unit (`docs/plans/m5-layout.md` v0.4, branch `m5-layout`): it adds
 menus to the v6 top message and thread reply that `slack_digest` builds. Rebased onto
 `main` after the layout unit merges. This is "Next" of the layout plan and part of step 1
@@ -53,12 +53,17 @@ digest bot [--db PATH]
   The command does not call `SocketModeHandler.start()`: on Windows `start()` sets SIGINT
   to `SIG_DFL`, so Ctrl-C kills the process with no cleanup. The command calls
   `handler.connect()`, then waits in its own loop of `time.sleep(1)` calls, which Ctrl-C
-  interrupts with `KeyboardInterrupt`. A `finally` calls `handler.close()`. An exception
-  from `connect` exits 1 with `digest bot could not connect: <exception type name>`; the
-  text of the exception is not printed, because it can hold a token. On Ctrl-C the
-  command closes the handler (no new clicks arrive), then lets the worker of I15 finish
-  the clicks in its queue, for at most 10 seconds. It then prints `stopped`, or `stopped;
-  <n> clicks were not applied` when the 10 seconds end first, and the exit code is 0.
+  interrupts with `KeyboardInterrupt`. Before it builds the handler, the command opens the
+  store with `_open_store` and closes it, so a bad store exits 1 before any connection.
+  An exception from `_socket_handler` (building the bolt `App` calls `auth.test`) or from
+  `connect` exits 1 with `digest bot could not start: <exception type name>`; the text of
+  the exception is not printed, because it can hold a token. A `finally` calls
+  `handler.close()`; an exception from `close` logs `bot_close_failed` with the exception
+  type only. On Ctrl-C the command closes the handler, puts the stop job (`None`) on the
+  queue, waits for the worker for at most 10 seconds, prints `stopped`, and the exit code
+  is 0. The worker is a daemon thread, so a worker that is still busy after 10 seconds
+  does not keep the process alive. A click that arrives during shutdown can be lost; the
+  clicker sees no mark (I11).
   `_socket_handler(bot_token, app_token, jobs, db)` in `cli.py` builds the bolt `App`,
   registers the listeners of I11 and returns the handler; the tests patch it.
 - `--demo-actor` (on `bot`, off by default): the actor rule of I7. Without it, only a
@@ -129,6 +134,12 @@ any other check.
 
 An event is **live** when it is not an `undo` and no `undo` event names it. So an undo
 removes the effect of exactly its target.
+
+`record` writes nothing when a live event of the same `event` already exists for the same
+`reader`, `day` and `item_id`: it returns that event's id, and the caller updates the
+message as for a new event. So a second click after a failed update repairs the line, and
+one undo removes the done (or the snooze) completely. The check runs inside the same
+`BEGIN IMMEDIATE` as the insert (I5).
 
 `active(store, reader, day) -> FeedbackState` reads the event log only, never the
 `items` table. When the store has no `feedback_events` table (a store built before
@@ -217,8 +228,13 @@ waits for the worker, the store or another click.
 
 Ack first is a decision against the D7 amendment's "store before ack", which is about
 Events API events. A crash after the ack loses a queued click. For a click, the loss is
-visible: the line shows no mark, and the reader clicks again. An Events API event that is
-lost has no such sign.
+visible: the line shows no mark, and the reader clicks again. A click whose event was
+stored but whose update failed (I16) also shows no mark; the second click finds the live
+event (I6) and only updates the line. An Events API event that is lost has no such sign.
+
+Why runs in the bolt listener after the ack, as Slack's Bolt documents for modals. Bolt
+runs listeners on its own thread pool, so a slow Why read or `views.open` holds one pool
+thread, not the worker and not another click's ack.
 
 The worker handles one job at a time (`handle_action`). It reads the `posted_messages`
 row for `(container.channel_id, container.message_ts)`. The payload's `message.metadata`
@@ -287,7 +303,9 @@ thread, keeps that one connection for the life of the process, and takes jobs fr
 `queue.Queue` in order. There is no lock: one thread makes every feedback write and every
 `chat.update`. Two clicks on one message are two jobs; the second update shows both
 marks. A slow `chat.update` delays the jobs behind it, never an ack or a Why modal. A
-`None` job stops the worker.
+`None` job stops the worker. Each job runs inside a `try`: an exception that I13, I14 or
+I16 do not name rolls back the open transaction, logs `bot_job_failed` with the exception
+type only, and the worker takes the next job. An exception never ends the worker.
 
 I16. **Slack failures.** A failed `views.open` or `chat.update` logs `bot_slack_failed`
 with `method` and `error` (the Slack error code, else the exception type; the
@@ -538,8 +556,10 @@ otherwise.
   ValueError, no row. In every case the `items` table is unchanged.
 - A3 (I4). Snooze on day 6 (Mon 19 Oct 2026) gives `until` 2026-10-20; on a Friday it
   gives the Monday after.
-- A4 (I5). Two threads, each with its own connection, undo one event at once with two
-  keys: one `undo` row; the other call raises ValueError. Undo of a live event writes one
+- A4 (I5, I6). Two threads, each with its own connection, undo one event at once with two
+  keys: one `undo` row; the other call raises ValueError. A second `done` (new key) on the
+  same reader, day and item while the first is live writes no row and returns the first
+  id; after one undo of it, the item is not in `resolved`. Undo of a live event writes one
   `undo` row. Undo of an unknown id, of an undo,
   and of an undone event each raise ValueError and write nothing. Undo of another
   reader's event, of another day's event and of another line's event each raise
@@ -585,14 +605,20 @@ otherwise.
   button holding the event id; the update keeps `text` and metadata; every item block id
   in the update carries the next revision, and the row's `revision` grows by 1; an undo
   click restores the posted blocks of that item (with the new revision); marks on two
-  items of one message both show; a repeated delivery makes no update.
+  items of one message both show; a repeated delivery makes no update. A done whose
+  update raises `BotCallFailed`, then a second done click on the same line: one event
+  row, and the second job updates the line with the mark.
 - A20 (I13, order). With a fake `update` that reads the store when it is called, the
   event row is committed before each `update` call, for done, snooze and undo.
 - A13 (I15). Two jobs on one message, through `run_worker`: both rows are written, and
   the last update shows both marks. A store write that raises `sqlite3.OperationalError`
-  logs `bot_store_failed`, makes no update, and the next job is still applied.
-- A14 (I16, I17). A `BotCallFailed` from `update` or `open_view` logs `bot_slack_failed`
-  and keeps the row; with a token in the fake error, no captured log record and no output
+  logs `bot_store_failed`, makes no update, and the next job is still applied. A job
+  whose posted row cannot be read (a patched read that raises `KeyError`) logs
+  `bot_job_failed`, and the next job is still applied.
+- A14 (I16, I17). `_BoltBotClient` over a fake raw `WebClient` whose `chat_update` and
+  `views_open` raise `SlackApiError` with a token in its response: it raises
+  `BotCallFailed` with the error code only, `from None`. A `BotCallFailed` from `update` or
+  `open_view` logs `bot_slack_failed` and keeps the row; with a token in the fake error, no captured log record and no output
   holds it; the `bot` command refuses a missing or malformed `SLACK_APP_TOKEN` or
   `SLACK_BOT_TOKEN` without printing the value.
 - A15 (I11, listeners). The listener functions of `listeners`, called with a fake `ack`
@@ -618,11 +644,12 @@ otherwise.
   fake records `connect` then `close`, and no `start`; the output holds the listening
   line and then `stopped`; the exit code is 0. With a `connect` that raises an error
   whose text holds a token, `close` is still called, the output is `digest bot could not
-  connect: <exception type name>` with no token, and the exit code is 1. A job in the
-  queue at Ctrl-C is applied before `stopped` is printed; with a worker that does not
-  finish in 10 seconds (a patched wait), the output is `stopped; 1 clicks were not
-  applied`. With `--demo-actor`, the worker gets `actor_rule="demo_reader"`; without it,
-  `"clicker"`.
+  start: <exception type name>` with no token, and the exit code is 1. The same holds
+  for a `_socket_handler` that raises an error whose text holds a token; a `close` that
+  raises one logs `bot_close_failed` with no token in any log record or output. A job in
+  the queue at Ctrl-C is applied before `stopped` is printed. A store of another schema
+  version exits 1 before `_socket_handler` is called. With `--demo-actor`, the worker
+  gets `actor_rule="demo_reader"`; without it, `"clicker"`.
 
 ## Test seams
 
