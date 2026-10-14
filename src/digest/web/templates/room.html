@@ -189,6 +189,7 @@
   <h1>{{ world.program }} demo room</h1>
   <p class="meta">Day {{ day }}{% if readers %}<span class="sep">|</span>{{ readers|map(attribute="window")|unique|join("; ") }}{% endif %}</p>
   <p class="note">An edit changes who reads what and what counts as late. It does not change what the model extracted, and it does not show what a reader was last told.</p>
+  {% if message_changes > 0 %}<p class="note">Message changes re-run extraction for their thread.</p>{% endif %}
 </header>
 
 <section class="strip">

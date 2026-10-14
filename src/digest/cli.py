@@ -607,12 +607,7 @@ class _RoomReseed:
                 "the seeder cannot update messages yet: digest.seed.seed takes no reference"
             )
         world = load_world(self._world_dir / "world.yaml")
-        # The copy holds edited events out of event_ts order, so read_events would refuse it.
-        copy = [
-            Event.model_validate_json(line)
-            for line in (copy_dir / "events.jsonl").read_bytes().splitlines()
-            if line.strip()
-        ]
+        copy = list(read_events(copy_dir / "events.jsonl", world.workspace_url))
         committed = list(read_events(self._world_dir / "events.jsonl", world.workspace_url))
         # The seeder adds `reference` in a later change; the dict keeps this call valid until then.
         options: dict[str, Any] = {

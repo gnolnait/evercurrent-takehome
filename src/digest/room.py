@@ -490,16 +490,26 @@ class Room:
         """Write the corpus copy with the room's message changes (plan S1); return `path`.
 
         The copy holds every file of the world directory. Its `events.jsonl` holds the
-        committed events and the events that the message changes wrote, one line each as
-        the room store holds it, in `ts` order.
+        committed events and the posted events, in `ts` order. An edited message has its
+        new text and files, `edited` false and `event_ts` equal to its `ts`, so the copy
+        is a clean corpus that `read_events` and `plan_seed` accept. The room store keeps
+        the edit flag and the stamp.
         """
         if path.resolve() == self._world_dir:
             raise ValueError(f"cannot save the room over the committed corpus {path}")
+        events = dict(self._corpus)
+        for key, event in self._changed.items():
+            committed = self._corpus.get(key)
+            events[key] = (
+                event
+                if committed is None
+                else committed.model_copy(update={"text": event.text, "files": event.files})
+            )
         # Python sorts stably, so equal ts values keep the committed order.
-        events = sorted({**self._corpus, **self._changed}.values(), key=lambda e: e.ts_us)
+        ordered = sorted(events.values(), key=lambda e: e.ts_us)
         shutil.copytree(self._world_dir, path, dirs_exist_ok=True)
         with (path / "events.jsonl").open("w", encoding="utf-8", newline="\n") as file:
-            file.writelines(event.model_dump_json() + "\n" for event in events)
+            file.writelines(event.model_dump_json() + "\n" for event in ordered)
         return path
 
     def _write(
@@ -595,16 +605,30 @@ class Room:
                 raise ValueError(NOT_RECORDED) from None
             # The gateway backend, built only when a miss needs it. The replay run keeps its
             # stage runs and triage decisions in the store, so this run resumes.
-            self._llm = from_settings(
-                Settings(mode="record", backend="openrouter", cassettes=self._cassettes)
-            )
+            # from_settings raises ValueError for a missing key and OSError for a missing
+            # model ids file.
+            try:
+                self._llm = from_settings(
+                    Settings(mode="record", backend="openrouter", cassettes=self._cassettes)
+                )
+            except OSError as error:
+                raise ValueError(f"cannot start a live model call: {error}") from None
+            # run_extract counts a backend failure (LLMOutputError: an HTTP status such as
+            # an auth or rate-limit refusal, or output that does not validate) as a failed
+            # thread, and the check below refuses it.
             report = run_extract(
                 store, self._llm, glossary, world.project, self._base.priors, as_of, zone, purposes
             )
         if report.failed:
+            cause = (
+                "the live model call failed (an auth or rate-limit refusal, another HTTP "
+                "error, or output that did not validate)"
+                if self._llm.mode == "record"
+                else "a recorded model output did not validate"
+            )
             raise ValueError(
-                f"extraction failed for {report.failed} thread(s) on {day}; the room keeps "
-                "its state"
+                f"extraction failed for {report.failed} thread(s) on {day}: {cause}; the room "
+                "keeps its state"
             )
         store.set_meta("extract_until", day.isoformat())
 
