@@ -1,6 +1,6 @@
 # Plan: M4 unit 14, the ranking metrics and the ablation table
 
-Status: v0.2, 2026-10-14, 02:50 PT. Process stage 1 (`docs/process.md`), the full process
+Status: v0.2.1, 2026-10-14, 03:20 PT. Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Stacked on the ablation switch (branch
 `ablation-switch`, PR #80), which adds `daily.terms_off` and `ablation.min_effect`.
 
@@ -59,8 +59,9 @@ digest for d with `select_digest(store, world, priors_C, P, d, previous_digest=d
   recall and nDCG computed as R5 and R6 over the ranked lines only (must-see lane lines
   removed, top 5 of what is left), against P's set without the facts that C0's must-see
   lane delivers on (P, d). The switch never touches the must-see lane (ablation-switch
-  AB9), and a day with five or more must-see lines fills the overall top 5 in every
-  configuration, so only the ranked lane can show a term's effect there. Per persona, the
+  AB9). Sections come in order with must-see lines first in each, so on a day where
+  must-see lines take the first five places the overall top 5 is the same in every
+  configuration, and only the ranked lane can show a term's effect there. Per persona, the
   report counts the must-see facts that C0 delivers through each lane.
 - R7. A configuration's value for a metric is the mean over personas of each persona's
   mean over its days with a value (SPEC: "mean across personas"). A persona with no day
@@ -74,11 +75,12 @@ Configurations:
 - Baseline `role-only`: `terms_off` holds `importance` and `personal_relevance`, so the
   role prior alone ranks, with the must-see lane unchanged.
 - Baseline `send-everything`: every item visible to P whose newest evidence falls in the
-  window, newest evidence first, then `item_id`; before them, the absence items of
-  `detect_absences` for d whose audience holds P (their evidence is old by design), by
-  `item_id`. No must-see lane and no cap.
+  window, newest evidence first, then `item_id`; before them, the absence items that
+  C0's selection holds for (P, d) (their evidence is old by design), by `item_id`. No
+  must-see lane and no cap.
 - R7a. Sensitivity: for C1 to C4 and the baselines, the report gives the number of
-  persona-days whose top 5 (item ids in order) differs from C0's. A term whose row is 0
+  persona-days whose overall top 5 or ranked-lane top 5 (item ids in order) differs from
+  C0's. A term whose row is 0
   cannot move any metric on this world, and the table says so.
 - R7b. A day that `select_digest` refuses (for example extract deltas left pending by a
   failed extraction) stops the eval with that refusal. On cassettes no day is refused.
@@ -98,8 +100,10 @@ class Scores(Frozen):
     recall_n: int        # persona-days with a value
     ndcg_at_5: float | None
     ndcg_n: int
-    n_without: int       # persona-days with no value for either metric
-    personas: int        # personas in the mean
+    recall_without: int  # persona-days with no must-see fact
+    ndcg_without: int    # persona-days with no fact of grade above 0
+    recall_personas: int # personas in the recall mean
+    ndcg_personas: int   # personas in the nDCG mean
 
 class PersonaScores(Frozen):
     user_id: str
@@ -115,7 +119,7 @@ class ConfigScores(Frozen):
     terms_off: tuple[str, ...]
     overall: Scores
     ranked_lane: Scores
-    changed_days: int          # persona-days whose top 5 differs from C0; 0 for C0
+    changed_days: int          # persona-days whose overall or ranked-lane top 5 differs from C0
     per_persona: tuple[PersonaScores, ...]
 
 class AblationRow(Frozen):

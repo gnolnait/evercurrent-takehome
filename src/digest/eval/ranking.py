@@ -21,8 +21,10 @@ class Scores(Frozen):
     recall_n: int  # persona-days with a value
     ndcg_at_5: float | None
     ndcg_n: int
-    n_without: int  # persona-days with no value for either metric
-    personas: int  # personas in the mean
+    recall_without: int  # persona-days with no must-see fact
+    ndcg_without: int  # persona-days with no fact of grade above 0
+    recall_personas: int  # personas in the recall mean
+    ndcg_personas: int  # personas in the nDCG mean
 
 
 class PersonaScores(Frozen):
@@ -40,7 +42,7 @@ class ConfigScores(Frozen):
     terms_off: tuple[str, ...]
     overall: Scores
     ranked_lane: Scores
-    changed_days: int  # persona-days whose top 5 differs from C0; 0 for C0
+    changed_days: int  # persona-days whose overall or ranked-lane top 5 differs from C0
     per_persona: tuple[PersonaScores, ...]
 
 
