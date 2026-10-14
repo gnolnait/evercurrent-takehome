@@ -8,7 +8,9 @@ from typing import Any
 
 from digest.daily.render import SECTION_TITLES, context_lines
 from digest.daily.select import Line, Selection
+from digest.models import Item
 from digest.project import ChecklistTask
+from digest.seed import SeedMap, channel_of, files_of, message_permalink
 from digest.world.schema import World
 
 MAX_BLOCKS = 50  # Slack refuses a message with more blocks
@@ -20,11 +22,14 @@ ELLIPSIS = "\N{HORIZONTAL ELLIPSIS}"
 _PARTIAL_TOKEN = re.compile(r"<[^>]*$|&[a-z]*$")
 
 
-def slack_message(world: World, selection: Selection) -> dict[str, Any]:
+def slack_message(
+    world: World, selection: Selection, links: SeedMap | None = None
+) -> dict[str, Any]:
     """The digest as Slack `text` and Block Kit `blocks`: a header, the window and phase lines, the sections, the footers.
 
     The message holds at most 50 blocks. Lines past the limit are left out, and the last
-    block says how many.
+    block says how many. With a seed map in `links`, the source links of mapped messages
+    point at the seeded Slack messages (docs/plans/m5-links.md).
     """
     names = {persona.user_id: persona.name for persona in world.personas}
     tasks = {(gate.id, task.id): task for gate in world.project.gates for task in gate.checklist}
@@ -35,7 +40,7 @@ def slack_message(world: World, selection: Selection) -> dict[str, Any]:
         lines = [line for line in selection.lines if line.section == section]
         if lines:
             body.append((_section(f"*{title}*"), False))
-            body.extend((_section(_line(line, names, tasks)), True) for line in lines)
+            body.extend((_section(_line(line, names, tasks, links)), True) for line in lines)
     if not selection.lines:
         body.append((_section(f"Nothing new for {_escape(profile.name)}."), False))
     footer = []
@@ -63,7 +68,10 @@ def slack_message(world: World, selection: Selection) -> dict[str, Any]:
 
 
 def _line(
-    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+    line: Line,
+    names: Mapping[str, str],
+    tasks: Mapping[tuple[str, str], ChecklistTask],
+    links: SeedMap | None,
 ) -> str:
     """One line in mrkdwn: the bold head, the summary, the source links.
 
@@ -93,15 +101,41 @@ def _line(
         )
     if line.must_see:
         head += " *[must see]*"
-    sources = " ".join(f"<{entry.permalink}|source>" for entry in item.evidence)
+    sources = _sources(item, links)
     return "\n".join(part for part in (head, _escape(item.summary), sources) if part)
+
+
+def _sources(item: Item, links: SeedMap | None) -> str:
+    """The source links of an item, each mapped one with its file links, then its channels.
+
+    A source that is not in `links` keeps its world permalink (plan L1 to L4). Only URLs
+    and channel ids go inside `<...>` unescaped. A file name is escaped.
+    """
+    if links is None:
+        return " ".join(f"<{entry.permalink}|source>" for entry in item.evidence)
+    parts: list[str] = []
+    channels: list[str] = []
+    for entry in item.evidence:
+        key = f"{entry.channel_id}:{entry.message_ts}"
+        permalink = message_permalink(links, key)
+        channel = channel_of(links, key)
+        if permalink is None or channel is None:
+            parts.append(f"<{entry.permalink}|source>")
+            continue
+        parts.append(f"<{permalink}|source>")
+        parts.extend(f"<{url}|{_escape(name)}>" for name, url in files_of(links, key))
+        if channel not in channels:
+            channels.append(channel)
+    if channels:
+        parts.append("in " + " ".join(f"<#{channel}>" for channel in channels))
+    return " ".join(parts)
 
 
 def _section(text: str) -> dict[str, Any]:
     """A section block with one mrkdwn text object.
 
     `verbatim` stops Slack from turning a bare URL, `@here` or `#channel` into a link or a
-    mention. The explicit `<url|text>` links still work.
+    mention. The explicit `<url|text>` and `<#C...>` links still work.
     """
     text_object = {"type": "mrkdwn", "text": _cut(text, MAX_SECTION_TEXT), "verbatim": True}
     return {"type": "section", "text": text_object}

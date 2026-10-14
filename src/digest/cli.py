@@ -49,8 +49,10 @@ from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
 from digest.replay import read_events, replay_world
 from digest.seed import (
     SeedBlocked,
+    SeedMap,
     SlackSeedClient,
     SlackWebSeedClient,
+    message_permalink,
     plan_seed,
 )
 from digest.seed import seed as seed_corpus
@@ -121,6 +123,11 @@ def post(
             "Slack user id, not to the webhook."
         ),
     ),
+    seed_map: Path | None = typer.Option(
+        None,
+        "--seed-map",
+        help="Seed map from `digest seed`: link sources to the seeded Slack messages.",
+    ),
 ) -> None:
     """Post the three demo digests to the Slack incoming webhook in SLACK_WEBHOOK_URL.
 
@@ -140,9 +147,17 @@ def post(
 
     With `--dm USER_ID`, the command does not use the webhook. It sends each digest as a
     direct message from the app's bot to the Slack user `USER_ID` (see `_post_dm`).
+
+    With `--seed-map PATH`, the command loads the map that `digest seed` wrote before it
+    checks the destination. A missing or unreadable map, or a map for another world than
+    the demo world, exits 1. The source links of mapped messages then point at the seeded
+    Slack messages, with their file links and channels. Before the first send, the command
+    prints how many source links are not in the map, when any are not. Without a map, the
+    command makes no `auth.test` call (docs/plans/m5-links.md).
     """
+    links = None if seed_map is None else _load_seed_map(seed_map)
     if dm is not None:
-        _post_dm(day, dm)
+        _post_dm(day, dm, links)
         return
     url = _webhook_url()
     if url is None:
@@ -150,8 +165,9 @@ def post(
     if not url.startswith(_WEBHOOK_PREFIX) or any(char.isspace() for char in url):
         _refuse(f"SLACK_WEBHOOK_URL must start with {_WEBHOOK_PREFIX} and hold no whitespace")
     loaded, selections = _demo_selections(day)
-    messages = [slack_message(loaded, selection) for selection in selections]
+    messages = [slack_message(loaded, selection, links) for selection in selections]
     client = _webhook_client(url)
+    _echo_unmapped(selections, links)
     typer.echo(f"sending {len(messages)} digests to the webhook")
     for sent, (selection, message) in enumerate(zip(selections, messages, strict=True)):
         reader = selection.profile.name
@@ -182,7 +198,7 @@ def post(
         typer.echo(f"posted the digest for {reader}")
 
 
-def _post_dm(day: int, user_id: str) -> None:
+def _post_dm(day: int, user_id: str, links: SeedMap | None) -> None:
     """Send the three demo digests as direct messages from the bot to the Slack user `user_id`.
 
     The function reads SLACK_BOT_TOKEN from the environment, then from `.env`. The user id
@@ -197,6 +213,11 @@ def _post_dm(day: int, user_id: str) -> None:
     partial post also says how many digests were already sent and that a rerun sends all
     of them again. A missing token names the `.env` file in the working directory. No
     output contains the token.
+
+    With a seed map in `links`, the function calls `auth.test` before it opens the DM. It
+    exits 1 when that call fails (with the text of `_dm_failure`) or when the team_id of
+    the token is not the team_id of the map. Before the destination line, it can print the
+    count line of `_echo_unmapped`.
     """
     if not _SLACK_USER_ID.fullmatch(user_id):
         _refuse("--dm must be a Slack user id: U or W, then upper-case letters and digits")
@@ -207,12 +228,22 @@ def _post_dm(day: int, user_id: str) -> None:
     if not token.startswith(_BOT_TOKEN_PREFIX):
         _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
     loaded, selections = _demo_selections(day)
-    messages = [slack_message(loaded, selection) for selection in selections]
+    messages = [slack_message(loaded, selection, links) for selection in selections]
     client = _slack_web_client(token)
-    typer.echo(f"sending {len(messages)} digests by DM to {user_id}")
     # The message of an exception can hold the token, so a refusal shows _slack_failure only.
     # Each refusal comes after its try statement, so no exception chains to it.
     failure: str | None = None
+    if links is not None:
+        try:
+            team_id = client.auth_test()["team_id"]
+        except Exception as error:
+            failure = f"cannot read the workspace of the bot token: {_dm_failure(error, source)}"
+        if failure is not None:
+            _refuse(failure)
+        if team_id != links.team_id:
+            _refuse("the seed map is for another Slack workspace (team) than the bot token")
+    _echo_unmapped(selections, links)
+    typer.echo(f"sending {len(messages)} digests by DM to {user_id}")
     try:
         channel = client.conversations_open(users=user_id)["channel"]["id"]
     except Exception as error:
@@ -229,6 +260,56 @@ def _post_dm(day: int, user_id: str) -> None:
         if failure is not None:
             _refuse(failure)
         typer.echo(f"posted the digest for {reader}")
+
+
+def _load_seed_map(path: Path) -> SeedMap:
+    """The seed map at `path`. A missing or unreadable map, or one for another world, exits 1.
+
+    A refusal prints no value read from the file, because a wrong path such as `.env` can
+    hold a token. A validation error shows the top-level field and the message of each
+    problem only, each line once.
+    """
+    # Each refusal comes after its try statement, so no exception chains to it.
+    failure: str | None = None
+    try:
+        links = SeedMap.load(path)
+    except OSError as error:
+        failure = f"{path}: {error.strerror or error}"
+    except UnicodeDecodeError as error:
+        failure = f"{path}: not a seed map: {error}"
+    except ValidationError as error:
+        # A deeper `loc` part can be a dictionary key from the file, so show the top field only.
+        problems = "; ".join(
+            dict.fromkeys(
+                f"{problem['loc'][0] if problem['loc'] else 'map'}: {problem['msg']}"
+                for problem in error.errors(include_input=False, include_url=False)
+            )
+        )
+        failure = f"{path}: not a seed map: {problems}"
+    if failure is not None:
+        _refuse(failure)
+    if links is None:
+        _refuse(f"{path}: the seed map does not exist")
+    if links.world != _DEMO_WORLD:
+        _refuse(f"{path}: the seed map is for another world, not {_DEMO_WORLD}")
+    return links
+
+
+def _echo_unmapped(selections: list[Selection], links: SeedMap | None) -> None:
+    """Print how many source links on the lines of `selections` are not in the map (plan L4).
+
+    The count covers every evidence entry of every line, before any render cut.
+    """
+    if links is None:
+        return
+    count = sum(
+        message_permalink(links, f"{entry.channel_id}:{entry.message_ts}") is None
+        for selection in selections
+        for line in selection.lines
+        for entry in line.item.evidence
+    )
+    if count:
+        typer.echo(f"{count} source links are not in the seed map")
 
 
 def _dm_failure(error: Exception, source: str) -> str:

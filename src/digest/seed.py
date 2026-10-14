@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from digest.models import Event, ts_datetime
+from digest.models import Event, permalink_for, ts_datetime
 from digest.world.schema import World
 
 ROLE_EMOJI: dict[str, str] = {
@@ -107,7 +107,10 @@ class MappedFile(BaseModel):
 
 
 class SeedMap(BaseModel):
-    """The seed map file (plan, "Seed map"). `seed` is its only reader and writer."""
+    """The seed map file (plan, "Seed map"). `seed` is its only writer.
+
+    `digest post --seed-map` reads it to link sources (docs/plans/m5-links.md).
+    """
 
     version: int = 1
     team_id: str
@@ -412,6 +415,34 @@ def _pending_lines(world: World, posts: Sequence[Post], seed_map: SeedMap) -> li
         if count or files:
             lines.append(f"{channel.name}: {count} posts, {files} files")
     return lines
+
+
+def message_permalink(seed_map: SeedMap, key: str) -> str | None:
+    """The Slack permalink of a mapped world message, or None when the key is absent.
+
+    A reply link also names its thread root and channel, as `chat.getPermalink` writes it.
+    See docs/plans/m5-links.md L1.
+    """
+    message = seed_map.messages.get(key)
+    if message is None:
+        return None
+    return permalink_for(seed_map.workspace_url, message.channel, message.ts, message.thread_ts)
+
+
+def channel_of(seed_map: SeedMap, key: str) -> str | None:
+    """The Slack channel id of a mapped world message, or None when the key is absent."""
+    message = seed_map.messages.get(key)
+    return None if message is None else message.channel
+
+
+def files_of(seed_map: SeedMap, key: str) -> list[tuple[str, str]]:
+    """(name, permalink) per file of a mapped world message, in map order; [] when none."""
+    prefix = f"{key}/"
+    return [
+        (name.removeprefix(prefix), mapped.permalink)
+        for name, mapped in seed_map.files.items()
+        if name.startswith(prefix)
+    ]
 
 
 def placeholder_file(name: str) -> bytes:
