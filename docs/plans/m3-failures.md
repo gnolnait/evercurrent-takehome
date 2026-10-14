@@ -33,7 +33,8 @@ unchanged:
   success reply whose body is not JSON becomes
   `LLMOutputError("openrouter reply is not JSON", raw=response.text)`. A JSON reply of
   the wrong shape (not an object, `choices` missing, null or empty, a choice without
-  `message` or `finish_reason`, a `usage` that is not an object) becomes
+  `message` or `finish_reason`, a `message` without `content` or with a `content`
+  that is neither text nor null, a `usage` that is not an object) becomes
   `LLMOutputError("openrouter reply has an unexpected shape", raw=response.text)`. The
   adversarial pass found these crash `digest extract` today. `run_extract` counts
   either as a failed thread (it catches `LLMOutputError`), and the wrapper does not retry

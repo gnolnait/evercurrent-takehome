@@ -18,6 +18,8 @@ CONTENT = '"message": {"content": "ok"}, "finish_reason": "stop"'
         '{"choices": []}',
         '{"choices": [{}]}',
         '{"choices": [{' + CONTENT + '}], "usage": 5}',
+        '{"choices": [{"message": {}, "finish_reason": "stop"}]}',
+        '{"choices": [{"message": {"content": 5}, "finish_reason": "stop"}]}',
     ],
 )
 def test_openrouter_wrong_shape_json_reply_becomes_refusal(body: str) -> None:
