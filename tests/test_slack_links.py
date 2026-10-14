@@ -432,7 +432,7 @@ def test_cli_without_seed_map_does_not_authenticate(
     [
         ("missing", "seed-map.json"),
         ("malformed", "seed-map.json"),
-        ("other-world", "another-world"),
+        ("other-world", "another world"),
     ],
 )
 @pytest.mark.parametrize("delivery", ["webhook", "dm"])
@@ -464,6 +464,8 @@ def test_cli_rejects_invalid_seed_map_before_build_or_send(
 
     assert result.exit_code == 1, result.output
     assert reason in result.output
+    if map_case == "other-world":
+        assert "another-world" not in result.output
     assert builds == []
     assert client.calls == []
     assert sends.calls == []
