@@ -1,0 +1,46 @@
+{
+  "key": "942b0c00ebb668862768db03aeb056d5af03f15013c30fb05e50a8199107fbde",
+  "request": {
+    "model": "classify",
+    "system": "You read one Slack thread of a hardware engineering program.\nThe user message gives the channel purpose when it is known, the thread root and the changed messages.\nThe changed messages are the messages posted or edited since the thread was last read. This delta is the set of changed messages.\nA thread root that is new in this delta is the first of the changed messages.\nGive the probability, from 0 to 1, that the changed messages carry project information: a decision, a blocker, a risk, a schedule change, a spec change, a BOM change, an ask about the program, or an fyi that a program member needs to know.\nSmall talk, thanks and social messages are not project information.\nWrite the rationale first, then the probability.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Channel purpose: Shared channel with Sunrise Precision Mfg\n\nThread root:\nnew in this delta: it is the first changed message below\nChanged messages, oldest first:\n[ts 1792456200.000000] author U0CM01: Blocker: we cannot ship LiDAR bracket PN-11051 Rev A this week; first articles move from 19 Oct to 2 Nov."
+      }
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "probability": {
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rationale",
+        "probability"
+      ],
+      "title": "TriageOutput",
+      "type": "object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "response": {
+    "text": "{\"rationale\": \"The changed message is a blocker and schedule change: the LiDAR bracket PN-11051 Rev A cannot ship this week, and first articles slip from 19 Oct to 2 Nov. This is clearly program-relevant project information that a program member needs to know.\", \"probability\": 0.98}",
+    "data": {
+      "rationale": "The changed message is a blocker and schedule change: the LiDAR bracket PN-11051 Rev A cannot ship this week, and first articles slip from 19 Oct to 2 Nov. This is clearly program-relevant project information that a program member needs to know.",
+      "probability": 0.98
+    },
+    "backend": "openrouter",
+    "model": "anthropic/claude-haiku-5.5",
+    "input_tokens": 597,
+    "output_tokens": 103
+  },
+  "recorded_at": "2026-10-13T22:32:57.665211+00:00"
+}

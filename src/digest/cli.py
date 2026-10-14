@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -9,7 +10,7 @@ import sqlite3
 import tempfile
 from collections import Counter
 from collections.abc import Set
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
 from statistics import median
@@ -27,12 +28,21 @@ from digest.corpus.render import render_world
 from digest.daily.render import build_digest, render_digest, select_digest
 from digest.daily.select import Selection
 from digest.daily.slack import slack_message
+from digest.driver import (
+    LineView,
+    ReaderDiff,
+    ScriptLine,
+    StoreView,
+    diff_selections,
+    make_event,
+)
 from digest.eval.extraction import run_extraction_eval, write_report
 from digest.extract.prompts import EXTRACT_PROMPT_VERSION
 from digest.extract.stage import ExtractReport, refuse_other_prompt_version, run_extract
 from digest.extract.verify import DROP_FIELDS
 from digest.llm.cassette import CassetteMiss, Cassettes
 from digest.llm.client import LLM, from_settings
+from digest.models import Event
 from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
 from digest.replay import replay_world
 from digest.settings import Settings
@@ -55,6 +65,7 @@ _BOT_TOKEN_PREFIX = "xoxb-"
 _SLACK_ERROR_CODE = re.compile(r"[a-z_]+")  # a body such as invalid_blocks
 _SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]+")
 _AUTH_ERRORS = frozenset({"invalid_auth", "not_authed"})
+_AT_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?")
 
 app = typer.Typer(help="Role- and phase-aware daily Slack digest.", no_args_is_help=True)
 
@@ -490,6 +501,198 @@ def replay(
     typer.echo(report.model_dump_json())
 
 
+@app.command()
+def say(
+    as_: str | None = typer.Option(
+        None, "--as", help="Persona id of the sender; not a bot. Not with --script."
+    ),
+    channel: str | None = typer.Option(
+        None, "--channel", help="Channel name; the persona must be a member. Not with --script."
+    ),
+    at: str | None = typer.Option(
+        None,
+        "--at",
+        help="World time, YYYY-MM-DDTHH:MM[:SS] in the world's time zone, on the store's day "
+        "and later than every event in the store. Not with --script.",
+    ),
+    text: str | None = typer.Option(None, "--text", help="Message text. Not with --script."),
+    thread: str | None = typer.Option(
+        None,
+        "--thread",
+        help="Ts of a top-level message in the channel to reply to. Not with --script.",
+    ),
+    script: Path | None = typer.Option(
+        None,
+        "--script",
+        help="Script file: run each JSON line as its own say into a fresh scratch copy.",
+    ),
+    db: Path = typer.Option(
+        ...,
+        "--db",
+        help="Scratch store path; made as a copy of the base store on first use. "
+        "With --script, it must not exist yet.",
+    ),
+    base_db: Path | None = typer.Option(
+        None,
+        "--base-db",
+        help="Base store path, never written; default DIGEST_DB, then data/<world>.sqlite.",
+    ),
+) -> None:
+    """Add a message as a persona at a world time, into a scratch copy of the store.
+
+    The command opens the base store read-only and never writes it. It refuses a message
+    that breaks a rule with exit 1 and a one-line reason, and then writes nothing. It
+    refuses to make a new scratch store when `<db>.script.jsonl` already exists, so a log
+    never holds two sessions. It writes the event, sets the
+    meta key `extract_until` to the day before the store's day when that key is not
+    already earlier, appends the arguments as one JSON line to `<db>.script.jsonl` and
+    prints the event's ts. Run `digest extract --db <scratch>` next.
+
+    The command refuses a `--db` equal to the base store path, or one that resolves to the
+    same file. Without `--script`, the command uses an existing `--db` as it is. A failed
+    event write refuses on one line that starts with the `--db` path. A failed copy or
+    event write removes a scratch store that this say made. A failed log append keeps it.
+    The command keeps a scratch store that already existed.
+
+    With `--script`, the command refuses a `--db` that already exists, or a
+    `<db>.script.jsonl` that already exists, before the copy. It makes `--db` as a fresh
+    copy of the base store, then runs every line of the file in order, each as its own say
+    with the same rules. It appends to no script file. On any failure after the copy, it
+    removes the scratch store. It prints the ts values only after it stores every line.
+    """
+    settings = Settings()
+    base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
+    if db.resolve() == base.resolve() or (
+        db.exists() and base.exists() and os.path.samefile(db, base)
+    ):
+        _refuse(f"--db {db} is the same file as the base store {base}; give a scratch path")
+    single = {"--as": as_, "--channel": channel, "--at": at, "--text": text, "--thread": thread}
+    if script is not None:
+        given = [option for option, value in single.items() if value is not None]
+        if given:
+            _refuse(f"--script cannot be used with {', '.join(given)}")
+        _say_script(script, db, base)
+        return
+    if as_ is None or channel is None or at is None or text is None:
+        _refuse("say needs --as, --channel, --at and --text, or --script")
+    try:
+        line = ScriptLine(as_=as_, channel=channel, at=at, text=text, thread=thread)
+    except ValidationError as error:
+        _refuse(_first_error(error))
+    fresh = not db.exists()
+    log_path = Path(f"{db}.script.jsonl")
+    if fresh and not base.is_file():
+        _refuse(f"no base store at {base}; run digest replay first")
+    with _open_store_readonly(base) if fresh else _open_store(db) as checked:
+        world = _store_world(checked)
+        try:
+            event, meta = _checked_say(checked, world, line)
+        except ValueError as error:
+            _refuse(" ".join(str(error).split()))
+        if fresh:
+            if log_path.exists():  # after the rule checks, so a broken rule names its reason
+                _refuse(f"script log {log_path} already exists; remove it or give another --db")
+            scratch = _copy_store(checked, db)  # before the try: a refused copy removes nothing
+            try:
+                with scratch:  # inside the try: close before _remove_store, for Windows
+                    scratch.upsert_events([event], meta=meta)
+            except (OSError, sqlite3.Error) as error:
+                _remove_store(db)
+                _refuse(f"{db}: {' '.join(str(error).split())}")
+            except BaseException:
+                _remove_store(db)
+                raise
+        else:
+            try:
+                checked.upsert_events([event], meta=meta)
+            except (OSError, sqlite3.Error) as error:  # keep a store this say did not make
+                _refuse(f"{db}: {' '.join(str(error).split())}")
+    with log_path.open("a", encoding="utf-8", newline="\n") as log_file:
+        log_file.write(line.model_dump_json() + "\n")
+    typer.echo(event.ts)
+
+
+@app.command()
+def diff(
+    as_of: str = typer.Option(..., "--as-of", help="Digest date, YYYY-MM-DD."),
+    db: Path = typer.Option(..., "--db", help="Store B, the store after the change."),
+    base_db: Path | None = typer.Option(
+        None,
+        "--base-db",
+        help="Store A, the store before the change; default DIGEST_DB, then data/<world>.sqlite.",
+    ),
+    user: str | None = typer.Option(
+        None, "--user", help="Compare only this user id; default every non-bot persona."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print a JSON array of the reader diffs."),
+) -> None:
+    """Show which readers' digests differ between two stores on a date, and why.
+
+    For each reader with a change, the command lists the added, removed and changed lines,
+    each with its title and reason. Then it names the readers with no change. With no change
+    for any reader, it prints "no change" and exits 0. The readers are sorted by user_id, in
+    the text output and in `--json`. A refused store or an unknown user exits 1 with the
+    reason, as `digest run` does. The command opens both stores read-only and never writes
+    them.
+    """
+    settings = Settings()
+    try:
+        day = date.fromisoformat(as_of)
+    except ValueError:
+        _refuse(f"--as-of must be YYYY-MM-DD, got {as_of!r}")
+    base = base_db or settings.db or Path("data") / f"{settings.world}.sqlite"
+    for path in (base, db):
+        if not path.is_file():  # a clearer reason than the error of a read-only open
+            _refuse(f"no store at {path}; run digest replay first")
+    with _open_store_readonly(base) as before_store, _open_store_readonly(db) as after_store:
+        name = _stored(after_store, "world")
+        base_name = _stored(before_store, "world")
+        if base_name != name:
+            _refuse(f"store {base} holds world {base_name!r}, but store {db} holds {name!r}")
+        world = _store_world(after_store)
+        try:
+            priors = load_priors(DEFAULT_PRIORS_PATH)
+        except ValidationError as error:
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {_first_error(error)}")
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            _refuse(f"{DEFAULT_PRIORS_PATH}: {' '.join(str(error).split())}")
+        if user is None:
+            readers = sorted(p.user_id for p in world.personas if p.kind != "bot")
+        else:
+            readers = [user]
+        diffs: list[ReaderDiff] = []
+        for reader in readers:
+            try:
+                before = select_digest(before_store, world, priors, reader, day)
+                after = select_digest(after_store, world, priors, reader, day)
+            except KeyError:
+                _refuse(f"unknown user {reader}: no persona with that id in world {name}")
+            except ValueError as error:  # a refused store, or a bot
+                _refuse(str(error))
+            diffs.append(diff_selections(before, after))
+    if as_json:
+        typer.echo(json.dumps([d.model_dump(mode="json") for d in diffs], indent=2))
+        return
+    changed = [d for d in diffs if d.added or d.removed or d.changed]
+    if not changed:
+        typer.echo("no change")
+        return
+    for reader_diff in changed:
+        typer.echo(reader_diff.user_id)
+        for view in reader_diff.added:
+            typer.echo(f"  added {_line_view(view)}")
+        for view in reader_diff.removed:
+            typer.echo(f"  removed {_line_view(view)}")
+        for change in reader_diff.changed:
+            typer.echo(f"  changed {_line_view(change.after)}")
+            for field in change.fields:
+                was, now = getattr(change.before, field), getattr(change.after, field)
+                typer.echo(f"      {field}: {was} -> {now}")
+    unchanged = [d.user_id for d in diffs if d not in changed]
+    if unchanged:
+        typer.echo(f"no change: {', '.join(unchanged)}")
+
+
 world_app = typer.Typer(help="Inspect a scripted world.", no_args_is_help=True)
 app.add_typer(world_app, name="world")
 
@@ -805,6 +1008,120 @@ def _extract_days(
     return total
 
 
+def _say_script(script: Path, db: Path, base: Path) -> None:
+    """Run every line of a script file as its own say into a new scratch store at `db`.
+
+    Refuse a `db` that exists, or a `<db>.script.jsonl` that exists. Split the file into
+    lines on "\\n" only, so a text that holds U+0085, U+2028 or U+2029 replays. On any
+    failure after the copy, remove the new scratch store, so a failure writes nothing. Print
+    the ts values only after every line is stored.
+    """
+    if db.exists():
+        _refuse(f"--db {db} already exists; --script runs into a new scratch store only")
+    log_path = Path(f"{db}.script.jsonl")
+    if log_path.exists():
+        _refuse(f"script log {log_path} already exists; remove it or give another --db")
+    try:
+        raw_lines = [raw.removesuffix("\r") for raw in script.read_bytes().decode().split("\n")]
+    except (OSError, UnicodeDecodeError) as error:
+        _refuse(f"{script}: {error}")
+    lines: list[tuple[int, ScriptLine]] = []
+    for number, raw in enumerate(raw_lines, start=1):
+        if not raw.strip():
+            continue
+        try:
+            lines.append((number, ScriptLine.model_validate_json(raw)))
+        except ValidationError as error:
+            _refuse(f"{script}:{number}: {_first_error(error)}")
+    if not base.is_file():
+        _refuse(f"no base store at {base}; run digest replay first")
+    with _open_store_readonly(base) as source:
+        world = _store_world(source)
+        scratch = _copy_store(source, db)
+    stored: list[str] = []
+    where = str(script)  # the script line that failed, for the refusal
+    try:
+        with scratch:
+            for number, line in lines:
+                where = f"{script}:{number}"
+                event, meta = _checked_say(scratch, world, line)
+                scratch.upsert_events([event], meta=meta)
+                stored.append(event.ts)
+    except (ValueError, OSError, sqlite3.Error) as error:
+        _remove_store(db)
+        _refuse(f"{where}: {' '.join(str(error).split())}")
+    except BaseException:
+        _remove_store(db)
+        raise
+    for ts in stored:
+        typer.echo(ts)
+
+
+def _checked_say(store: Store, world: World, line: ScriptLine) -> tuple[Event, dict[str, str]]:
+    """The event of one say line and the meta to write with it.
+
+    Raise ValueError with a one-line reason for a line that breaks rule S1, S2 or S3, or
+    for a store whose meta is malformed. The function writes nothing.
+    """
+    if _AT_PATTERN.fullmatch(line.at) is None:
+        raise ValueError(f"--at must be YYYY-MM-DDTHH:MM[:SS], got {line.at!r}")
+    moment = datetime.fromisoformat(line.at)
+    until = store.get_meta("until")
+    end = None if until is None else _instant(until)
+    if end is None:  # a ValueError, not _refuse: a script removes its scratch store first
+        raise ValueError(
+            f"store {store.path} meta key 'until' is {until!r}, "
+            "not an ISO timestamp with a UTC offset"
+        )
+    day = end.astimezone(ZoneInfo(world.timezone)).date()
+    view = StoreView(day=day, latest_event_ts=store.latest_event_ts())
+    event = make_event(world, view, line.as_, line.channel, moment, line.text, line.thread)
+    if line.thread is not None:  # rule S3
+        found = store.events_in_thread(f"{event.channel_id}:{line.thread}", end)
+        if not found or found[0].ts != line.thread:
+            raise ValueError(
+                f"--thread {line.thread} is not the ts of a top-level message "
+                f"in channel {line.channel}"
+            )
+    # The next `digest extract` must revisit the store's day; keep an earlier key as it is.
+    revisit = day - timedelta(days=1)
+    done = store.get_meta("extract_until")
+    try:
+        earlier = done is not None and date.fromisoformat(done) < revisit
+    except ValueError:
+        raise ValueError(
+            f"store {store.path} meta key 'extract_until' is {done!r}, not YYYY-MM-DD"
+        ) from None
+    return event, {} if earlier else {"extract_until": revisit.isoformat()}
+
+
+def _store_world(store: Store) -> World:
+    """The world that the store holds, loaded from data/world; refuse a missing or bad file."""
+    source = Path("data") / "world" / _stored(store, "world") / "world.yaml"
+    try:
+        return load_world(source)
+    except OSError as error:
+        _refuse(f"{source}: {error.strerror or error}")
+    except ValidationError as error:
+        _refuse(f"{source}: {_first_error(error)}")
+    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        _refuse(f"{source}: {' '.join(str(error).split())}")
+
+
+def _copy_store(store: Store, path: Path) -> Store:
+    """Copy the store to a new file at `path` and open the copy; refuse on a failed copy."""
+    try:
+        return store.copy_to(path)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        _refuse(f"cannot copy store {store.path} to {path}: {error}")
+
+
+def _line_view(view: LineView) -> str:
+    """One diff line: section, lane and rank, then the title and the reason."""
+    place = "must-see" if view.lane == "must_see" else f"ranked {view.rank}"
+    return f"[{view.section}, {place}] {view.title}: {view.reason}"
+
+
 def _overlap_line(*shown: Set[str]) -> str:
     """The Jaccard index of the item ids of each pair of demo digests, to two decimals.
 
@@ -845,6 +1162,30 @@ def _open_store(path: Path) -> Store:
         _refuse(str(error))
     except (OSError, sqlite3.DatabaseError) as error:
         _refuse(f"cannot open store {path}: {error}")
+
+
+def _open_store_readonly(path: Path) -> Store:
+    """Open the store read-only, or refuse for a file that is not a store of this schema."""
+    try:
+        return Store.open_readonly(path)
+    except ValueError as error:  # empty, or another schema version; the message names the store
+        _refuse(str(error))
+    except (OSError, sqlite3.DatabaseError) as error:
+        _refuse(f"cannot open store {path}: {error}")
+
+
+def _remove_store(path: Path) -> None:
+    """Remove a store file with its `-wal` and `-shm` files."""
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
+def _first_error(error: ValidationError) -> str:
+    """The first message of a validation error, on one line, after its location."""
+    first = error.errors()[0]
+    message = " ".join(first["msg"].split())
+    location = ".".join(map(str, first["loc"]))
+    return f"{location}: {message}" if location else message
 
 
 def _instant(text: str) -> datetime | None:

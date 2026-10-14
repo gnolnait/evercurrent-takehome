@@ -97,23 +97,69 @@ class Store:
         if path != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path)
+        try:
+            connection.row_factory = sqlite3.Row
+            _check_version(connection, path)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.executescript(Path(__file__).with_name("schema.sql").read_text("utf-8"))
+            with connection:
+                connection.execute(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
+                    " ON CONFLICT (key) DO NOTHING",
+                    (SCHEMA_VERSION,),
+                )
+            log.debug("store_opened", extra={"path": str(path)})
+            return cls(connection, path)
+        except BaseException:  # close, so a cleanup can delete the file on Windows
+            connection.close()
+            raise
+
+    @classmethod
+    def open_readonly(cls, path: Path) -> Self:
+        """Open an existing store read-only. Never write the file or its write-ahead log.
+
+        The connection uses `mode=ro`. The function runs no schema script and no write.
+        Raise ValueError for a file that is not a store of this schema version, an empty
+        file included, and sqlite3.DatabaseError for a file that is not SQLite.
+        """
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
         try:
-            _check_version(connection, path)
+            _check_version(connection, path, allow_empty=False)
         except Exception:
             connection.close()
             raise
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.executescript(Path(__file__).with_name("schema.sql").read_text("utf-8"))
-        with connection:
-            connection.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
-                " ON CONFLICT (key) DO NOTHING",
-                (SCHEMA_VERSION,),
-            )
-        log.debug("store_opened", extra={"path": str(path)})
+        log.debug("store_opened_readonly", extra={"path": str(path)})
         return cls(connection, path)
+
+    def copy_to(self, path: Path) -> Store:
+        """Copy this store to a new file at `path` and open the copy.
+
+        The copy uses the SQLite online backup API from this store's own connection, so
+        rows still in the write-ahead log are copied too. A backup only reads its source,
+        so this store is not changed. Raise FileExistsError when `path` exists, and
+        ValueError for an in-memory store. When the backup or the open of the copy fails,
+        remove the file at `path` (with its `-wal` and `-shm` files) and raise the error.
+        """
+        if self.path == ":memory:":
+            raise ValueError("cannot copy an in-memory store")
+        if path.exists():
+            raise FileExistsError(f"cannot copy store {self.path} to {path}: {path} exists")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target = sqlite3.connect(path)
+            try:
+                self._db.backup(target)
+            finally:
+                target.close()
+            copy = type(self).open(path)
+        except BaseException:
+            for suffix in ("", "-wal", "-shm"):
+                Path(f"{path}{suffix}").unlink(missing_ok=True)
+            raise
+        log.info("store_copied", extra={"source": str(self.path), "path": str(path)})
+        return copy
 
     def close(self) -> None:
         self._db.close()
@@ -141,6 +187,13 @@ class Store:
             self._db.executemany(_UPSERT, rows)
             self._db.executemany(_SET_META, (meta or {}).items())
         return len(rows)
+
+    def latest_event_ts(self) -> str | None:
+        """The `event_ts` of the latest event version in the store; None for no event."""
+        row = self._db.execute(
+            "SELECT event_ts FROM events ORDER BY event_ts_us DESC LIMIT 1"
+        ).fetchone()
+        return None if row is None else row["event_ts"]
 
     def events_in_thread(self, thread_id: str, as_of: datetime) -> list[Event]:
         channel_id, _, thread_ts = thread_id.rpartition(":")
@@ -267,11 +320,18 @@ class Store:
         return [TriageDecision.model_validate(dict(row)) for row in rows]
 
 
-def _check_version(connection: sqlite3.Connection, path: Path | str) -> None:
-    """Accept an empty database or a store of this schema version; raise for anything else."""
+def _check_version(
+    connection: sqlite3.Connection, path: Path | str, *, allow_empty: bool = True
+) -> None:
+    """Accept a store of this schema version, and an empty database when `allow_empty`.
+
+    Raise ValueError for anything else.
+    """
     tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master")}
     if not tables:
-        return
+        if allow_empty:
+            return
+        raise ValueError(f"store {path} is empty: it has no schema, so it is not a store")
     row = None
     if "meta" in tables:
         row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
