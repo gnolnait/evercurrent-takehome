@@ -111,7 +111,11 @@ def _has_expected_shape(payload: object) -> bool:
     choice = choices[0]
     if not isinstance(choice, dict) or "finish_reason" not in choice:
         return False
-    if not isinstance(choice.get("message"), dict):
+    message = choice.get("message")
+    if not isinstance(message, dict) or "content" not in message:
+        return False
+    # A null content is a refusal that `complete` reports with its finish_reason.
+    if message["content"] is not None and not isinstance(message["content"], str):
         return False
     # A null usage counts as no usage. Any other value must be an object.
     usage = payload.get("usage")
