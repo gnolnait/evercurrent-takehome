@@ -202,18 +202,10 @@ def check_store_day(store: Store, world: World, day: date) -> None:
 def item_parts(
     item: Item, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
 ) -> tuple[str, str]:
-    """The item's heading and its one-line summary, as `line_parts` gives them (plan m4-items I1a)."""
-    raise NotImplementedError
-
-
-def line_parts(
-    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
-) -> tuple[str, str]:
-    """The line's heading and its one-line summary, without "- ", "[must see]" or sources.
+    """The item's heading and its one-line summary, without "- ", "[must see]" or sources.
 
     A checklist absence takes the task text and owner role from the world's checklist.
     """
-    item = line.item
     detail = item.absence
     if detail is None:
         entities = f" ({', '.join(item.entities)})" if item.entities else ""
@@ -232,6 +224,13 @@ def line_parts(
         owner = names.get(item.owner, item.owner) if item.owner else "someone"
         head = f"Not happened: {asker} asked {owner}, no reply for {_days(detail.days_silent)}"
     return head, _plain(item.summary)
+
+
+def line_parts(
+    line: Line, names: Mapping[str, str], tasks: Mapping[tuple[str, str], ChecklistTask]
+) -> tuple[str, str]:
+    """The line's heading and its one-line summary, as `item_parts` gives them."""
+    return item_parts(line.item, names, tasks)
 
 
 def _line(

@@ -1,1 +1,62 @@
-{# The open-items page (plan m4-items). #}
+{# The open-items page (plan m4-items). It reuses the room's stylesheet and classes. -#}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downstream open items</title>
+{% include "_style.html" %}
+<style>
+  .items { max-width: 64rem; }
+  .lines h3.heading { font-size: inherit; }
+  .search { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+  .search label { font-size: 11px; font-weight: 600; color: var(--muted); display: flex; flex-direction: column; gap: 3px; flex: 1 1 10rem; }
+  .owner, .readers { margin-top: 4px; font-size: 12px; }
+  .quote { margin-top: 4px; font-size: 13px; }
+  .quote .where { margin-left: 6px; }
+  .absent .where, .absent a { color: #F2B98A; }
+  .readers { font-weight: 600; }
+</style>
+</head>
+<body>
+<header class="top">
+  <p class="brand">Downstream</p>
+  <h1>{{ world.program }} open items</h1>
+  <p class="note"><a href="/">Back to the demo room</a>. The project holds these items open. Each item says which readers' digests carry it today.</p>
+</header>
+{% if refusal is not none %}<p class="refusal">{{ refusal }}</p>{% endif %}
+
+<section class="panel items">
+<h2>Search</h2>
+<form method="get" action="/items" class="card search">
+  <label>Text <input type="text" name="text" value="{{ query.text }}"></label>
+  <label>Type <select name="type"><option value="any">any</option>{% for value in item_types %}<option value="{{ value }}"{% if query.type == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Status <select name="status"><option value="any">any</option>{% for value in item_statuses %}<option value="{{ value }}"{% if query.status == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Owner <select name="owner"><option value="any">any</option>{% for person in humans %}<option value="{{ person.user_id }}"{% if query.owner == person.user_id %} selected{% endif %}>{{ person.name }}</option>{% endfor %}</select></label>
+  <button type="submit">Search</button>
+</form>
+</section>
+
+{% for title, entries in sections %}
+<section class="panel items">
+<h2>{{ title }}</h2>
+{% if entries %}
+<ul class="lines">
+{% for view, heading, summary, readers in entries %}
+  <li{% if view.item.absence %} class="absent"{% endif %}>
+    <header class="line-top">{% if view.item.absence %}<span class="dot"></span>{% endif %}<h3 class="heading">{{ heading }}</h3>{% if title == "Results" %}<span class="pill role">{{ view.item.type }}</span><span class="pill role">{{ view.item.status }}</span>{% endif %}</header>
+    <p class="summary">{{ summary }}</p>
+    <p class="owner">Owner: {{ view.owner_name or "no owner" }}</p>
+    {% for entry in view.evidence %}<p class="quote">"{{ entry.quote }}" <span class="where">{{ entry.author_name or entry.author_id or "unknown author" }} in #{{ entry.channel_name or entry.channel_id }}, <a href="{{ entry.permalink }}">source</a></span></p>
+    {% endfor %}
+    {% if readers %}<p class="readers">In the digest of: {% for profile in readers %}{{ profile.name }} ({{ profile.role }}){% if not loop.last %}, {% endif %}{% endfor %}</p>{% else %}<p class="readers">In no reader's digest</p>{% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty">No item.</p>
+{% endif %}
+</section>
+{% endfor %}
+</body>
+</html>

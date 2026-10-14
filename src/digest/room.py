@@ -13,7 +13,7 @@ import datetime as dt
 import logging
 import shutil
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn, Protocol, assert_never, runtime_checkable
@@ -31,7 +31,7 @@ from digest.llm.client import LLM, from_settings
 from digest.models import Event, Frozen, Role, micros_since_epoch
 from digest.priors import Priors
 from digest.project import ChecklistTask, Gate, add_working_days
-from digest.queries import QueryContext
+from digest.queries import QueryContext, open_context
 from digest.replay import read_events
 from digest.settings import Settings
 from digest.store import Store
@@ -509,9 +509,14 @@ class Room:
     def state(self) -> RoomState:
         return self._state
 
-    def items_context(self) -> AbstractContextManager[QueryContext]:
-        """Open the current room store read-only and yield its query context (plan I4)."""
-        raise NotImplementedError
+    @contextlib.contextmanager
+    def items_context(self) -> Iterator[QueryContext]:
+        """Open the current store read-only and yield its context for the current world.
+
+        The current store is the room store when message changes exist, else the base store.
+        """
+        with Store.open_readonly(self._store or self._base.store_path) as store:
+            yield open_context(store, self._state.world, self._base.priors)
 
     def save(self, path: Path) -> Path:
         """Write the corpus copy with the room's message changes (plan S1); return `path`.
