@@ -468,14 +468,7 @@ def run_ranking_eval(world_dir: Path, llm: LLM, priors: Priors, store_path: Path
                 must_see_facts += sum(1 for grade in facts.values() if grade == 2)
                 for zero, (tally, config_priors) in enumerate(runs):
                     selections = {
-                        name: select_digest(
-                            store,
-                            world,
-                            config_priors[name],
-                            user,
-                            today,
-                            previous_digest=previous,
-                        )
+                        name: _select(store, world, config_priors[name], user, today, previous)
                         for name, _ in CONFIGS
                     }
                     send = _send_everything(
@@ -572,16 +565,18 @@ def _view(
     """One configuration's day values and top-5 ids (plan R5, R6 and R6a).
 
     The ranked lane drops, before the cut at five, the lines that deliver a fact of `removed`.
+    Deliveries are assigned once on the whole ranked list; the kept lines keep their facts.
     """
     overall = [item for item, _ in lines]
     ranked = [item for item, must_see in lines if not must_see]
-    ranked = [
-        item
+    kept = [
+        (item, fact)
         for item, fact in zip(ranked, _deliveries(ranked, candidates), strict=True)
         if fact is None or fact not in removed
     ]
+    ranked = [item for item, _ in kept]
     overall_grades = _grades(overall, facts, candidates)
-    ranked_grades = _grades(ranked, lane_set, candidates)
+    ranked_grades = [0 if fact is None else lane_set.get(fact, 0) for _, fact in kept]
     values = (
         recall_at_5(overall_grades, list(facts.values())),
         ndcg_at_5(overall_grades, list(facts.values())),
@@ -592,6 +587,16 @@ def _view(
         tuple(item.item_id for item in overall[:5]),
         tuple(item.item_id for item in ranked[:5]),
     )
+
+
+def _select(
+    store: Store, world: World, priors: Priors, user: str, day: date, previous: date | None
+) -> Selection:
+    """The reader's selection; a refusal of select_digest raises RankingRefused (plan R7b)."""
+    try:
+        return select_digest(store, world, priors, user, day, previous_digest=previous)
+    except ValueError as error:
+        raise RankingRefused(str(error)) from error
 
 
 def _below(
