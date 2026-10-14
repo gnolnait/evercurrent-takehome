@@ -384,7 +384,7 @@ schema published as a resource, is the escape hatch for questions the fixed tool
 not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
 Enforced by import-linter (`uv run lint-imports` in CI): a layers contract in `pyproject.toml` (cli;
-eval and driver as siblings; daily; corpus; replay, extract and absence as siblings; store, llm and world as
+eval and driver as siblings; daily; corpus; replay, extract, absence and seed as siblings; store, llm and world as
 siblings; project and priors; models and settings) and a forbidden
 contract keeping `anthropic` and `httpx2` inside `digest.llm`.
 

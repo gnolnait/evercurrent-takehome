@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
 from statistics import median
+from time import sleep
 from typing import TYPE_CHECKING, NoReturn
 from zoneinfo import ZoneInfo
 
@@ -44,7 +45,14 @@ from digest.llm.cassette import CassetteMiss, Cassettes
 from digest.llm.client import LLM, from_settings
 from digest.models import Event
 from digest.priors import DEFAULT_PRIORS_PATH, Priors, load_priors
-from digest.replay import replay_world
+from digest.replay import read_events, replay_world
+from digest.seed import (
+    SeedBlocked,
+    SlackSeedClient,
+    SlackWebSeedClient,
+    plan_seed,
+)
+from digest.seed import seed as seed_corpus
 from digest.settings import Settings
 from digest.store import Store
 from digest.world.golden import derive_golden, write_golden
@@ -269,6 +277,92 @@ def _rerun_note(sent: int, total: int) -> str:
 def _not_set(key: str) -> str:
     """The refusal for a missing `key`. It names the `.env` file in the working directory."""
     return f"{key} is not set in the environment or in {Path.cwd() / '.env'}"
+
+
+# --- digest seed (docs/plans/m5-seed.md) -------------------------------------------------
+
+
+@app.command()
+def seed(
+    world: str = typer.Option(..., "--world", help="World name under data/world/."),
+    map_path: Path | None = typer.Option(
+        None,
+        "--map",
+        help="Seed map file. Default: .slack-seed/<team_id>-<world>.json.",
+    ),
+    until_day: int | None = typer.Option(
+        None, "--until-day", help="Seed only the events up to the end of this world day."
+    ),
+    pace: float = typer.Option(1.2, "--pace", min=0, help="Seconds between two writes."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Make no write; print what a run would do."
+    ),
+) -> None:
+    """Post the world's corpus into the Slack workspace of SLACK_BOT_TOKEN, under persona
+    names, and record a map from each world message to its Slack message.
+
+    The command reads SLACK_BOT_TOKEN as `digest post --dm` does. It plans the posts
+    before it makes a Slack call. A real run prints one line per acknowledged write, then
+    the summary line. A dry run prints the count and blocker lines only, and exits 1 when
+    a blocker stops a real run. A Slack error shows its error code only, any other error
+    its type only, so no output holds the token.
+    """
+    world_dir = Path("data") / "world" / world
+    # Each refusal comes after its try statement, so no exception chains to it.
+    failure: str | None = None
+    try:
+        loaded = load_world(world_dir / "world.yaml")
+        events = list(read_events(world_dir / "events.jsonl", loaded.workspace_url))
+        posts = plan_seed(loaded, events, until_day)
+    except OSError as error:
+        failure = f"{error.filename}: {error.strerror or error}"
+    except (yaml.YAMLError, ValueError) as error:  # ValueError: validation, format, B7, day
+        failure = str(error)
+    if failure is not None:
+        _refuse(failure)
+    token = _env_value("SLACK_BOT_TOKEN")
+    if token is None:
+        _refuse(_not_set("SLACK_BOT_TOKEN"))
+    if not token.startswith(_BOT_TOKEN_PREFIX):
+        _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
+    client = _seed_client(token)
+    try:
+        report = seed_corpus(
+            loaded, posts, client, map_path, pace=pace, sleep=sleep, dry_run=dry_run
+        )
+    except SeedBlocked as error:  # a check before the first write; the message names it
+        failure = str(error)
+    # The message of any other error can hold the token, so the refusal shows
+    # _slack_failure only.
+    except Exception as error:
+        failure = f"{_slack_failure(error)}; the map keeps what is done; run the command again"
+    if failure is not None:
+        _refuse(failure)
+    if dry_run:
+        if not report.complete:
+            raise typer.Exit(code=1)
+        return
+    typer.echo(
+        f"seeded {report.posts} posts and {report.files} files in {report.channels} channels; "
+        f"{report.reactions_not_seeded} reactions not seeded; map {report.map_path}"
+    )
+
+
+def _seed_client(token: str) -> SlackSeedClient:
+    """The seeder's Slack client: a `SlackWebSeedClient` over a `WebClient` with no retry
+    handler, so the seeder owns retries (plan B11). Tests patch this factory."""
+    # slack-sdk is in the optional `slack` extra. A top-level import would stop every
+    # command when the extra is not installed.
+    # The refusal comes after the try statement, so no exception chains to it.
+    try:
+        from slack_sdk import WebClient
+    except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
+        _refuse("digest seed needs the slack extra; run uv sync --extra slack")
+    return SlackWebSeedClient(WebClient(token=token, retry_handlers=[]))
 
 
 @app.command()
