@@ -429,7 +429,9 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    see the closing evidence.
    Quoted and model-written text is rendered as plain text; only constructed permalinks
    are links. Every digest carries its coverage line once built (M4 stretch), and a delivery day
-   with nothing to say sends one line that says so. Rationale on demand.
+   with nothing to say sends one line that says so. Rationale on demand. Under the
+   header, the digest names its window (step 9) and the project phase with the next gate
+   and how many working days away it is (step 4); the gate date is the configured one.
 8. Feedback: button, web or CLI feedback updates the profile, records exposure, and is
    logged with run_id, item_id and the profile version in force (a counter that every
    profile edit increments). Feedback is an event

@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from digest.daily.render import SECTION_TITLES, window_line
+from digest.daily.render import SECTION_TITLES, context_lines
 from digest.daily.select import Line, Selection
 from digest.project import ChecklistTask
 from digest.world.schema import World
@@ -21,7 +21,7 @@ _PARTIAL_TOKEN = re.compile(r"<[^>]*$|&[a-z]*$")
 
 
 def slack_message(world: World, selection: Selection) -> dict[str, Any]:
-    """The digest as Slack `text` and Block Kit `blocks`: a header, the window line, the sections, the footers.
+    """The digest as Slack `text` and Block Kit `blocks`: a header, the window and phase lines, the sections, the footers.
 
     The message holds at most 50 blocks. Lines past the limit are left out, and the last
     block says how many.
@@ -42,7 +42,7 @@ def slack_message(world: World, selection: Selection) -> dict[str, Any]:
     if selection.hidden > 0:
         noun = "item" if selection.hidden == 1 else "items"
         footer.append(_section(f"{selection.hidden} {noun} hidden by the visibility filter."))
-    # The header and the window line are fixed blocks; one more is kept for the left-out count.
+    # The header and the window block are fixed blocks; one more is kept for the left-out count.
     if 2 + len(body) + len(footer) > MAX_BLOCKS:
         kept = body[: MAX_BLOCKS - 3 - len(footer)]
         if not kept[-1][1]:  # a section title with no line under it
@@ -55,10 +55,10 @@ def slack_message(world: World, selection: Selection) -> dict[str, Any]:
     if len(header) > MAX_HEADER_TEXT:
         header = header[: MAX_HEADER_TEXT - 1] + ELLIPSIS
     header_block = {"type": "header", "text": {"type": "plain_text", "text": header}}
-    window = window_line(selection)
+    context = "\n".join(_escape(line) for line in context_lines(world, selection))
     return {
-        "text": f"{_escape(header)}\n{_escape(window)}",
-        "blocks": [header_block, _section(_escape(window)), *(block for block, _ in body), *footer],
+        "text": f"{_escape(header)}\n{context}",
+        "blocks": [header_block, _section(context), *(block for block, _ in body), *footer],
     }
 
 

@@ -29,6 +29,7 @@ Part of the mechanical engineer's digest (summaries and sources trimmed):
 ```text
 Daily digest for Nadia Brenner (ME) - 2026-10-19
 Since your digest of 2026-10-16
+Phase: EVT since 2026-08-03. Next gate: G-TR1 Top-cover tooling and texture release (PN-51010), in 1 working day.
 
 Risks
 - PN-11020 chassis base built to stale Rev B drawing pack (PN-11020, V-SUNRISE, DOC-11020-CM, chassis) [must see]
@@ -119,8 +120,9 @@ stricter matching on golden threads only, so it does not establish whether keyin
 precision meets 0.8. The cut is a conservative scope decision under that uncertainty.
 
 A digest covers what is new since the reader's previous digest, plus must-see items and
-open blockers of any age; the header names the window. An absence goes only to the
-readers it names: an unanswered ask to the asker and the person asked. Delivery is not
+open blockers of any age; the header names the window and the project phase with the
+next gate. An absence goes only to the readers it names: an unanswered ask to the asker
+and the person asked. Delivery is not
 recorded yet, so the caller states the previous digest (the demo uses the previous world
 day).
 
