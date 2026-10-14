@@ -34,9 +34,14 @@ unchanged:
   `LLMOutputError("openrouter reply is not JSON", raw=response.text)`. `run_extract` counts
   either as a failed thread (it catches `LLMOutputError`), and the wrapper does not retry
   it (it retries only `LLMOutputInvalid`).
+  The `LLMOutputError` docstring ("The backend answered") changes to cover a backend that
+  did not answer. Effect on the CLI: `digest extract` prints the failed count and exits 0,
+  as it does today for an HTTP status error, and the thread stays pending for the next
+  run; `digest demo` refuses a partial extraction. Today both crash with a traceback.
 - F2. The room's refusal for a failed live call names the network as a cause: "the live
   model call failed (a network failure, an auth or rate-limit refusal, another HTTP error,
-  or output that did not validate)".
+  or output that did not validate)". The comments in `Room` that list the failure set
+  change with it.
 - F3. `Room.reset` builds the recorded state first and changes `_store`, `_changed` and
   `_state` only after the build succeeds; a failed reset keeps every message change, so a
   later save still holds them.
@@ -68,7 +73,8 @@ message change with a `ValueError` whose text holds the F2 cause "a network fail
 keeps its state and leaves no new store file in the room's folder.
 B11.4 A room with a curated message change applied, whose next build raises
 `RuntimeError`: `reset` raises, the room's state and message changes are unchanged, and
-a following `save` writes a corpus that holds the curated change.
+a following `save` writes a corpus that holds the curated change (`save` does not
+rebuild; the patched `_build` raises once only).
 B11.5 `POST /edit` and `POST /reset` with a fake room that raises
 `RuntimeError("ROOM-SENTINEL C:/secret")` answer 500 with the page and the exact F4
 refusal; neither the page nor any log record field other than the traceback holds
@@ -92,5 +98,6 @@ for the log event. No network, no key.
   and 5xx on the gateway during record runs").
 - `POST /save`: it already refuses `OSError` and `ValueError`, which is what a save raises.
 - A malformed proxy setting that makes the gateway client's constructor raise: not
-  reproduced in a demo setup.
+  reproduced in a demo setup. Known limit: such a `ValueError` message reaches the page
+  as every `ValueError` refusal does.
 - The extraction merge that keeps an edited message's old claims (unit 10, M8).
