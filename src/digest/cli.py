@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import io
 import json
 import logging
 import os
@@ -10,13 +12,13 @@ import sqlite3
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Set
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
 from statistics import median
 from time import sleep
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 from zoneinfo import ZoneInfo
 
 import typer
@@ -530,13 +532,24 @@ def run(
 @app.command()
 def serve(
     port: int = typer.Option(8000, help="Port on 127.0.0.1."),
+    record: bool = typer.Option(
+        False,
+        "--record",
+        help="Allow model calls for a message change with no cassette, and record them.",
+    ),
+    slack: bool = typer.Option(
+        False, "--slack", help="Show the Seed panel; a reseed reads SLACK_BOT_TOKEN."
+    ),
 ) -> None:
-    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world (offline).
+    """Serve the demo room on 127.0.0.1 for day 6 of the bundled Kestrel world.
 
     The command builds the day-6 store as `digest demo` does, in a temporary directory
     that lasts until the server stops. It closes its own connection to the store before
-    the server starts; the room opens the store for each rebuild. The command never
-    constructs the settings object, so it reads no API key and no `.env` file.
+    the server starts; the room opens the store for each rebuild. Without `--record` the
+    room is offline and reads no API key. With `--record`, the room constructs the
+    settings object only when a message change has no cassette. With `--slack`, the
+    command reads SLACK_BOT_TOKEN as `digest seed` does, and the page can reseed the
+    workspace from the saved corpus copy.
     """
     # The web extra is optional. A top-level import would break `digest demo` on a plain
     # `uv sync`, as `post` avoids for slack-sdk. digest.room is imported here beside the
@@ -553,19 +566,80 @@ def serve(
         installed = True
     if not installed:
         _refuse("digest serve needs the web extra; run uv sync --extra web")
+    reseed: _RoomReseed | None = None
+    if slack:
+        token = _env_value("SLACK_BOT_TOKEN")
+        if token is None:
+            _refuse(_not_set("SLACK_BOT_TOKEN"))
+        if not token.startswith(_BOT_TOKEN_PREFIX):
+            _refuse(f"SLACK_BOT_TOKEN must start with {_BOT_TOKEN_PREFIX}")
+        reseed = _RoomReseed(_seed_client(token), Path("data") / "world" / _DEMO_WORLD)
     failure: str | None = None
     # build_base reads world day 6; the store must end on that day.
     with _demo_store(6) as (loaded, priors, store):
         try:
             base = build_base(store, loaded, priors)
             store.close()
-            room = Room(base)
+            room = Room(base, record=record)
         except (ValueError, OSError) as error:  # a refused store
             failure = str(error)
         if failure is not None:
             _refuse(failure)
         typer.echo(f"serving the demo room at http://127.0.0.1:{port}/")
-        uvicorn.Server(server_config(create_app(room), port)).run()
+        uvicorn.Server(server_config(create_app(room, reseed=reseed), port)).run()
+
+
+class _RoomReseed:
+    """The room's reseed (plan m3-room-edits S2): the seeder over a saved corpus copy.
+
+    It plans the copy's posts and the committed posts as the reference, and calls the
+    seeder with them. It returns the seeder's lines and a summary line as text.
+    """
+
+    def __init__(self, client: SlackSeedClient, world_dir: Path) -> None:
+        self._client = client
+        self._world_dir = world_dir
+
+    def __call__(self, copy_dir: Path, *, dry_run: bool) -> str:
+        """Run the seeder; ValueError with a plain reason for a refusal."""
+        if "reference" not in inspect.signature(seed_corpus).parameters:
+            raise ValueError(
+                "the seeder cannot update messages yet: digest.seed.seed takes no reference"
+            )
+        world = load_world(self._world_dir / "world.yaml")
+        # The copy holds edited events out of event_ts order, so read_events would refuse it.
+        copy = [
+            Event.model_validate_json(line)
+            for line in (copy_dir / "events.jsonl").read_bytes().splitlines()
+            if line.strip()
+        ]
+        committed = list(read_events(self._world_dir / "events.jsonl", world.workspace_url))
+        # The seeder adds `reference` in a later change; the dict keeps this call valid until then.
+        options: dict[str, Any] = {
+            "reference": plan_seed(world, committed, None),
+            "pace": 1.2,
+            "sleep": sleep,
+            "dry_run": dry_run,
+        }
+        lines = io.StringIO()
+        try:
+            with redirect_stdout(lines):
+                report = seed_corpus(
+                    world, plan_seed(world, copy, None), self._client, None, **options
+                )
+        except ValueError:  # SeedBlocked and plan refusals; the message holds no token
+            raise
+        # The message of any other error can hold the token, so the refusal shows
+        # _slack_failure only.
+        except Exception as error:
+            raise ValueError(_slack_failure(error)) from None
+        summary = (
+            f"dry run: complete {report.complete}"
+            if dry_run
+            else f"seeded {report.posts} posts and {report.files} files in {report.channels} "
+            f"channels; map {report.map_path}"
+        )
+        return f"{lines.getvalue()}{summary}"
 
 
 @app.command("eval")

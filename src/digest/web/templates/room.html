@@ -146,6 +146,32 @@
        border-bottom: 1px solid var(--line); padding: 6px 8px; }
   td { padding: 6px 8px; border-bottom: 1px solid #F3ECE6; vertical-align: top; }
 
+  /* Messages and seed */
+  textarea, input[type="text"] {
+    font: inherit; font-size: 13px; color: var(--ink); background: #fff; width: 100%;
+    border: 1px solid #D9CCC2; border-radius: 8px; padding: 6px 8px;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .result { white-space: pre-line; }
+  .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .actions form { margin: 0; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 12px; max-width: 64rem; }
+  .channel { background: #fff; border-radius: 12px; box-shadow: var(--shadow); padding: 12px 18px; margin: 0 0 10px; }
+  .channel > summary { cursor: pointer; font-weight: 600; font-size: 13px; letter-spacing: 0.04em; }
+  .messages > li { padding: 8px 10px; border-radius: 8px; margin-top: 8px; background: #FDFAF7; }
+  .messages > li.reply { margin-left: 24px; }
+  .messages > li.posted { border-left: 3px solid var(--green); }
+  .msg-head { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .msg-head .who { font-weight: 600; color: var(--ink); }
+  .msg-text { margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
+  .files { font-size: 12px; color: var(--faint); margin-top: 3px; word-break: break-all; }
+  .msg-edit { margin-top: 6px; font-size: 12px; }
+  .msg-edit > summary { cursor: pointer; color: var(--accent-dark); font-weight: 600; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .msg-edit .edit { box-shadow: none; border: 1px solid var(--line); margin-top: 6px; max-width: 40rem; }
+  .post { max-width: 40rem; margin-bottom: 12px; }
+  .curated li { margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .curated form { margin: 0; }
+
   @media (max-width: 900px) {
     body { padding: 20px 16px 40px; }
     .grid3, .pair { grid-template-columns: minmax(0, 1fr); }
@@ -233,6 +259,7 @@
 </div>
 {% if refusal is not none %}<p class="refusal">{{ refusal }}</p>{% endif %}
 {% if no_change %}<p class="notice">This edit changed no digest.</p>{% endif %}
+{% if notice is not none %}<p class="notice result">{{ notice }}</p>{% endif %}
 <div class="made">
   <h3 class="label">Edits made</h3>
 {% if edits %}
@@ -327,6 +354,75 @@
 {% endfor %}
 </div>
 </section>
+
+<section class="panel">
+<h2>Messages</h2>
+<p class="hint">A message change runs extraction again for day {{ day }} on a copy of the store. It replays from the recorded cassettes; a change with no cassette is refused unless digest serve runs with --record. Message changes since the last reset: {{ message_changes }}.</p>
+<div class="actions">
+  <span class="label">Scenarios</span>
+{% for name in scenarios %}  <form method="post" action="/edit"><input type="hidden" name="kind" value="run_scenario"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="outline">Run {{ name }}</button></form>
+{% endfor %}  <form method="post" action="/save"><button type="submit">Save the corpus copy</button></form>
+</div>
+<p class="hint">A scenario drops the message changes before it and posts its script line at the script's own time.</p>
+{% if curated %}
+<h3 class="label">Curated edits</h3>
+<ul class="curated">
+{% for entry in curated %}  <li><form method="post" action="/edit">{% for name, value in entry.fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}<button type="submit" class="outline">{{ entry.name }}</button></form><span>{{ entry.description }}</span></li>
+{% endfor %}</ul>
+{% endif %}
+<details class="channel"><summary>Post a new message</summary>
+<form method="post" action="/edit" class="card edit post">
+  <input type="hidden" name="kind" value="post_message">
+  <div class="fields">
+    <label>Person <select name="user_id">{% for p in humans %}<option value="{{ p.user_id }}">{{ p.name }}</option>{% endfor %}</select></label>
+    <label>Channel <select name="channel_id">{% for c in world.channels %}<option value="{{ c.id }}">#{{ c.name }}</option>{% endfor %}</select></label>
+    <label>Reply to <select name="thread_ts"><option value="">no thread: a new top-level message</option>{% for m in roots %}<option value="{{ m.ts }}">#{{ m.channel_name }} {{ m.author }}: {{ m.text|truncate(60) }}</option>{% endfor %}</select></label>
+    <label>Text <textarea name="text" rows="3" required></textarea></label>
+  </div>
+  <button type="submit">Post</button>
+</form>
+</details>
+<p class="hint">File names reach extraction like text. In Slack a file edit shows only on a fresh seed: a reseed does not upload files again.</p>
+{% for channel, rows in messages %}
+<details class="channel"><summary>#{{ channel }} ({{ rows|length }})</summary>
+<ul class="messages">
+{% for m in rows %}
+  <li class="{% if m.ts != m.thread_ts %}reply{% endif %}{% if m.posted %} posted{% endif %}">
+    <div class="msg-head"><span class="who">{{ m.author }}</span><span>{{ m.ts }}</span>{% if m.edited %}<span class="pill role">edited</span>{% endif %}{% if m.posted %}<span class="pill role">posted by the room</span>{% endif %}</div>
+    <p class="msg-text">{{ m.text }}</p>
+    {% if m.files %}<p class="files">files: {{ m.files|join(", ") }}</p>{% endif %}
+    {% if not m.posted %}
+    <details class="msg-edit"><summary>edit</summary>
+    <form method="post" action="/edit" class="card edit">
+      <input type="hidden" name="kind" value="edit_message">
+      <input type="hidden" name="channel_id" value="{{ m.channel_id }}">
+      <input type="hidden" name="ts" value="{{ m.ts }}">
+      <div class="fields">
+        <label>Text <textarea name="text" rows="3" required>{{ m.text }}</textarea></label>
+        <label>File names, one per line <textarea name="files" rows="2">{{ m.files|join("\n") }}</textarea></label>
+      </div>
+      <p class="hint">An edited message keeps what was extracted from its earlier text; post a new message to change a value.</p>
+      <button type="submit">Edit message</button>
+    </form>
+    </details>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+</details>
+{% endfor %}
+</section>
+{% if seed %}
+
+<section class="panel">
+<h2>Seed</h2>
+<p class="hint">A reseed sends the saved corpus copy to the Slack workspace. It updates changed messages and posts new ones. It never deletes a message; it reports a message that the copy does not hold. Save the message changes first.</p>
+<div class="actions">
+  <form method="post" action="/reseed?dry_run=true"><button type="submit" class="outline">Dry run</button></form>
+  <form method="post" action="/reseed?dry_run=false"><button type="submit">Reseed Slack</button></form>
+</div>
+</section>
+{% endif %}
 
 <section class="panel world">
 <h2>World</h2>
