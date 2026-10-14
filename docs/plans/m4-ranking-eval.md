@@ -1,6 +1,6 @@
 # Plan: M4 unit 14, the ranking metrics and the ablation table
 
-Status: v0.3, 2026-10-14, 06:30 PT (R10 and R11: admission apart from order, after the
+Status: v0.3.1, 2026-10-14, 06:45 PT (R3, R6a and R8a from an independent review) (R10 and R11: admission apart from order, after the
 ranking owner's confound check). Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Stacked on the ablation switch (branch
 `ablation-switch`, PR #80), which adds `daily.terms_off` and `ablation.min_effect`.
@@ -41,8 +41,12 @@ digest for d with `select_digest(store, world, priors_C, P, d, previous_digest=d
     role, so the EM's extra absence lines score 0. The report shows this; it is a
     disagreement between the labels and the must-see rule, not an eval error.
   Must-see facts are the facts of grade 2.
-- R3. A digest line delivers a golden item when the line's item is the item that the
-  extraction eval's pairing (`_pairs`, on the items as of d) gives that event. It delivers
+- R3. A digest line delivers a golden item G when the line's item is in G's thread and
+  qualifies for G by the extraction eval's rule (`_qualifies`: it carries G's claims and
+  owner), on the items as of d. An item that qualifies for several golden items delivers
+  the first of them, in golden order, that no earlier line delivered. This does not use
+  `_pairs`, whose one-to-one choice depends on store order: a duplicate item would score
+  0 in a configuration that selected it in place of the paired one. It delivers
   a golden absence when the line is an absence item with the key `_absence_key` gives
   (day, source, task or ask event). A line delivers at most one fact, and each fact
   counts once (its first line). A line's grade is the grade of the fact it delivers when
@@ -59,7 +63,9 @@ digest for d with `select_digest(store, world, priors_C, P, d, previous_digest=d
 - R6a. The lanes. For each configuration the report also gives the ranked-lane metrics:
   recall and nDCG computed as R5 and R6 over the ranked lines only (must-see lane lines
   removed, top 5 of what is left), against P's set without the facts that C0's must-see
-  lane delivers on (P, d). The switch never touches the must-see lane (ablation-switch
+  lane delivers on (P, d). Before the cut at five, the ranked-lane list also drops the
+  lines that deliver one of those removed facts (send-everything has no must-see lane, so
+  such lines would take slots at grade 0). The switch never touches the must-see lane (ablation-switch
   AB9). Sections come in order with must-see lines first in each, so on a day where
   must-see lines take the first five places the overall top 5 is the same in every
   configuration, and only the ranked lane can show a term's effect there. Per persona, the
@@ -96,6 +102,11 @@ Configurations:
   is keep when any metric votes keep, remove when at least one metric votes and none votes
   keep, and "no vote" when no metric votes.
 
+- R8a. The verdict is descriptive: `min_effect` is an effect size, not a test of
+  uncertainty, and few persona-days carry each effect. For each term and metric the
+  ablation row also gives `moved`, the number of persona-days whose value with the term
+  off differs from C0's, and the section prints it beside each drop.
+
 ## Interface
 
 ```python
@@ -129,6 +140,7 @@ class ConfigScores(Frozen):
 class AblationRow(Frozen):
     term: str
     drops: dict[str, float | None]   # metric name -> relative drop; None: no vote
+    moved: dict[str, int]            # metric name -> persona-days whose value differs from C0
     verdict: Literal["keep", "remove", "no vote"]
 
 class RankingReport(Frozen):
@@ -199,6 +211,13 @@ facts in P's set. Both helpers and `verdict` are pure, so their tests need no st
 - B14.9 R11: the below-threshold counts equal the test's own count of grade-2 ranked
   lines of C0 at `min_score` 0 with a score under the configured value, by type and
   severity.
+- B14.10 R3: on days 7 to 9, the two items that qualify for S13-BRACKET each deliver it
+  in a configuration that selects only one of them; a configuration that selects both
+  credits it once.
+- B14.11 R6a: for send-everything, a line whose fact C0's must-see lane delivered is not
+  in the ranked-lane top 5 (U0SC01 on day 4 is a named case).
+- B14.12 R8a: `moved` equals the test's own count of differing persona-days per term and
+  metric, and the section prints it.
 - B14.7 `digest eval` writes the Ranking section with seven configuration rows, four
   ablation rows and one row per human persona; the run is offline (cassettes); the
   committed report matches.
