@@ -1,6 +1,6 @@
 # Plan: M4 unit 12a, the query function layer (D20)
 
-Status: v0.2, 2026-10-14, 00:40 PT. Process stage 1 (`docs/process.md`), the full process
+Status: v0.2.1, 2026-10-14, 00:55 PT. Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Builds on `main`. Unit 12b (the MCP server) and
 unit 13 (the web preview's open-items page) are thin adapters over this layer.
 
@@ -74,7 +74,7 @@ items of `detect_absences` for the day; absences are computed, never stored.
 - Q3 `get_entity_history`: for an entity id or alias, `EntityView`: the id, type,
   description, owner role, the people who own it (each human persona whose
   `profile_for(...).owned_entities` holds it), then every claim on it across the items,
-  ordered by message ts then `item_id`. Each claim has its item id, attribute, param,
+  ordered by message ts then `item_id`. Each claim has its item id, attribute,
   value, authority, and the author's name from the cited message (`None` when the message
   is not stored). The ledger is not built (SPEC section 9, M3 proper), so the claims are
   as stated, with no supersession; `note` says so. `None` for an unknown entity.
@@ -126,8 +126,8 @@ digest.driver`, so it can use `digest.driver`'s line views. It never imports
 On the day-6 store fixture of the room tests, with expectations read from the committed
 golden labels and the recorded store:
 
-- B12.0 `open_context` refuses a store replayed past the day's end and one with extract
-  deltas pending, with `select_digest`'s messages; `"auto"` on day 6 gives day 5.
+- B12.0 `open_context` refuses a store without `meta.until` and one with extract deltas
+  pending, with `select_digest`'s messages; `"auto"` on day 6 gives day 5.
 - B12.1 to B12.10, one or more per rule above. Examples: `list_open_blockers` holds the
   PN-11020 stale drawing pack blocker; `why_ranked` for `U0ME01` and that blocker gives
   the must-see lane and its rule; `get_item` returns an absence id from `list_absences`;
