@@ -66,8 +66,37 @@ through Python instead: `uv run python -m digest demo`.
   `SLACK_WEBHOOK_URL=https://hooks.slack.com/...` in `.env`.
 
 Add `--day N` for another world day. The command prints no token or URL, and it stops at
-the first message Slack refuses. The source links in the messages point to the synthetic
-workspace `kestrel-k2.slack.com`, which does not exist.
+the first message Slack refuses. Without a seed map, the source links point to the
+synthetic workspace `kestrel-k2.slack.com`, which does not exist.
+
+To make the links open real messages, seed the corpus into the same workspace first:
+
+- `uv run digest seed --world kestrel` posts the 132 corpus messages into channels named
+  as in `data/world/kestrel/world.yaml`, under persona names, with their threads and
+  placeholder files. The channels must exist, with `kestrel-leads` private and the bot
+  invited to it. The run writes a seed map, `.slack-seed/<team id>-kestrel.json`, and a
+  second run posts nothing that the map already holds.
+- `uv run digest post --dm <member id> --seed-map .slack-seed/<team id>-kestrel.json`
+  then links each source to its seeded message, names the channels as Slack channel
+  links, and links the files.
+- `uv run digest seed --world kestrel --events <edited copy> --reference <corpus Slack
+  holds now>` updates the seeded messages whose text changed, in place, and deletes
+  nothing.
+
+Seeding needs the bot scopes `chat:write.customize`, `channels:join`, `groups:read` and
+`files:write` besides the ones above. The plans are `docs/plans/m5-seed.md`,
+`docs/plans/m5-links.md` and `docs/plans/m5-reseed.md`.
+
+## Change who reads what
+
+`uv run python -m digest serve` opens a page on 127.0.0.1:8000 (about 10 s to build the
+day-6 store from the cassettes). It shows the three digests side by side; the presenter
+changes a reader's role, a channel's membership or private flag, an entity's owner role,
+a gate date or a task's owner role, and the page shows each reader's new digest and what
+changed, with the reason for each line. Reset returns to the recorded world. An edit
+changes who reads what and what counts as late; it does not change what the model
+extracted, and it does not show what a reader was last told. It needs the `web` extra
+(`uv sync --all-extras`).
 
 ## What a reader sees, and why
 
@@ -130,7 +159,8 @@ recorded yet, so the caller states the previous digest (the demo uses the previo
 day).
 
 Designed, not built: the claims ledger and linking, stale beliefs, delivery records,
-phase re-weighting, feedback, live Slack delivery, the web preview and the MCP server. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
+phase re-weighting, feedback, live ingest from Slack, the web preview's profile and
+open-items pages, and the MCP server. See `docs/plans/m3-demo.md` for the slice and its known gaps, and `docs/later.md`
 for the ordered next steps and other deferred work.
 
 ## Develop
