@@ -129,8 +129,8 @@ authorization.
 
 In this repo (built): pipeline calls go through one wrapper, `src/digest/llm/client.py`,
 with schema-enforced output and no tools, and an import contract keeps the SDK inside
-`digest.llm`. Designed, not built: a stdio MCP server with nine read tools and one
-feedback tool (D20).
+`digest.llm`. Also built: a stdio MCP server with nine read tools over the store
+(`digest mcp`, `docs/mcp.md`). Designed, not built: its tenth tool, `feedback` (D20).
 
 ## System design: how would you handle Slack API failures?
 

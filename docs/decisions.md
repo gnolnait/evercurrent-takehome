@@ -386,7 +386,7 @@ schema published as a resource, is the escape hatch for questions the fixed tool
 not cover. The tool list holds at most ten entries. The pipeline's model calls use direct
 structured-output requests and never MCP.
 Enforced by import-linter (`uv run lint-imports` in CI): a layers contract in `pyproject.toml` (cli;
-eval and driver as siblings; daily; corpus; replay, extract, absence and seed as siblings; store, llm and world as
+web and mcp_server as siblings; room; queries; eval and driver as siblings; daily; corpus; replay, extract, absence and seed as siblings; store, llm and world as
 siblings; project and priors; models and settings) and a forbidden
 contract keeping `anthropic` and `httpx2` inside `digest.llm`.
 
@@ -400,10 +400,16 @@ concrete answer to the take-home's question on function calling versus MCP.
 Would change it. A hosted deployment: the MCP server gains an HTTP transport with
 per-user tokens (docs/later.md).
 
-Amended 2026-10-11: the server targets protocol revision 2026-07-28 (stateless requests,
-no handshake, stdio still a standard transport) through the Python SDK 2.x. The design
-uses none of the features that revision deprecates (roots, sampling, logging) and no
-server-initiated request, so no migration path is needed.
+Amended 2026-10-11, revised 2026-10-14: the server uses the Python SDK 1.30.0, which
+speaks protocol revision 2025-11-25. SDK 2.x (protocol revision 2026-07-28) does not
+import on the Windows ARM64 laptop: `mcp.server` imports `cryptography`, which has no
+win_arm64 wheel and does not build from source. SDK 1.30.0 needs `cryptography` only
+through the `crypto` extra of `pyjwt`. The `[tool.uv] override-dependencies` entry
+`pyjwt>=2.10` removes that extra. The server uses no feature that needs it (no OAuth, no
+HTTP transport). Move to SDK 2.x when `cryptography` ships a win_arm64 wheel. The tool
+code does not change between the two SDKs for the features used here (tools, one
+resource, stdio). The design uses none of the features that revision 2026-07-28
+deprecates (roots, sampling, logging) and no server-initiated request.
 
 Amended 2026-10-12 (SPEC v0.4.3): the four write actions are one `feedback` tool with an
 action field, so nine read tools and one write tool fit the cap of ten. The v1 server is
