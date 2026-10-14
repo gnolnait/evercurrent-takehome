@@ -254,7 +254,6 @@ async def test_stdio_lists_tools_and_calls_blockers(
     assert test_room.STALE_PACK in {
         view["item"]["item_id"] for view in result.structuredContent["result"]
     }
-    # Import after initialization so the subprocess reaches the CLI stub first.
 
     with Store.open_readonly(path) as store:
         ctx = queries.open_context(store, world, priors)
