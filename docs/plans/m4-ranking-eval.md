@@ -1,6 +1,7 @@
 # Plan: M4 unit 14, the ranking metrics and the ablation table
 
-Status: v0.2.2, 2026-10-14, 05:00 PT (test review: the report interface and format). Process stage 1 (`docs/process.md`), the full process
+Status: v0.3, 2026-10-14, 06:30 PT (R10 and R11: admission apart from order, after the
+ranking owner's confound check). Process stage 1 (`docs/process.md`), the full process
 the user set for the overnight units. Stacked on the ablation switch (branch
 `ablation-switch`, PR #80), which adds `daily.terms_off` and `ablation.min_effect`.
 
@@ -159,6 +160,23 @@ facts in P's set. Both helpers and `verdict` are pure, so their tests need no st
   reads exactly "Keep rule: a term stays when a metric drops by at least <min_effect>
   of its value with the term on." with `min_effect` printed as given in the priors.
 
+- R10. Admission and order apart. Every factor is at most 1, so switching one off raises
+  scores, and with `daily.min_score` fixed more items pass the threshold: the configured
+  rows mix admission with order. In the same day-by-day pass, the eval also selects every
+  configuration with `daily.min_score` 0 (caps unchanged). `RankingReport` gains
+  `min_score` (the configured value), `zero_threshold` (the seven `ConfigScores` at
+  `min_score` 0) and `zero_ablation` (the four `AblationRow` from them). The section
+  shows the configured tables, then the same two tables under the heading "With
+  min_score 0 (admission fixed)", after the line "The configured rows mix admission with
+  order; these rows fix admission and show order only."
+- R11. Must-see facts below the threshold. From C0 at `min_score` 0: each ranked-lane line
+  of grade 2 whose score is below the configured `min_score` counts once per (P, d),
+  grouped by the item's `type` and `severity`. `RankingReport` gains `below_threshold:
+  tuple[BelowThreshold, ...]` (`type`, `severity`, `count`, sorted by count descending,
+  then type, then severity) and `must_see_facts` (the total of must-see facts in the
+  readers' sets over all persona-days). The section shows them as a table "Must-see facts
+  below min_score <value>" with the total beside it.
+
 ## Behaviours
 
 - B14.1 `ndcg_at_5`: ideal order gives 1.0; the best fact at rank 2 instead of 1 gives
@@ -175,6 +193,12 @@ facts in P's set. Both helpers and `verdict` are pure, so their tests need no st
 - B14.6 A fact on a channel the reader cannot see is not in the reader's set; an open
   blocker from before the window has grade 0 on a later day; a fact delivered twice
   scores once.
+- B14.8 R10: each `zero_threshold` selection reaches `select_digest` with `min_score` 0
+  and the configuration's `terms_off`; the zero-threshold ablation follows the R8 rule
+  from those configs; the section shows both table pairs and the note line.
+- B14.9 R11: the below-threshold counts equal the test's own count of grade-2 ranked
+  lines of C0 at `min_score` 0 with a score under the configured value, by type and
+  severity.
 - B14.7 `digest eval` writes the Ranking section with seven configuration rows, four
   ablation rows and one row per human persona; the run is offline (cassettes); the
   committed report matches.
