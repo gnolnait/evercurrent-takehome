@@ -516,7 +516,7 @@ and the golden labels carry the eval alone.
 ## D26. Target domain model: three contexts, absences out of Item
 
 Status: designed, 2026-10-13. Built parts: stable item ids (PR #49) and the digest window
-(branch `digest-window`, not merged). Nothing below is built unless it says so.
+(PR #58). Nothing below is built unless it says so.
 
 Decision.
 - Three domain contexts inside the one process, as the packages that exist today; no
@@ -568,6 +568,53 @@ Order. The Structure section of `docs/later.md`.
 
 Would change it. A second process or team that owns one context: its boundary then becomes
 an API.
+
+## D27. Interaction model: inform, ask by button, draft writes, earn authority
+
+Status: designed, 2026-10-13. Built: the digest posts cited lines. Nothing else below is
+built, including the per-line actions and their feedback events.
+
+Decision.
+- The digest is a briefing that a reader finishes in one scan. It is the morning
+  surface and the record of what each reader was told. Conversation is follow-up in the
+  digest's thread, never the morning surface.
+- Inform: every line is a cited claim with an owner where one is known. Its actions are
+  feedback events in the store (SPEC section 5 step 8).
+- Ask: at most one open question per user, answerable with a button, only about the
+  system's own uncertainty (did this happen, is this yours). Never a free-text prompt,
+  and never "what do you want to see?".
+- Act: an action on project work (a reply in a project thread, a nudge, a ticket edit)
+  is a draft that the user edits and sends. The system never takes such an action on its
+  own. Digests, real-time alerts and onboarding messages are the product's own messages,
+  not drafts.
+- Earn authority: a line type gets a draft action only when its false rate on labelled
+  lines passes a gate. For absence lines:
+  - Unit: one absence episode per reader (SPEC section 5 step 8), counted once however
+    many days it shows.
+  - Labels: a reviewer labels a sample of shown episodes real or false against the
+    covered sources. An `it happened` click adds its episode to the sample as a candidate
+    false label, which the reviewer confirms. Unlabelled episodes do not count.
+  - Gate: shown-absence false rate (false episodes over labelled episodes) of at most 10%
+    on at least 50 labelled episodes. Both numbers are a design choice, not a
+    measurement. This is not the A6 rate (SPEC section 7), which counts false alarms over
+    the simulator's non-stall silences.
+  - Today: 7 of 23 detected absences on the simulator's golden set are false. That is a
+    different set and metric, but it says absence lines get `it happened`, not a draft.
+  Every other line type needs its own labels and threshold before it gets a draft
+  action; none is defined yet.
+- Order, each step a gate for the next: per-line actions with a seen record; `it happened`
+  labels; thread questions answered by the D20 read tools; drafted replies to ask
+  absences; drafted ticket edits. The steps are in `docs/later.md`.
+
+Why. Readers already get too much Slack, so a digest that asks every morning becomes one
+more inbox. Each button is both the reader's control and a label, and labels are what the
+precision gates need. Slack text is untrusted: extraction runs with no tools, and an agent
+that reads Slack and holds write tools can be steered by a message, so writes stay drafts.
+A draft built on a false absence sends a nudge to someone who already replied, and that
+costs more trust than a missed line.
+
+Would change it. Reader labels that put a line type well inside its gate for a month: that
+type may move from drafts to one-click send, still with a preview.
 
 ## Validation against EverCurrent's published experience
 
