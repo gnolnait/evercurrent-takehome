@@ -84,7 +84,7 @@ class FakeSlackSeedClient:
         scopes: frozenset[str] = ALL_SCOPES,
         failures: dict[tuple[str, int], Exception] | None = None,
         timeline: list[tuple[str, object]] | None = None,
-        team_id: str = "T-SEED",
+        team_id: str = "TSEED",
         before_call: Callable[[str, int], None] | None = None,
     ) -> None:
         self.auth = AuthInfo(team_id=team_id, url=WORKSPACE, scopes=scopes)
@@ -163,7 +163,7 @@ class FakeSlackSeedClient:
 def slack_channels(world: World) -> list[SlackChannel]:
     return [
         SlackChannel(
-            id=f"S-{channel.id}",
+            id=f"CS{channel.id}",
             name=channel.name,
             is_private=channel.private,
             is_member=True,
@@ -338,7 +338,7 @@ def test_b2_b3_b5_kestrel_posts_in_world_order_with_threads_personas_and_metadat
         None: ":robot_face:",
     }
     slack_roots: dict[str, str] = {}
-    slack_ids = {channel.id: f"S-{channel.id}" for channel in world.channels}
+    slack_ids = {channel.id: f"CS{channel.id}" for channel in world.channels}
     assert len(planned) == len(post_calls) == 132
     assert [item.key for item in planned] == [
         f"{source.channel_id}:{source.ts}" for _, source in ordered
@@ -463,10 +463,10 @@ def test_b6_files_follow_the_post_use_the_root_and_are_saved(tmp_path: Path, wor
     posted_ts = successful_calls(client, "post")[0]["result"]
     posted = successful_calls(client, "post")[0]
     uploads = successful_calls(client, "upload")
-    assert posted["channel_id"] == "S-C0ENGME"
+    assert posted["channel_id"] == "CSC0ENGME"
     assert posted["text"] == rewritten_text(source, world)
     assert "<@" not in posted["text"]
-    assert [call["channel_id"] for call in uploads] == ["S-C0ENGME", "S-C0ENGME"]
+    assert [call["channel_id"] for call in uploads] == ["CSC0ENGME", "CSC0ENGME"]
     assert [call["filename"] for call in uploads] == list(source.files)
     assert [call["thread_ts"] for call in uploads] == [posted_ts, posted_ts]
     assert [call["content"] for call in uploads] == [
@@ -586,7 +586,7 @@ def test_b9_resume_between_two_uploads_retries_only_the_missing_file(
         ("C0LEADS", None, "missing or not shared with the bot"),
         (
             "C0ENGME",
-            SlackChannel("S-WRONG", "eng-mech", is_private=True, is_member=True),
+            SlackChannel("CSWRONG", "eng-mech", is_private=True, is_member=True),
             "visibility mismatch",
         ),
     ],
@@ -625,7 +625,7 @@ def test_b1_channel_problem_stops_before_a_write_and_names_the_problem(
 def test_b1_public_channel_is_joined_before_its_first_post(tmp_path: Path, world: World) -> None:
     available = slack_channels(world)
     index = next(i for i, channel in enumerate(available) if channel.name == "eng-mech")
-    available[index] = SlackChannel("S-C0ENGME", "eng-mech", False, False)
+    available[index] = SlackChannel("CSC0ENGME", "eng-mech", False, False)
     client = FakeSlackSeedClient(world, channels=available)
 
     seed(
@@ -640,9 +640,9 @@ def test_b1_public_channel_is_joined_before_its_first_post(tmp_path: Path, world
 
     methods = [call["method"] for call in client.calls]
     assert methods.index("join") < methods.index("post")
-    assert calls(client, "join") == [{"method": "join", "channel_id": "S-C0ENGME"}]
+    assert calls(client, "join") == [{"method": "join", "channel_id": "CSC0ENGME"}]
     saved = SeedMap.model_validate_json((tmp_path / "seed.json").read_text(encoding="utf-8"))
-    assert saved.channels["C0ENGME"] == "S-C0ENGME"
+    assert saved.channels["C0ENGME"] == "CSC0ENGME"
 
 
 class PagingWebClient:
@@ -748,7 +748,7 @@ def test_b15_join_client_error_before_first_post_leaves_no_map(
     map_path = tmp_path / "seed.json"
     available = slack_channels(world)
     index = next(i for i, channel in enumerate(available) if channel.name == "eng-mech")
-    available[index] = SlackChannel("S-C0ENGME", "eng-mech", False, False)
+    available[index] = SlackChannel("CSC0ENGME", "eng-mech", False, False)
     client = FakeSlackSeedClient(
         world,
         channels=available,
@@ -793,12 +793,12 @@ def test_b11_exhausted_upload_retries_keep_the_acknowledged_post(
     assert saved.files == {}
 
 
-@pytest.mark.parametrize(("field", "wrong"), [("team_id", "T-OTHER"), ("world", "other")])
+@pytest.mark.parametrize(("field", "wrong"), [("team_id", "TOTHER"), ("world", "other")])
 def test_b10_map_identity_mismatch_stops_before_any_write(
     tmp_path: Path, world: World, field: str, wrong: str
 ) -> None:
     values = {
-        "team_id": "T-SEED",
+        "team_id": "TSEED",
         "workspace_url": WORKSPACE,
         "world": world.name,
     }
@@ -828,19 +828,19 @@ def test_a19_channel_id_drift_raises_seed_blocked_before_any_write(
     planned = post()
     if map_entry == "channels":
         saved = SeedMap(
-            team_id="T-SEED",
+            team_id="TSEED",
             workspace_url=WORKSPACE,
             world=world.name,
-            channels={planned.world_channel: "S-OLD"},
+            channels={planned.world_channel: "CSOLD"},
         )
     else:
         saved = SeedMap(
-            team_id="T-SEED",
+            team_id="TSEED",
             workspace_url=WORKSPACE,
             world=world.name,
             messages={
                 planned.key: MappedMessage(
-                    channel="S-OLD",
+                    channel="CSOLD",
                     ts="1700000000.000001",
                     thread_ts="1700000000.000001",
                 )
@@ -867,7 +867,7 @@ class FakeWebClient:
     def auth_test(self) -> SlackResponse:
         self.calls.append({"method": "auth_test"})
         return slack_response(
-            data={"ok": True, "team_id": "T-SEED", "url": WORKSPACE},
+            data={"ok": True, "team_id": "TSEED", "url": WORKSPACE},
             headers={"x-oauth-scopes": ",".join(sorted(ALL_SCOPES))},
         )
 
@@ -878,7 +878,7 @@ class FakeWebClient:
                 "ok": True,
                 "channels": [
                     {
-                        "id": "S-C0ENGME",
+                        "id": "CSC0ENGME",
                         "name": "eng-mech",
                         "is_private": False,
                         "is_member": True,
@@ -930,7 +930,7 @@ def test_b11_adapter_auth_test_reads_identity_and_scopes_from_slack_response() -
 
     auth = SlackWebSeedClient(web).auth_test()
 
-    assert auth == AuthInfo(team_id="T-SEED", url=WORKSPACE, scopes=ALL_SCOPES)
+    assert auth == AuthInfo(team_id="TSEED", url=WORKSPACE, scopes=ALL_SCOPES)
 
 
 def test_b11_adapter_turns_real_429_into_rate_limited() -> None:
@@ -1012,7 +1012,7 @@ def test_b11_request_error_from_upload_is_not_retried(tmp_path: Path, world: Wor
     saved = SeedMap.model_validate_json(map_path.read_text(encoding="utf-8"))
     assert list(saved.messages) == ["C0ENGME:1791819000.100000"]
     mapped = saved.messages["C0ENGME:1791819000.100000"]
-    assert mapped.channel == "S-C0ENGME"
+    assert mapped.channel == "CSC0ENGME"
     assert mapped.ts == "1700000000.000100"
     assert mapped.thread_ts == "1700000000.000100"
     assert saved.files == {}
@@ -1025,13 +1025,13 @@ def test_b2_reply_uses_a_root_from_the_saved_map(tmp_path: Path, world: World) -
     write_map(
         map_path,
         SeedMap(
-            team_id="T-SEED",
+            team_id="TSEED",
             workspace_url=WORKSPACE,
             world=world.name,
-            channels={"C0ENGME": "S-C0ENGME"},
+            channels={"C0ENGME": "CSC0ENGME"},
             messages={
                 root_key: MappedMessage(
-                    channel="S-C0ENGME",
+                    channel="CSC0ENGME",
                     ts="1700000000.000001",
                     thread_ts="1700000000.000001",
                 )
@@ -1280,7 +1280,7 @@ def test_a22_default_map_retries_auth_and_reports_resolved_path(
         dry_run=False,
     )
 
-    expected = tmp_path / ".slack-seed" / "T-SEED-kestrel.json"
+    expected = tmp_path / ".slack-seed" / "TSEED-kestrel.json"
     assert waits == [3]
     assert len(calls(client, "auth_test")) == 2
     assert expected.exists()
@@ -1408,10 +1408,10 @@ def test_a19_command_dry_run_reports_channel_id_drift(
     write_map(
         map_path,
         SeedMap(
-            team_id="T-SEED",
+            team_id="TSEED",
             workspace_url=WORKSPACE,
             world=world.name,
-            channels={channel.id: "S-OLD"},
+            channels={channel.id: "CSOLD"},
         ),
     )
 
@@ -1455,12 +1455,12 @@ def test_command_dry_run_counts_only_pending_work_from_partial_map(
     write_map(
         map_path,
         SeedMap(
-            team_id="T-SEED",
+            team_id="TSEED",
             workspace_url=WORKSPACE,
             world=world.name,
             messages={
                 done_message.key: MappedMessage(
-                    channel=f"S-{done_message.world_channel}",
+                    channel=f"CS{done_message.world_channel}",
                     ts="1700000000.000001",
                     thread_ts="1700000000.000001",
                 )
@@ -1691,7 +1691,7 @@ def test_a22_command_without_map_uses_team_default_and_retries_auth(
         ["seed", "--world", "kestrel", "--until-day", "1", "--pace", "0"],
     )
 
-    expected = tmp_path / ".slack-seed" / "T-SEED-kestrel.json"
+    expected = tmp_path / ".slack-seed" / "TSEED-kestrel.json"
     assert result.exit_code == 0, result.output
     assert len(calls(client, "auth_test")) == 2
     assert expected.exists()
@@ -1703,7 +1703,7 @@ def test_a22_command_without_map_uses_team_default_and_retries_auth(
 def reseed_map(path: Path, world: World, mapped: Sequence[Post]) -> SeedMap:
     messages = {
         item.key: MappedMessage(
-            channel=f"S-{item.world_channel}",
+            channel=f"CS{item.world_channel}",
             ts=f"1700000000.{900 - index:06d}",
             thread_ts=f"1700000000.{900 - index:06d}",
         )
@@ -1713,11 +1713,11 @@ def reseed_map(path: Path, world: World, mapped: Sequence[Post]) -> SeedMap:
         if item.root_key != item.key:
             messages[item.key].thread_ts = messages[item.root_key].ts
     value = SeedMap(
-        team_id="T-SEED",
+        team_id="TSEED",
         workspace_url=WORKSPACE,
         world=world.name,
         complete=True,
-        channels={item.world_channel: f"S-{item.world_channel}" for item in mapped},
+        channels={item.world_channel: f"CS{item.world_channel}" for item in mapped},
         messages=messages,
         files={
             f"{item.key}/{name}": MappedFile(permalink=f"{WORKSPACE}/files/{name}")
@@ -1817,7 +1817,7 @@ def test_rs3_new_replies_and_roots_mix_with_updates_in_world_order(
     def expected_post(item: Post, thread: str | None) -> dict[str, Any]:
         return {
             "method": "post",
-            "channel_id": f"S-{item.world_channel}",
+            "channel_id": f"CS{item.world_channel}",
             "text": item.text,
             "thread_ts": thread,
             "username": item.username,
@@ -1952,7 +1952,7 @@ def test_rs6_updates_share_pacing_with_posts_and_uploads(
     assert writes[-1] == update_call(changed_reply, saved)
     assert writes[1] == {
         "method": "post",
-        "channel_id": "S-C0ENGME",
+        "channel_id": "CSC0ENGME",
         "text": added.text,
         "thread_ts": saved.messages[root.key].ts,
         "username": added.username,
@@ -1961,7 +1961,7 @@ def test_rs6_updates_share_pacing_with_posts_and_uploads(
     }
     assert writes[2] == {
         "method": "upload",
-        "channel_id": "S-C0ENGME",
+        "channel_id": "CSC0ENGME",
         "thread_ts": saved.messages[root.key].ts,
         "filename": "one.pdf",
         "content": placeholder_file("one.pdf"),
@@ -2096,7 +2096,7 @@ def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
         )
     assert path.read_bytes() == before
     assert snapshots == []
-    assert reseed_writes(failed) == [{"method": "join", "channel_id": "S-C0ENGME"}]
+    assert reseed_writes(failed) == [{"method": "join", "channel_id": "CSC0ENGME"}]
     assert (RESUME_LIMIT in capsys.readouterr().out) is (not loaded_complete)
     client = FakeSlackSeedClient(world, channels=available, before_call=before_update)
 
@@ -2112,7 +2112,7 @@ def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
     )
 
     assert reseed_writes(client) == [
-        {"method": "join", "channel_id": "S-C0ENGME"},
+        {"method": "join", "channel_id": "CSC0ENGME"},
         *[update_call(item, saved) for item in changed],
     ]
     assert report.updated == 2 and report.complete is True
@@ -2155,7 +2155,7 @@ def test_rs7_acknowledged_post_or_upload_is_saved_before_interruption_and_skippe
         assert len(acknowledged) == 1
         if operation == "post":
             assert current.messages[middle.key] == MappedMessage(
-                channel="S-C0ENGME",
+                channel="CSC0ENGME",
                 ts=acknowledged[0]["result"],
                 thread_ts=saved.messages[first.key].ts,
             )
@@ -2305,12 +2305,12 @@ def test_rs7a_placement_check_precedes_all_writes_even_for_unchanged_text(
         dry_run=False,
         reference=reference,
     )
-    expected = [{"method": "join", "channel_id": "S-C0ENGME"}, update_call(changed, saved)]
+    expected = [{"method": "join", "channel_id": "CSC0ENGME"}, update_call(changed, saved)]
     if not mapped:
         expected.append(
             {
                 "method": "post",
-                "channel_id": "S-C0ENGME",
+                "channel_id": "CSC0ENGME",
                 "text": candidate.text,
                 "thread_ts": None,
                 "username": candidate.username,
@@ -2372,7 +2372,7 @@ def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
     assert writes[0] == update_call(changed, saved)
     assert writes[1] == {
         "method": "post",
-        "channel_id": "S-C0ENGME",
+        "channel_id": "CSC0ENGME",
         "text": root.text,
         "thread_ts": None,
         "username": root.username,
@@ -2384,7 +2384,7 @@ def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
     elif not mapped_reply:
         assert writes[2] == {
             "method": "post",
-            "channel_id": "S-C0ENGME",
+            "channel_id": "CSC0ENGME",
             "text": changed_reply.text,
             "thread_ts": "1700000000.000001",
             "username": reply.username,
@@ -2408,7 +2408,7 @@ def test_rs7a_checks_mapped_posts_before_the_first_update(
     saved = reseed_map(path, world, [original])
     available = slack_channels(world)
     scopes = ALL_SCOPES
-    team = "T-SEED"
+    team = "TSEED"
     if guard == "channel":
         available = [channel for channel in available if channel.name != "eng-mech"]
     elif guard == "scope":
@@ -2416,13 +2416,13 @@ def test_rs7a_checks_mapped_posts_before_the_first_update(
     elif guard == "files-scope":
         scopes -= {"files:write"}
     elif guard == "team":
-        team = "T-OTHER"
+        team = "TOTHER"
     elif guard == "world":
         saved.world = "another-world"
         write_map(path, saved)
     else:
         available = [
-            replace(channel, id="S-NEW") if channel.name == "eng-mech" else channel
+            replace(channel, id="CSNEW") if channel.name == "eng-mech" else channel
             for channel in available
         ]
     client = FakeSlackSeedClient(world, channels=available, scopes=scopes, team_id=team)
@@ -2465,7 +2465,7 @@ def test_rs7a_reference_only_channels_do_not_select_channels(tmp_path: Path, wor
     path = tmp_path / "seed.json"
     saved = reseed_map(path, world, [removed, kept])
     changed = replace(kept, text="edited")
-    available = [channel for channel in slack_channels(world) if channel.id != "S-C0ENGEF"]
+    available = [channel for channel in slack_channels(world) if channel.id != "CSC0ENGEF"]
     client = FakeSlackSeedClient(world, channels=available)
 
     report = seed(
@@ -2615,12 +2615,12 @@ def test_rs9_adapter_update_sends_exact_arguments_and_maps_429(rate_limited: boo
 
     if rate_limited:
         with pytest.raises(RateLimited) as caught:
-            adapter.update("S-C0ENGME", "1700000000.000700", "edited", metadata=metadata)
+            adapter.update("CSC0ENGME", "1700000000.000700", "edited", metadata=metadata)
         assert caught.value.retry_after == 7
     else:
-        assert adapter.update("S-C0ENGME", "1700000000.000700", "edited", metadata=metadata) is None
+        assert adapter.update("CSC0ENGME", "1700000000.000700", "edited", metadata=metadata) is None
     assert web.calls == [
-        {"channel": "S-C0ENGME", "ts": "1700000000.000700", "text": "edited", "metadata": metadata}
+        {"channel": "CSC0ENGME", "ts": "1700000000.000700", "text": "edited", "metadata": metadata}
     ]
 
 

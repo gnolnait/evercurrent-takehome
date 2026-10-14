@@ -94,7 +94,7 @@ def selection(profile: Profile, *items: Item, hidden: int = 0) -> Selection:
 def seed_map(
     *,
     world: str = "kestrel",
-    team_id: str = "T-MAPPED",
+    team_id: str = "TMAPPED",
     messages: dict[str, MappedMessage] | None = None,
     files: dict[str, MappedFile] | None = None,
 ) -> SeedMap:
@@ -156,7 +156,7 @@ class FakeSlackWebClient:
     def __init__(
         self,
         *,
-        team_id: str = "T-MAPPED",
+        team_id: str = "TMAPPED",
         auth_error: Exception | None = None,
         events: list[str] | None = None,
     ) -> None:
@@ -400,16 +400,20 @@ def test_channel_of_returns_mapped_channel_or_none() -> None:
 def test_files_of_keeps_map_order_and_isolates_message_prefix() -> None:
     links = seed_map(
         files={
-            "C0ENGME:root/z-last.pdf": MappedFile(permalink="https://files/z"),
-            "C0ENGME:root/a-first.pdf": MappedFile(permalink="https://files/a"),
-            "C0ENGME:rootish/not-a-child.pdf": MappedFile(permalink="https://files/no"),
-            "C0KPROG:root/unrelated.pdf": MappedFile(permalink="https://files/unrelated"),
+            "C0ENGME:root/z-last.pdf": MappedFile(permalink="https://seed-test.slack.com/files/z"),
+            "C0ENGME:root/a-first.pdf": MappedFile(permalink="https://seed-test.slack.com/files/a"),
+            "C0ENGME:rootish/not-a-child.pdf": MappedFile(
+                permalink="https://seed-test.slack.com/files/no"
+            ),
+            "C0KPROG:root/unrelated.pdf": MappedFile(
+                permalink="https://seed-test.slack.com/files/unrelated"
+            ),
         }
     )
 
     assert files_of(links, "C0ENGME:root") == [
-        ("z-last.pdf", "https://files/z"),
-        ("a-first.pdf", "https://files/a"),
+        ("z-last.pdf", "https://seed-test.slack.com/files/z"),
+        ("a-first.pdf", "https://seed-test.slack.com/files/a"),
     ]
     assert files_of(links, "C0ENGME:absent") == []
 
@@ -435,7 +439,7 @@ def test_cli_without_seed_map_does_not_authenticate(
         "chat_postMessage",
         "chat_postMessage",
     ]
-    assert dm_payloads(client) == [build_digest(world, selected)[0]] * 3
+    assert dm_payloads(client) == [build_digest(world, selected, reader_in_header=True)[0]] * 3
     assert webhook.calls == []
 
 
@@ -543,8 +547,8 @@ def test_cli_dm_rejects_seed_map_for_other_team_before_open_or_send(
     profile: Profile,
 ) -> None:
     selected = selection(profile, item(1, (evidence("C0ENGME", "1760000000.000001"),)))
-    path = save_map(tmp_path, seed_map(team_id="T-OTHER"))
-    client = FakeSlackWebClient(team_id="T-ACTUAL")
+    path = save_map(tmp_path, seed_map(team_id="TOTHER"))
+    client = FakeSlackWebClient(team_id="TACTUAL")
     webhook = FakeWebhookClient()
     prepare_cli(monkeypatch, world, [selected] * 3, webhook)
     monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
@@ -554,7 +558,7 @@ def test_cli_dm_rejects_seed_map_for_other_team_before_open_or_send(
 
     assert result.exit_code == 1, result.output
     reason = result.output.lower()
-    assert "team" in reason or ("t-other" in reason and "t-actual" in reason)
+    assert "team" in reason or ("tother" in reason and "tactual" in reason)
     assert client.calls == [{"method": "auth_test"}]
     assert webhook.calls == []
 
@@ -566,8 +570,8 @@ def test_cli_dm_team_mismatch_never_discloses_map_team_value(
     profile: Profile,
 ) -> None:
     selected = selection(profile, item(1, (evidence("C0ENGME", "1760000000.000001"),)))
-    path = save_map(tmp_path, seed_map(team_id=BOT_TOKEN))
-    client = FakeSlackWebClient(team_id="T-ACTUAL")
+    path = save_map(tmp_path, seed_map(team_id="TMAPPRIVATE"))
+    client = FakeSlackWebClient(team_id="TACTUAL")
     webhook = FakeWebhookClient()
     prepare_cli(monkeypatch, world, [selected] * 3, webhook)
     monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
@@ -577,6 +581,7 @@ def test_cli_dm_team_mismatch_never_discloses_map_team_value(
 
     assert result.exit_code == 1, result.output
     assert "team" in result.output.lower()
+    assert "TMAPPRIVATE" not in result.output
     assert BOT_TOKEN not in result.output
     assert client.calls == [{"method": "auth_test"}]
     assert webhook.calls == []
@@ -626,7 +631,7 @@ def test_cli_dm_with_matching_team_sends_three_mapped_payloads_in_order(
     path = save_map(
         tmp_path,
         seed_map(
-            team_id="T-ACTUAL",
+            team_id="TACTUAL",
             messages={
                 "C0ENGME:1760000000.000001": MappedMessage(
                     channel="C111", ts="1761000000.000001", thread_ts="1761000000.000001"
@@ -641,7 +646,7 @@ def test_cli_dm_with_matching_team_sends_three_mapped_payloads_in_order(
     )
     loaded = SeedMap.load(path)
     assert loaded is not None
-    client = FakeSlackWebClient(team_id="T-ACTUAL")
+    client = FakeSlackWebClient(team_id="TACTUAL")
     webhook = FakeWebhookClient()
     prepare_cli(monkeypatch, world, selections, webhook)
     monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
@@ -662,7 +667,7 @@ def test_cli_dm_with_matching_team_sends_three_mapped_payloads_in_order(
     assert dm_payloads(client) == [
         message
         for selected in selections
-        for message in build_digest(world, selected, links=loaded)
+        for message in build_digest(world, selected, links=loaded, reader_in_header=True)
     ]
     delivered = block_text(dm_payloads(client)[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
@@ -731,7 +736,9 @@ def test_cli_counts_every_unmapped_occurrence_before_the_block_cut_and_send(
     assert webhook.calls == [
         message
         for selected in selections
-        for message in build_digest(world, selected, links=loaded, threaded=False)
+        for message in build_digest(
+            world, selected, links=loaded, threaded=False, reader_in_header=True
+        )
     ]
     delivered = block_text(webhook.calls[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
@@ -764,9 +771,9 @@ def test_cli_dm_reports_three_unmapped_sources_before_destination_and_open(
         )
         for number in range(1, 4)
     ]
-    path = save_map(tmp_path, seed_map(team_id="T-ACTUAL"))
+    path = save_map(tmp_path, seed_map(team_id="TACTUAL"))
     events: list[str] = []
-    client = FakeSlackWebClient(team_id="T-ACTUAL", events=events)
+    client = FakeSlackWebClient(team_id="TACTUAL", events=events)
     webhook = FakeWebhookClient()
     prepare_cli(monkeypatch, world, selections, webhook)
     monkeypatch.setattr(cli, "_env_value", lambda key: BOT_TOKEN)
@@ -828,7 +835,11 @@ def test_cli_prints_no_unmapped_count_when_every_source_is_mapped(
 
     assert result.exit_code == 0, result.output
     assert "source links are not in the seed map" not in result.output
-    assert webhook.calls == [build_digest(world, selected, links=loaded, threaded=False)[0]] * 3
+    assert (
+        webhook.calls
+        == [build_digest(world, selected, links=loaded, threaded=False, reader_in_header=True)[0]]
+        * 3
+    )
     delivered = block_text(webhook.calls[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
     assert "https://ws.slack.com/files/U1/F9/drawing.step" in delivered
@@ -926,6 +937,7 @@ def test_seed_map_in_real_form_loads(tmp_path: Path) -> None:
     path = tmp_path / "seed-map.json"
     path.write_text(json.dumps(content), encoding="utf-8")
     loaded = SeedMap.load(path)
+    assert loaded is not None
     assert loaded.team_id == content["team_id"]
     assert loaded.workspace_url == content["workspace_url"]
     assert loaded.channels == content["channels"]

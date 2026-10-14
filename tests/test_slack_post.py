@@ -460,7 +460,7 @@ def test_cli_post_dm_opens_one_conversation_and_sends_three_readers_in_order(
             {
                 "method": "chat_postMessage",
                 "channel": DM_CHANNEL,
-                **build_digest(world, selected)[0],
+                **build_digest(world, selected, reader_in_header=True)[0],
             }
             for selected in selections
         ],
@@ -791,12 +791,12 @@ def test_cli_post_sends_three_readers_in_order_and_exits_zero(
     assert client.calls == [
         message
         for selected in selections
-        for message in build_digest(world, selected, threaded=False)
+        for message in build_digest(world, selected, threaded=False, reader_in_header=True)
     ]
     assert [call["blocks"][0]["text"]["text"] for call in client.calls] == [
-        "Kestrel K2 · Fri 16 Oct",
-        "Kestrel K2 · Fri 16 Oct",
-        "Kestrel K2 · Fri 16 Oct",
+        "Kestrel K2 · Fri 16 Oct · Nadia (ME)",
+        "Kestrel K2 · Fri 16 Oct · Hamid (supply chain)",
+        "Kestrel K2 · Fri 16 Oct · Grace (EM)",
     ]
     assert WEBHOOK_URL not in result.output
     assert all(WEBHOOK_URL not in str(vars(record)) for record in caplog.records)

@@ -1294,7 +1294,7 @@ def expected_calls(world: World, selections: list[Selection], *, dm: bool) -> li
     calls: list[dict[str, Any]] = [{"method": "conversations_open", "users": "U111"}] if dm else []
     number = 0
     for selected in selections:
-        messages = build_digest(world, selected, threaded=dm)
+        messages = build_digest(world, selected, threaded=dm, reader_in_header=True)
         number += 1
         calls.append(
             {
