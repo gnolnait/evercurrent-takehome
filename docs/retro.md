@@ -58,3 +58,48 @@ store rule without checking the tests that pin it.
 
 Change. Before a brief changes the behaviour of a module outside the unit, grep the
 tests that pin that module and name them in the brief.
+
+## M3 unit 11, failures become refusals (2026-10-14)
+
+Caught. The plan review found that a failed reset dropped the room's message changes,
+because `Room.reset` cleared them before it rebuilt; the test for it now saves after the
+failure. The adversarial pass found that a gateway reply of valid JSON in the wrong
+shape still crashed `digest extract` with a raw error, the same symptom the unit set out
+to remove. Seven wrong-shape cases now become one refusal.
+
+Missed. The second-model lane ran out of quota near the end; the local lens panel took
+the final review. Three proofs needed manual RED runs, because a blank-line break cannot
+widen an `except` clause or reorder two assignments.
+
+Change. When a unit wraps a parser's errors, list every field the code reads after the
+parse and give each a wrong-shape case in the first test commit.
+
+## M4 unit 12a, the query function layer (2026-10-14)
+
+Caught. A probe before the plan review showed that a `mode=ro` connection still lets
+`VACUUM INTO` and `ATTACH` create files, so `query` got an allowlist authorizer. The
+plan review found that a day other than the store's day would read later item versions,
+so the day now comes from the store. The code review found that a per-cell length limit
+does not bound a result of many wide rows; `query` now has a column limit and an 8 MB
+result budget.
+
+Missed. The first test round pinned only the must-see line of a digest; empty ranked
+lists passed. The test review caught it before any code existed.
+
+Change. When a function takes caller SQL, probe each write path (`VACUUM INTO`,
+`ATTACH`, pragmas, temp tables) and the result size on a real connection before the
+plan is reviewed.
+
+## M4 unit 13, the open-items page (2026-10-14)
+
+Caught. The plan review found that the page would print raw user ids in ask headings and
+drop the absence detail, so each item renders as the room renders a digest line, and it
+names the readers whose current digest carries it. The implementer found that an older
+escaping test forbade every link on the room page; the test now forbids only links to
+outside pages.
+
+Missed. The first test round could not tell the current world from the base world,
+because the only edit it made was a message post; the test review added a world edit.
+
+Change. When a page reads room state, test it after one edit of each kind (message,
+world, reset), not only after the kind the feature was written for.

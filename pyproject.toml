@@ -102,6 +102,7 @@ layers = [
     "digest.cli",
     "digest.web",
     "digest.room",
+    "digest.queries",
     "digest.eval | digest.driver",
     "digest.daily",
     "digest.corpus",

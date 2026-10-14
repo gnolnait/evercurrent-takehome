@@ -13,7 +13,8 @@ import datetime as dt
 import logging
 import shutil
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn, Protocol, assert_never, runtime_checkable
 from zoneinfo import ZoneInfo
@@ -30,6 +31,7 @@ from digest.llm.client import LLM, from_settings
 from digest.models import Event, Frozen, Role, micros_since_epoch
 from digest.priors import Priors
 from digest.project import ChecklistTask, Gate, add_working_days
+from digest.queries import QueryContext, open_context
 from digest.replay import read_events
 from digest.settings import Settings
 from digest.store import Store
@@ -407,6 +409,13 @@ class SavingRoom(RoomLike, Protocol):
     def save(self, path: Path) -> Path: ...
 
 
+@runtime_checkable
+class ItemsRoom(RoomLike, Protocol):
+    """A room that the open-items page reads (plan m4-items I4)."""
+
+    def items_context(self) -> AbstractContextManager[QueryContext]: ...
+
+
 class ReseedLike(Protocol):
     """The seed owner's reseed of a saved corpus copy (plan m3-room-edits S2)."""
 
@@ -489,15 +498,25 @@ class Room:
         return self._state
 
     def reset(self) -> RoomState:
-        """Drop every edit."""
-        old, self._store, self._changed = self._store, None, {}
-        self._state = self._build((), None, {}, None)
+        """Drop every edit; when the build fails, keep the state and the message changes."""
+        # Build first. Change the room only after the build succeeds.
+        state = self._build((), None, {}, None)
+        old, self._store, self._changed, self._state = self._store, None, {}, state
         if old is not None:
             _remove_store(old)
         return self._state
 
     def state(self) -> RoomState:
         return self._state
+
+    @contextlib.contextmanager
+    def items_context(self) -> Iterator[QueryContext]:
+        """Open the current store read-only and yield its context for the current world.
+
+        The current store is the room store when message changes exist, else the base store.
+        """
+        with Store.open_readonly(self._store or self._base.store_path) as store:
+            yield open_context(store, self._state.world, self._base.priors)
 
     def save(self, path: Path) -> Path:
         """Write the corpus copy with the room's message changes (plan S1); return `path`.
@@ -649,16 +668,16 @@ class Room:
                 )
             except OSError as error:
                 raise ValueError(f"cannot start a live model call: {error}") from None
-            # run_extract counts a backend failure (LLMOutputError: an HTTP status such as
-            # an auth or rate-limit refusal, or output that does not validate) as a failed
-            # thread, and the check below refuses it.
+            # run_extract counts a backend failure as a failed thread, and the check below
+            # refuses it. A backend failure is an LLMOutputError: a network failure, an HTTP
+            # status such as an auth or rate-limit refusal, or output that does not validate.
             report = run_extract(
                 store, self._llm, glossary, world.project, self._base.priors, as_of, zone, purposes
             )
         if report.failed:
             cause = (
-                "the live model call failed (an auth or rate-limit refusal, another HTTP "
-                "error, or output that did not validate)"
+                "the live model call failed (a network failure, an auth or rate-limit "
+                "refusal, another HTTP error, or output that did not validate)"
                 if self._llm.mode == "record"
                 else "a recorded model output did not validate"
             )
