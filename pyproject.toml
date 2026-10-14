@@ -28,6 +28,9 @@ web = [
     "jinja2>=3.1",
     "python-multipart>=0.0.20",  # FastAPI parses form posts with it
 ]
+mcp = [
+    "mcp==1.30.0",  # SDK 2.x needs cryptography, which has no win_arm64 wheel (D20)
+]
 
 [project.scripts]
 digest = "digest.cli:app"
@@ -53,6 +56,11 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+
+[tool.uv]
+# mcp needs pyjwt[crypto], and cryptography has no win_arm64 wheel. The server uses no
+# OAuth and no HTTP transport, so plain pyjwt is enough (docs/plans/m4-mcp.md M0).
+override-dependencies = ["pyjwt>=2.10"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/digest"]
 
