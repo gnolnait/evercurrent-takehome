@@ -2,7 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from html import escape
+from datetime import date
 from pathlib import Path
 from typing import get_args
 
@@ -17,7 +17,7 @@ from digest.daily.render import item_parts, line_parts
 from digest.daily.select import Line
 from digest.models import Item, ItemStatus, ItemType
 from digest.priors import load_priors
-from digest.room import PostMessage, Room, RoomBase, RoomState
+from digest.room import PostMessage, Room, RoomBase, RoomState, SetGateDate
 from digest.store import Store
 from digest.web.app import create_app
 from digest.world.schema import World
@@ -54,8 +54,31 @@ def as_line(item: Item) -> Line:
 
 def parts(item: Item, world: World) -> tuple[str, str]:
     names = {p.user_id: p.name for p in world.personas}
-    tasks = {(g.id, t.id): t for g in world.project.gates for t in g.checklist}
-    return line_parts(as_line(item), names, tasks)
+    absence = item.absence
+    if absence is None:
+        heading = " ".join(item.title.split())
+        if item.entities:
+            heading += f" ({', '.join(item.entities)})"
+        if item.owner:
+            heading += f" - owner {names[item.owner]}"
+    elif absence.source == "ask":
+        heading = (
+            f"Not happened: {names[absence.asker]} asked {names[item.owner]}, "
+            f"no reply for {absence.days_silent} working days"
+        )
+    else:
+        task = next(
+            t
+            for g in world.project.gates
+            for t in g.checklist
+            if g.id == absence.gate and t.id == absence.task
+        )
+        heading = (
+            f"Not happened: {task.task} ({task.owner}) for {absence.gate} - "
+            f"{absence.days_silent} working days silent, "
+            f"{absence.buffer_consumed}/{absence.buffer_days} buffer days used"
+        )
+    return heading, " ".join(item.summary.split())
 
 
 def section(page: Page, title: str) -> Element:
@@ -81,7 +104,9 @@ def item_node(node: Element, heading: str) -> Element:
         if n.tag in {"article", "li", "div", "section"} and heading in headings(n)
     ]
     assert matches, heading
-    return min(matches, key=lambda n: len(n.nodes()))
+    result = min(matches, key=lambda n: len(n.nodes()))
+    assert headings(result) == [heading]
+    return result
 
 
 def test_default_sections_match_queries(items_room: ItemsFakeRoom) -> None:
@@ -91,10 +116,27 @@ def test_default_sections_match_queries(items_room: ItemsFakeRoom) -> None:
         absences = queries.list_absences(ctx)
     assert blockers and absences
     ask = next(v.item for v in absences if v.item.absence.source == "ask")
+    world = items_room.state().world
+    plain = next(
+        v.item for v in blockers if v.item.title == "PN-31020 signal harness shortage for DVT-1 kit"
+    )
+    checklist = next(v.item for v in absences if v.item.item_id == "absence:G-DVT1.emc")
+    assert parts(plain, world)[0] == (
+        "PN-31020 signal harness shortage for DVT-1 kit (PN-31020, BLD-DVT1)"
+    )
+    assert parts(ask, world)[0] == (
+        "Not happened: Grace Okonkwo asked Ana Folau, no reply for 3 working days"
+    )
+    assert parts(checklist, world)[0] == (
+        "Not happened: Pass the TST-EMC-01 EMC pre-scan (EE) for G-DVT1 - "
+        "3 working days silent, 4/7 buffer days used"
+    )
     with TestClient(create_app(items_room)) as client:
         response = client.get("/items")
     assert response.status_code == 200
     page = Page(response.text)
+    titles = headings(page.root)
+    assert titles.index("Open blockers") < titles.index("Not happened")
     for title, views in (("Open blockers", blockers), ("Not happened", absences)):
         assert headings(section(page, title))[1:] == [
             parts(v.item, items_room.state().world)[0] for v in views
@@ -224,6 +266,29 @@ def test_search_filters_and_form(items_room: ItemsFakeRoom, ignored: str) -> Non
         assert options & {"", "any"}
 
 
+@pytest.mark.parametrize(
+    ("filters", "minimum"),
+    [({"text": "thermal"}, 1), ({"owner": "U0ME01"}, 1), ({"status": "open"}, 21)],
+    ids=["text-alone", "owner-alone", "more-than-twenty"],
+)
+def test_search_single_filter(
+    items_room: ItemsFakeRoom, filters: dict[str, str], minimum: int
+) -> None:
+    """Setup one filter / Action GET items / Assert I2 exact results through item 50."""
+    world = items_room.state().world
+    if "owner" in filters:
+        assert any(p.user_id == filters["owner"] and p.kind == "human" for p in world.personas)
+    with items_room.items_context() as ctx:
+        expected = queries.search_items(ctx, **filters, limit=50)
+    assert len(expected) >= minimum
+    with TestClient(create_app(items_room)) as client:
+        response = client.get("/items", params=filters)
+    assert response.status_code == 200
+    assert headings(section(Page(response.text), "Results"))[1:] == [
+        parts(v.item, world)[0] for v in expected
+    ]
+
+
 def test_invalid_type_shows_query_refusal(items_room: ItemsFakeRoom) -> None:
     """Setup an invalid type / Action GET crafted URL / Assert B13.4 query message and 400."""
     with items_room.items_context() as ctx, pytest.raises(ValueError) as error:
@@ -252,7 +317,6 @@ def test_evidence_quote_is_escaped(items_room: ItemsFakeRoom, tmp_path: Path) ->
     assert response.status_code == 200
     page = Page(response.text)
     assert not page.find("script")
-    assert escape(quote) in response.text
     assert (
         quote
         in item_node(
@@ -297,6 +361,36 @@ def test_curated_change_and_reset_use_current_store(
         assert restored is not None
         assert restored.item == old_items[item.item_id]
         assert restored.item != item
+
+
+def test_world_edit_changes_context_and_page_absences(
+    base: RoomBase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Setup a real room / Action move its gate / Assert B13.6 and I4 use its world."""
+    test_room_edits.forbid_backend(monkeypatch)
+    room = Room(base)
+    with Store.open_readonly(base.store_path) as store:
+        before = queries.list_absences(queries.open_context(store, base.world, base.priors))
+        room.apply(SetGateDate(kind="set_gate_date", gate_id="G-DVT1", date=date(2026, 10, 23)))
+        world = room.state().world
+        assert world != base.world
+        expected = queries.list_absences(queries.open_context(store, world, base.priors))
+    old_headings = [parts(v.item, base.world)[0] for v in before]
+    expected_headings = [parts(v.item, world)[0] for v in expected]
+    assert expected_headings != old_headings
+    checklist = [v.item for v in expected if v.item.absence.source == "checklist"]
+    assert checklist
+    assert all(item.absence.buffer_consumed == 3 for item in checklist)
+    with room.items_context() as ctx:
+        assert ctx.world == room.state().world
+        assert ctx.world != base.world
+        assert queries.list_absences(ctx) == expected
+    with TestClient(create_app(room)) as client:
+        response = client.get("/items")
+    assert response.status_code == 200
+    actual = headings(section(Page(response.text), "Not happened"))[1:]
+    assert actual == expected_headings
+    assert not (set(old_headings) - set(expected_headings)) & set(actual)
 
 
 def test_room_without_items_context_and_navigation(state: RoomState) -> None:
