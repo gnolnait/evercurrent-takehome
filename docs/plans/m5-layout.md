@@ -653,8 +653,8 @@ covers.
 - A20 (12, D14). `_demo_selections` returns the authors of every evidence message;
   `digest demo` output does not change.
 - A21 (real data). The day-6 demo selections, with a deterministic synthetic seed map
-  built in the test from the replayed store (each evidence key mapped to channel `S-<world
-  channel>`, ts = the world ts, thread_ts = the world thread_ts, and one file per world file
+  built in the test from the replayed store (each evidence key mapped to channel = its world channel id, which
+  already has the Slack form `C[A-Z0-9]+` that A17 accepts, ts = the world ts, thread_ts = the world thread_ts, and one file per world file
   name), build messages that pass the A17 helper. The real Scratch map stays in the manual
   check (A22). The comparison with the approved mocks in
   `notes/research/slack-layout/v6-*.json` is a manual check recorded in the PR (that folder
