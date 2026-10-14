@@ -1,6 +1,6 @@
 # Plan: M5 slice, feedback recording and Slack interaction (`digest bot`)
 
-Status: v0.2 (plan review applied), 2026-10-13. Process stage 1 (`docs/process.md`).
+Status: v0.3 (plan re-review applied), 2026-10-13. Process stage 1 (`docs/process.md`).
 Stacked on the layout unit (`docs/plans/m5-layout.md` v0.4, branch `m5-layout`): it adds
 menus to the v6 top message and thread reply that `slack_digest` builds. Rebased onto
 `main` after the layout unit merges. This is "Next" of the layout plan and part of step 1
@@ -45,8 +45,15 @@ digest bot [--db PATH]
   Refusals, each exit 1 before any connection: a missing token gives `_not_set(<key>)`;
   `SLACK_BOT_TOKEN must start with xoxb-`; `SLACK_APP_TOKEN must start with xapp-`; no
   slack extra gives `digest bot needs the slack extra; run uv sync --extra slack`. When the
-  handler starts, the command prints `listening for digest actions; press Ctrl-C to stop`.
-  Ctrl-C closes the handler and prints `stopped`; the exit code is 0.
+  handler connects, the command prints `listening for digest actions; press Ctrl-C to stop`.
+  The command does not call `SocketModeHandler.start()`: on Windows `start()` sets SIGINT
+  to `SIG_DFL`, so Ctrl-C kills the process with no cleanup. The command calls
+  `handler.connect()`, then waits in its own loop of `time.sleep(1)` calls, which Ctrl-C
+  interrupts with `KeyboardInterrupt`. A `finally` calls `handler.close()`. An exception
+  from `connect` exits 1 with `digest bot could not connect: <exception type name>`; the
+  text of the exception is not printed, because it can hold a token. On Ctrl-C the
+  command prints `stopped` and the exit code is 0. `_socket_handler(bot_token, app_token,
+  db)` in `cli.py` builds the bolt `App` and the handler; the tests patch it.
 
 ## Behaviours
 
@@ -528,6 +535,12 @@ otherwise.
   with `uv run python -m sqlite3 .digest/feedback.sqlite "SELECT id, event, item_id,
   reader, day, payload FROM feedback_events"` and record them. Restart the bot and click
   once more: the update still works (the state is in the store).
+- A18 (Commands, shutdown). `digest bot` with `_socket_handler` patched to return a fake
+  handler and `time.sleep` patched to raise `KeyboardInterrupt` on its first call: the
+  fake records `connect` then `close`, and no `start`; the output holds the listening
+  line and then `stopped`; the exit code is 0. With a `connect` that raises an error
+  whose text holds a token, `close` is still called, the output is `digest bot could not
+  connect: <exception type name>` with no token, and the exit code is 1.
 
 ## Test seams
 
@@ -540,7 +553,8 @@ otherwise.
   `auth.test`. The adapter's listener functions take `ack` and `body` and are tested
   alone (A15).
 - The CLI with `CliRunner` and the Slack clients patched, as `tests/test_slack_post.py`
-  does. No test touches the network.
+  does. `digest bot` with `_socket_handler` and `time.sleep` patched (A18). No test
+  touches the network.
 
 ## Next units
 
