@@ -29,6 +29,7 @@ Part of the mechanical engineer's digest (summaries and sources trimmed):
 ```text
 Daily digest for Nadia Brenner (ME) - 2026-10-19
 Since your digest of 2026-10-16
+Phase: EVT since 2026-08-03. Next gate: G-TR1 Top-cover tooling and texture release (PN-51010), in 1 working day.
 
 Not happened
 - Not happened: Grace Okonkwo asked Ana Folau, no reply for 3 working days
