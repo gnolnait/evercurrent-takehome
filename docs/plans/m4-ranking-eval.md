@@ -74,8 +74,8 @@ Configurations:
   `recent_activity`.
 - Baseline `role-only`: `terms_off` holds `importance` and `personal_relevance`, so the
   role prior alone ranks, with the must-see lane unchanged.
-- Baseline `send-everything`: every item visible to P whose newest evidence falls in the
-  window, newest evidence first, then `item_id`; before them, the absence items that
+- Baseline `send-everything`: every stored item as of d, of any status, visible to P,
+  whose newest evidence falls in the window, newest evidence first, then `item_id`; before them, the absence items that
   C0's selection holds for (P, d) (their evidence is old by design), by `item_id`. No
   must-see lane and no cap.
 - R7a. Sensitivity: for C1 to C4 and the baselines, the report gives the number of
