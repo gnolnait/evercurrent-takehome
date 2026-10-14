@@ -14,10 +14,11 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import TextContent, TextResourceContents
-from pydantic import TypeAdapter
+from pydantic import AnyUrl, TypeAdapter
 from typer.testing import CliRunner
 
 import test_room
+from digest import queries
 from digest.cli import app
 from digest.mcp_server import build_server
 from digest.priors import Priors
@@ -83,8 +84,6 @@ async def test_list_tools_has_nine_described_tools(
     assert len(result.tools) == 9
     assert {tool.name for tool in result.tools} == TOOL_NAMES
     assert all(tool.description and tool.description.strip() for tool in result.tools)
-    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
-    from digest import queries
 
     for tool in result.tools:
         parameters = {
@@ -115,8 +114,6 @@ async def test_tool_structured_content_matches_query(
 ) -> None:
     """Setup day 6 / Action call a tool / Assert the query's JSON result (B12b.2)."""
     server = build_server(day6_store, world, priors)
-    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
-    from digest import queries
 
     with Store.open_readonly(day6_store) as store:
         ctx = queries.open_context(store, world, priors)
@@ -139,15 +136,13 @@ async def test_search_items_passes_filters_and_limit(
 ) -> None:
     """Setup three matching asks / Action filter and limit / Assert the query result (B12b.2)."""
     server = build_server(day6_store, world, priors)
-    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
-    from digest import queries
 
     filters = {"type": "ask", "status": "open", "owner": "U0SC01"}
     with Store.open_readonly(day6_store) as store:
         ctx = queries.open_context(store, world, priors)
-        matches = queries.search_items(ctx, **filters, limit=100)
+        matches = queries.search_items(ctx, type="ask", status="open", owner="U0SC01", limit=100)
         assert len(matches) > 1
-        limited = queries.search_items(ctx, **filters, limit=1)
+        limited = queries.search_items(ctx, type="ask", status="open", owner="U0SC01", limit=1)
         assert len(limited) == 1
         expected = TypeAdapter(Any).dump_python(limited, mode="json", by_alias=True)
 
@@ -187,7 +182,7 @@ async def test_schema_resource_returns_store_schema(
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         resources = await client.list_resources()
         assert "schema://store" in {str(resource.uri) for resource in resources.resources}
-        result = await client.read_resource("schema://store")
+        result = await client.read_resource(AnyUrl("schema://store"))
 
     assert len(result.contents) == 1
     content = result.contents[0]
@@ -260,7 +255,6 @@ async def test_stdio_lists_tools_and_calls_blockers(
         view["item"]["item_id"] for view in result.structuredContent["result"]
     }
     # Import after initialization so the subprocess reaches the CLI stub first.
-    from digest import queries
 
     with Store.open_readonly(path) as store:
         ctx = queries.open_context(store, world, priors)
@@ -306,8 +300,6 @@ async def test_replacing_store_refreshes_every_tool(
     path = tmp_path / "served.sqlite"
     shutil.copy2(day6_store, path)
     server = build_server(path, world, priors)
-    # The query stubs cannot yet build QueryContext's schema; reach the MCP stub first.
-    from digest import queries
 
     arguments_by_name = {
         "search_items": {"type": "blocker", "limit": 100},
