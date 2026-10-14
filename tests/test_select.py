@@ -1598,7 +1598,7 @@ def test_ab8_empty_switch_preserves_scores_and_reasons() -> None:
     ]
     base = priors(role_priors={"ME": {"decision": 0.512345}})
     # Preservation runs before the switch exists; feature checks require the field.
-    table = ablation_priors(set(), base=base) if "terms_off" in DailyPriors.model_fields else base
+    table = ablation_priors(set(), base=base)
     lines = choose(
         rows, table=table, recent_messages=frozenset({("CPUBLIC", "1791993600.000009")})
     ).lines
@@ -1639,7 +1639,7 @@ def test_ab9_must_see_lines_are_preserved(terms: set[str]) -> None:
     base = priors(min_score=1.1)
     before = choose(rows, missing, table=base).lines
     # Remove this compatibility branch after the implementation adds the field.
-    table = ablation_priors(terms, base=base) if "terms_off" in DailyPriors.model_fields else base
+    table = ablation_priors(terms, base=base)
     after = choose(
         rows, missing, table=table, recent_messages=frozenset({("CPUBLIC", BASE_TS)})
     ).lines
