@@ -331,10 +331,11 @@ Deterministic DAG of idempotent stages. Each stage run is keyed by
    an absence for the key's owner, citing the deviation. (h, stretch) It needs a
    `builders` map in `config/project.yaml` from a part to the external channel that
    builds it. When a buildable document for such a part is released at a new revision,
-   an absence fires if no message in that channel cites the new revision within
-   `absence.release_post_cadence_days` of the release, or if the first message that cites
-   it has no reply in its thread from anyone but its author within
-   `absence.builder_reply_cadence_days` of that message. It is an absence for the
+   an absence holds at `as_of` in two cases: `absence.release_post_cadence_days` have
+   passed since the release and no message in that channel cites the new revision yet;
+   or `absence.builder_reply_cadence_days` have passed since the first message that cites
+   it and that message has no reply yet in its thread from anyone but its author. A late
+   post or a late reply clears the absence. It is an absence for the
    document's owner, citing the release; its key is the part and the revision. The
    window before a gate in which
    an absence can fire scales with the task's priority, and an absence that persists
