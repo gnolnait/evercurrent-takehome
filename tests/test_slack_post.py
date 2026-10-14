@@ -158,7 +158,7 @@ def test_slack_message_has_header_section_titles_lines_and_sources(
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": "*On your PN-51010* · Owner: Hamid (supply chain) · Open since Thu 9 Oct · In #eng-me",
+                "text": "*On your PN-51010* · Owner: Hamid (supply chain) · Open since Thu 9 Oct · In #eng-mech",
                 "verbatim": True,
             }
         ],

@@ -14,7 +14,7 @@ import digest.cli as cli
 from digest.daily.profile import Profile
 from digest.daily.render import context_lines, render_digest, select_digest
 from digest.daily.select import Line, Section, Selection
-from digest.models import AbsenceDetail, Evidence, Item
+from digest.models import AbsenceDetail, Evidence, Item, Role
 from digest.project import ChecklistTask, Gate, PhaseWindow, ProjectConfig
 from digest.seed import MappedFile, MappedMessage, SeedMap
 from digest.world.schema import Channel, Entity, Persona, World
@@ -43,7 +43,7 @@ def row(
     **changes: Any,
 ) -> Line:
     evidence = source(f"1792407600.{number:06d}")
-    values = dict(
+    values: dict[str, Any] = dict(
         item_id=f"I-{number}",
         thread_id=f"CENG:{evidence.message_ts}",
         type="risk",
@@ -91,14 +91,10 @@ def absence(
 
 
 def chosen(profile: Profile, *lines: Line, **changes: Any) -> Selection:
-    return Selection(
-        **(
-            dict(
-                profile=profile, day=DAY, lines=lines, hidden=0, previous_digest=date(2026, 10, 16)
-            )
-            | changes
-        )
+    values: dict[str, Any] = dict(
+        profile=profile, day=DAY, lines=lines, hidden=0, previous_digest=date(2026, 10, 16)
     )
+    return Selection(**(values | changes))
 
 
 def mrkdwn(text: str) -> dict[str, Any]:
@@ -121,7 +117,7 @@ def pairs(message: dict[str, Any]) -> list[tuple[str, str]]:
         if block["type"] == "section"
         and blocks[index + 1]["type"] == "context"
         and block["text"]["text"].startswith("*")
-        and not block["text"]["text"].startswith("*G")
+        and not (index == 2 and blocks[0]["type"] == "header")
     ]
 
 
@@ -179,7 +175,7 @@ def gates(world: World, *values: Gate) -> World:
     return world.model_copy(update={"project": world.project.model_copy(update={"gates": values})})
 
 
-def gate(code: str = "G-A", *, offset: int = 1, buffer: int = 7, owner: str = "EE") -> Gate:
+def gate(code: str = "G-A", *, offset: int = 1, buffer: int = 7, owner: Role = "EE") -> Gate:
     return Gate(
         id=code,
         name="Review (PN-1)",
@@ -411,7 +407,8 @@ def test_notification_forms(
 def test_notification_cut_counts_escaped_characters(world: World, profile: Profile) -> None:
     """A5, A16: escaped width sets the phone limit and preserves word boundaries."""
     top = build_digest(world, chosen(profile, row(title="& " * 60)))[0]
-    assert top["text"] == "1 to read first, starting with " + "&amp; " * 19 + "&amp;…"
+    assert top["text"] == "1 to read first, starting with " + "&amp; " * 18 + "&amp;…"
+    assert len(top["text"]) <= 150
 
 
 def test_top_sort_keys_and_overflow_labels(world: World, profile: Profile) -> None:
@@ -524,7 +521,7 @@ def test_ask_fold_and_negative_twins(
     """A7: shared thread and a non-gate code are both required for an ask fold."""
     ask = source(quote="Please send the ETA.")
     authors = {f"CENG:{TS}": "UASKER"}
-    changes = dict(entities=shared, owner="UREADER", evidence=(ask,))
+    changes: dict[str, Any] = dict(entities=shared, owner="UREADER", evidence=(ask,))
     absorber = (
         absence(1, asker="UASKER", **changes)
         if kind == "ask-absence"
@@ -661,10 +658,17 @@ def test_ask_resolver_uses_first_known_non_owner(
 
 
 @pytest.mark.parametrize(
-    ("asker", "owner", "title", "prefix"),
+    ("asker", "author", "owner", "title", "prefix"),
     [
-        ("UREADER", "UOTHER", "No reply from Hamid in this thread for 1 working day", "You asked"),
         (
+            "UREADER",
+            "UREADER",
+            "UOTHER",
+            "No reply from Hamid in this thread for 1 working day",
+            "You asked",
+        ),
+        (
+            "UASKER",
             "UASKER",
             "UREADER",
             "Grace has had no reply from you in this thread for 1 working day",
@@ -672,6 +676,14 @@ def test_ask_resolver_uses_first_known_non_owner(
         ),
         (
             "UMISSING",
+            "UMISSING",
+            "UREADER",
+            "Someone has had no reply from you in this thread for 1 working day",
+            "Someone asked you",
+        ),
+        (
+            "UMISSING",
+            "UASKER",
             "UREADER",
             "Someone has had no reply from you in this thread for 1 working day",
             "Someone asked you",
@@ -680,11 +692,21 @@ def test_ask_resolver_uses_first_known_non_owner(
 )
 @pytest.mark.parametrize("known", [False, True])
 def test_ask_absence_titles(
-    world: World, profile: Profile, asker: str, owner: str, title: str, prefix: str, known: bool
+    world: World,
+    profile: Profile,
+    asker: str,
+    author: str,
+    owner: str,
+    title: str,
+    prefix: str,
+    known: bool,
 ) -> None:
     """A9, A10: titles state who has no reply and where the system looked."""
     line = absence(asker=asker, days=1, owner=owner)
-    authors = {f"CENG:{TS}": asker} if known else {}
+    authors = {f"CENG:{TS}": author} if known else {}
+    if known and author != asker:
+        title = "Grace has had no reply from you in this thread for 1 working day"
+        prefix = "Grace asked you"
     text, meta = pairs(build_digest(world, chosen(profile, line), authors=authors)[0])[0]
     assert text == f"*{title}*\n" + (
         f"{prefix}: “Can you give an ETA?”" if known else "First sentence."
@@ -881,7 +903,9 @@ def test_checklist_role_labels_and_owners(
                 )
             }
         )
-    profile = profile.model_copy(update={"role": role})
+    profile = profile.model_copy(
+        update={"role": role, "user_id": "UASKER" if role == "EM" else profile.user_id}
+    )
     _, meta = pairs(build_digest(world, chosen(profile, absence()))[0])[0]
     assert meta.split(" · ")[0] == f"*{label}*"
     assert (owner in meta.split(" · ")) if owner else "Owner:" not in meta
@@ -904,7 +928,7 @@ def test_codes_filter_order_deduplicate_and_members(world: World, profile: Profi
         2,
         title="PN-3 shortage",
         thread_id=ask.item.thread_id,
-        entities=("PN-2", "G-A", "PN-8", "PN-9"),
+        entities=("PN-2", "G-A", "PN-9", "PN-10", "PN-8"),
     )
     top = build_digest(world, chosen(profile, ask, member))[0]
     text, meta = pairs(top)[0]
@@ -1167,7 +1191,7 @@ def test_long_meta_drops_partial_link_and_header_is_plain(world: World, profile:
 def test_safety_helper_rejects_each_broken_payload(defect: str) -> None:
     """A17: a valid twin passes before each payload mutation fails."""
     links = mapping()
-    valid = {
+    valid: dict[str, Any] = {
         "text": "Worth a look: Fact.",
         "blocks": [
             {"type": "header", "text": {"type": "plain_text", "text": "Kestrel & <K2>"}},
@@ -1361,7 +1385,8 @@ def test_dm_no_reply_needs_no_ts(
         ),
         (
             WebhookResponse(500, HOOK),
-            "Slack refused the second message of the digest for Reader {reader}: status 500, body withheld",
+            "Slack refused the second message of the digest for Reader {reader}: "
+            "status 500, body withheld (not a Slack error code)",
         ),
     ],
 )
