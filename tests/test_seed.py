@@ -6,6 +6,7 @@ import re
 import shutil
 import traceback
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
@@ -154,6 +155,9 @@ class FakeSlackSeedClient:
         result = f"{WORKSPACE}/files/{filename}"
         call["result"] = result
         return result
+
+    def update(self, channel_id: str, ts: str, text: str, *, metadata: dict[str, object]) -> None:
+        self._record("update", channel_id=channel_id, ts=ts, text=text, metadata=metadata)
 
 
 def slack_channels(world: World) -> list[SlackChannel]:
@@ -1691,3 +1695,886 @@ def test_a22_command_without_map_uses_team_default_and_retries_auth(
     assert result.exit_code == 0, result.output
     assert len(calls(client, "auth_test")) == 2
     assert expected.exists()
+
+
+# Reseed an edited corpus (RS2 to RS9).
+
+
+def reseed_map(path: Path, world: World, mapped: Sequence[Post]) -> SeedMap:
+    messages = {
+        item.key: MappedMessage(
+            channel=f"S-{item.world_channel}",
+            ts=f"1700000000.{900 - index:06d}",
+            thread_ts=f"1700000000.{900 - index:06d}",
+        )
+        for index, item in enumerate(mapped)
+    }
+    for item in mapped:
+        if item.root_key != item.key:
+            messages[item.key].thread_ts = messages[item.root_key].ts
+    value = SeedMap(
+        team_id="T-SEED",
+        workspace_url=WORKSPACE,
+        world=world.name,
+        complete=True,
+        channels={item.world_channel: f"S-{item.world_channel}" for item in mapped},
+        messages=messages,
+        files={
+            f"{item.key}/{name}": MappedFile(permalink=f"{WORKSPACE}/files/{name}")
+            for item in mapped
+            for name in item.files
+        },
+    )
+    write_map(path, value)
+    return value
+
+
+def update_call(item: Post, saved: SeedMap) -> dict[str, Any]:
+    mapped = saved.messages[item.key]
+    return {
+        "method": "update",
+        "channel_id": mapped.channel,
+        "ts": mapped.ts,
+        "text": item.text,
+        "metadata": item.metadata,
+    }
+
+
+def reseed_writes(client: FakeSlackSeedClient) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in call.items() if key != "result"}
+        for call in client.calls
+        if call["method"] in {*WRITE_METHODS, "update"}
+    ]
+
+
+def test_rs2_updates_roots_and_replies_and_skips_uncompared_text(
+    tmp_path: Path, world: World
+) -> None:
+    root, reply, same, unreferenced = plan_seed(
+        world,
+        [
+            event(ts="1791819003.100000", text="no reference"),
+            event(ts="1791819001.100000", thread_ts="1791819000.100000", text="old reply"),
+            event(ts="1791819002.100000", text="unchanged"),
+            event(text="old root"),
+        ],
+        None,
+    )
+    changed_root = replace(root, text="new root", metadata={"event_type": "new metadata"})
+    changed_reply = replace(reply, text="new reply")
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [unreferenced, reply, same, root])
+    client = FakeSlackSeedClient(world)
+
+    report = seed(
+        world,
+        [changed_root, changed_reply, same, replace(unreferenced, text="also changed")],
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=[same, reply, root],
+    )
+
+    assert reseed_writes(client) == [
+        update_call(changed_root, saved),
+        update_call(changed_reply, saved),
+    ]
+    assert (report.posts, report.updated, report.files, report.channels) == (0, 2, 0, 1)
+
+
+def test_rs3_new_replies_and_roots_mix_with_updates_in_world_order(
+    tmp_path: Path, world: World
+) -> None:
+    sources = [
+        event(ts="1791819003.100000", thread_ts="1791819002.100000", text="new root reply"),
+        event(ts="1791819001.100000", thread_ts="1791819000.100000", text="new reply"),
+        event(text="edited root"),
+        event(ts="1791819002.100000", text="new root"),
+        event(channel="C0ENGEF", ts="1791819001.100000", text="edited EE root"),
+    ]
+    planned = plan_seed(world, sources, None)
+    root, new_reply, ee, new_root, root_reply = planned
+    reference = [replace(ee, text="old EE"), replace(root, text="old ME")]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, reference)
+    client = FakeSlackSeedClient(world)
+
+    report = seed(
+        world,
+        planned,
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=reference,
+    )
+
+    def expected_post(item: Post, thread: str | None) -> dict[str, Any]:
+        return {
+            "method": "post",
+            "channel_id": f"S-{item.world_channel}",
+            "text": item.text,
+            "thread_ts": thread,
+            "username": item.username,
+            "icon_emoji": item.icon_emoji,
+            "metadata": item.metadata,
+        }
+
+    assert reseed_writes(client) == [
+        update_call(root, saved),
+        expected_post(new_reply, saved.messages[root.key].ts),
+        update_call(ee, saved),
+        expected_post(new_root, None),
+        expected_post(root_reply, "1700000000.000002"),
+    ]
+    assert (report.posts, report.updated, report.channels) == (3, 2, 2)
+    after = SeedMap.load(path)
+    assert after is not None
+    assert after.messages[root.key] == saved.messages[root.key]
+    assert after.messages[ee.key] == saved.messages[ee.key]
+    assert_mapped_messages(after, client)
+
+
+def test_rs4_removed_keys_follow_reference_order_and_are_not_deleted(
+    tmp_path: Path, world: World
+) -> None:
+    kept, early, late, never_mapped, map_only = [
+        post(key=f"C0ENGME:179181900{i}.100000") for i in range(5)
+    ]
+    reference = [late, never_mapped, kept, early]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [early, map_only, kept, late])
+    changed = replace(kept, text="edited kept message")
+    client = FakeSlackSeedClient(world)
+
+    report = seed(
+        world,
+        [changed],
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=reference,
+    )
+
+    assert report.removed == (late.key, early.key)
+    assert reseed_writes(client) == [update_call(changed, saved)]
+    assert all("delete" not in call["method"] for call in client.calls)
+    after = SeedMap.load(path)
+    assert after is not None
+    assert after.messages == saved.messages
+
+
+@pytest.mark.parametrize("missing_file", [False, True], ids=["all-mapped", "one-missing"])
+def test_rs5_update_uploads_only_missing_files_into_the_reply_thread(
+    tmp_path: Path, world: World, missing_file: bool
+) -> None:
+    root = post()
+    reply = post(
+        key="C0ENGME:1791819001.100000", root_key=root.key, files=("z-last.pdf", "a-first.xlsx")
+    )
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [reply, root])
+    if missing_file:
+        del saved.files[f"{reply.key}/a-first.xlsx"]
+        write_map(path, saved)
+    changed = replace(reply, text="edited file message")
+    client = FakeSlackSeedClient(world)
+
+    report = seed(
+        world,
+        [root, changed],
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=[reply, root],
+    )
+
+    expected = [update_call(changed, saved)]
+    if missing_file:
+        expected.append(
+            {
+                "method": "upload",
+                "channel_id": saved.messages[reply.key].channel,
+                "thread_ts": saved.messages[root.key].ts,
+                "filename": "a-first.xlsx",
+                "content": placeholder_file("a-first.xlsx"),
+            }
+        )
+    assert reseed_writes(client) == expected
+    assert (report.updated, report.posts, report.files, report.channels) == (
+        1,
+        0,
+        int(missing_file),
+        1,
+    )
+    after = SeedMap.load(path)
+    assert after is not None
+    assert after.messages == saved.messages
+    assert after.files[f"{reply.key}/z-last.pdf"] == saved.files[f"{reply.key}/z-last.pdf"]
+    assert after.files[f"{reply.key}/a-first.xlsx"].permalink == f"{WORKSPACE}/files/a-first.xlsx"
+
+
+@pytest.mark.parametrize("pace", [0, 1.2])
+def test_rs6_updates_share_pacing_with_posts_and_uploads(
+    tmp_path: Path, world: World, pace: float
+) -> None:
+    root = post()
+    reply = post(key="C0ENGME:1791819002.100000", root_key=root.key)
+    added = post(key="C0ENGME:1791819001.100000", root_key=root.key, files=("one.pdf",))
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [reply, root])
+    timeline: list[tuple[str, object]] = []
+    client = FakeSlackSeedClient(world, timeline=timeline)
+    changed_root, changed_reply = replace(root, text="new root"), replace(reply, text="new reply")
+
+    seed(
+        world,
+        [changed_root, added, changed_reply],
+        client,
+        path,
+        pace=pace,
+        sleep=recording_sleep(timeline),
+        dry_run=False,
+        reference=[reply, root],
+    )
+
+    writes = reseed_writes(client)
+    assert writes[0] == update_call(changed_root, saved)
+    assert writes[-1] == update_call(changed_reply, saved)
+    assert writes[1] == {
+        "method": "post",
+        "channel_id": "S-C0ENGME",
+        "text": added.text,
+        "thread_ts": saved.messages[root.key].ts,
+        "username": added.username,
+        "icon_emoji": added.icon_emoji,
+        "metadata": added.metadata,
+    }
+    assert writes[2] == {
+        "method": "upload",
+        "channel_id": "S-C0ENGME",
+        "thread_ts": saved.messages[root.key].ts,
+        "filename": "one.pdf",
+        "content": placeholder_file("one.pdf"),
+    }
+    expected: list[tuple[str, object]] = [("call", "update")]
+    for method in ["post", "upload", "update"]:
+        if pace:
+            expected.append(("sleep", pace))
+        expected.append(("call", method))
+    assert [
+        entry
+        for entry in timeline
+        if entry[0] == "sleep" or entry[1] in {"update", "post", "upload"}
+    ] == expected
+
+
+@pytest.mark.parametrize("failures", [1, 5, 6])
+@pytest.mark.parametrize("target", [1, 2], ids=["first-write", "later-write"])
+def test_rs6_update_retries_the_same_arguments_at_the_retry_limit(
+    tmp_path: Path, world: World, failures: int, target: int
+) -> None:
+    reference = [post(key="C0ENGME:1791819001.100000"), post()]
+    changed = [
+        replace(item, text=f"edited {index}") for index, item in enumerate(reversed(reference))
+    ]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, reference)
+    waits: list[float] = []
+    client = FakeSlackSeedClient(
+        world,
+        failures={
+            ("update", target + offset): RateLimited(offset + 3) for offset in range(failures)
+        },
+    )
+
+    if failures == 6:
+        with pytest.raises(RateLimited):
+            seed(
+                world,
+                changed,
+                client,
+                path,
+                pace=1.2,
+                sleep=waits.append,
+                dry_run=False,
+                reference=reference,
+            )
+    else:
+        report = seed(
+            world,
+            changed,
+            client,
+            path,
+            pace=1.2,
+            sleep=waits.append,
+            dry_run=False,
+            reference=reference,
+        )
+        assert report.updated == 2
+    assert [wait for wait in waits if wait != 1.2] == [
+        float(offset + 3) for offset in range(min(failures, 5))
+    ]
+    assert waits.count(1.2) == (min(failures + 1, 6) if target == 2 else int(failures < 6))
+    if target == 2:
+        assert waits[0] == 1.2
+    else:
+        assert waits[0] == 3
+    expected = [update_call(item, saved) for item in changed[: target - 1]]
+    expected += [update_call(changed[target - 1], saved)] * min(failures + 1, 6)
+    if failures < 6:
+        expected += [update_call(item, saved) for item in changed[target:]]
+    assert reseed_writes(client) == expected
+    after = SeedMap.load(path)
+    assert after is not None
+    assert after.complete is (failures < 6)
+    assert after.messages == saved.messages
+
+
+@pytest.mark.parametrize("loaded_complete", [False, True])
+def test_rs7_update_only_marks_map_incomplete_then_complete_without_checkpoints(
+    tmp_path: Path,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    loaded_complete: bool,
+) -> None:
+    root, other = post(), post(key="C0ENGME:1791819001.100000", files=("mapped.pdf",))
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [other, root])
+    saved.complete = loaded_complete
+    write_map(path, saved)
+    snapshots: list[SeedMap] = []
+    save = SeedMap.save
+
+    def record_save(value: SeedMap, target: Path) -> None:
+        snapshots.append(value.model_copy(deep=True))
+        save(value, target)
+
+    def before_update(method: str, attempt: int) -> None:
+        if method == "update":
+            current = SeedMap.load(path)
+            assert current is not None and current.complete is False
+            assert current.messages == saved.messages and current.files == saved.files
+            assert len(snapshots) == 1
+
+    monkeypatch.setattr(SeedMap, "save", record_save)
+    client = FakeSlackSeedClient(world, before_call=before_update)
+    changed = [replace(root, text="new root"), replace(other, text="new other")]
+
+    report = seed(
+        world,
+        changed,
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=[other, root],
+    )
+
+    assert reseed_writes(client) == [update_call(item, saved) for item in changed]
+    assert report.updated == 2 and report.complete is True
+    assert [value.complete for value in snapshots] == [False, True]
+    assert all(
+        value.messages == saved.messages and value.files == saved.files for value in snapshots
+    )
+    assert (RESUME_LIMIT in capsys.readouterr().out) is (not loaded_complete)
+
+
+def test_rs7_stopped_update_is_repeated_on_resume_against_the_reference(
+    tmp_path: Path, world: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    first, second = post(), post(key="C0ENGME:1791819001.100000")
+    reference = [second, first]
+    changed = [replace(first, text="new first"), replace(second, text="new second")]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, reference)
+    stopped = FakeSlackSeedClient(world, failures={("update", 2): RuntimeError("update stopped")})
+
+    with pytest.raises(RuntimeError, match="update stopped"):
+        seed(
+            world,
+            changed,
+            stopped,
+            path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+            reference=reference,
+        )
+
+    assert reseed_writes(stopped) == [update_call(item, saved) for item in changed]
+    after = SeedMap.load(path)
+    assert after is not None and after.complete is False
+    assert after.messages == saved.messages and after.files == saved.files
+    assert RESUME_LIMIT not in capsys.readouterr().out
+    resumed = FakeSlackSeedClient(world)
+    report = seed(
+        world,
+        changed,
+        resumed,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=reference,
+    )
+    assert reseed_writes(resumed) == [update_call(item, saved) for item in changed]
+    assert report.updated == 2 and report.complete is True
+    assert RESUME_LIMIT in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("placement", ["world_channel", "root_key"])
+@pytest.mark.parametrize("changed_text", [False, True])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_rs7a_placement_check_precedes_all_writes_even_for_unchanged_text(
+    tmp_path: Path, world: World, placement: str, changed_text: bool, mapped: bool
+) -> None:
+    first = post()
+    later = post(key="C0ENGME:1791819001.100000")
+    reference = [later, first]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, reference)
+    if not mapped:
+        del saved.messages[later.key]
+        write_map(path, saved)
+    changed = replace(first, text="first update")
+    candidate = replace(later, text="later update") if changed_text else later
+    wrong = replace(
+        candidate, **{placement: "C0ENGEF" if placement == "world_channel" else first.key}
+    )
+    available = [
+        replace(channel, is_member=False) if channel.name == "eng-mech" else channel
+        for channel in slack_channels(world)
+    ]
+    blocked = FakeSlackSeedClient(world, channels=available)
+    before = path.read_bytes()
+
+    with pytest.raises(SeedBlocked, match=re.escape(later.key)):
+        seed(
+            world,
+            [changed, wrong],
+            blocked,
+            path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+            reference=reference,
+        )
+
+    assert reseed_writes(blocked) == []
+    assert path.read_bytes() == before
+    allowed = FakeSlackSeedClient(world, channels=available)
+    seed(
+        world,
+        [changed, candidate],
+        allowed,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=reference,
+    )
+    expected = [{"method": "join", "channel_id": "S-C0ENGME"}, update_call(changed, saved)]
+    if not mapped:
+        expected.append(
+            {
+                "method": "post",
+                "channel_id": "S-C0ENGME",
+                "text": candidate.text,
+                "thread_ts": None,
+                "username": candidate.username,
+                "icon_emoji": candidate.icon_emoji,
+                "metadata": candidate.metadata,
+            }
+        )
+    elif changed_text:
+        expected.append(update_call(candidate, saved))
+    assert reseed_writes(allowed) == expected
+
+
+@pytest.mark.parametrize("mapped_reply", [False, True])
+def test_rs7a_reference_root_does_not_satisfy_a_later_missing_root(
+    tmp_path: Path, world: World, mapped_reply: bool
+) -> None:
+    first = post()
+    root = post(key="C0ENGME:1791819001.100000")
+    reply = post(key="C0ENGME:1791819002.100000", root_key=root.key)
+    reference = [reply, root, first]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, reference)
+    del saved.messages[root.key]
+    if not mapped_reply:
+        del saved.messages[reply.key]
+    write_map(path, saved)
+    changed = replace(first, text="first update")
+    changed_reply = replace(reply, text="reply update")
+    blocked = FakeSlackSeedClient(world)
+    before = path.read_bytes()
+
+    with pytest.raises(SeedBlocked, match=re.escape(reply.key)):
+        seed(
+            world,
+            [changed, changed_reply],
+            blocked,
+            path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+            reference=reference,
+        )
+
+    assert reseed_writes(blocked) == []
+    assert path.read_bytes() == before
+    allowed = FakeSlackSeedClient(world)
+    report = seed(
+        world,
+        [changed, root, changed_reply],
+        allowed,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=reference,
+    )
+    writes = reseed_writes(allowed)
+    assert writes[0] == update_call(changed, saved)
+    assert writes[1] == {
+        "method": "post",
+        "channel_id": "S-C0ENGME",
+        "text": root.text,
+        "thread_ts": None,
+        "username": root.username,
+        "icon_emoji": root.icon_emoji,
+        "metadata": root.metadata,
+    }
+    if mapped_reply:
+        assert writes[2] == update_call(changed_reply, saved)
+    else:
+        assert writes[2] == {
+            "method": "post",
+            "channel_id": "S-C0ENGME",
+            "text": changed_reply.text,
+            "thread_ts": "1700000000.000001",
+            "username": reply.username,
+            "icon_emoji": reply.icon_emoji,
+            "metadata": reply.metadata,
+        }
+    assert len(writes) == 3
+    assert report.updated == 1 + int(mapped_reply)
+
+
+@pytest.mark.parametrize(
+    "guard", ["channel", "scope", "files-scope", "team", "world", "channel-id"]
+)
+def test_rs7a_checks_mapped_posts_before_the_first_update(
+    tmp_path: Path, world: World, guard: str
+) -> None:
+    original = post(files=("already-mapped.pdf",))
+    changed = replace(original, text="edited")
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [original])
+    available = slack_channels(world)
+    scopes = ALL_SCOPES
+    team = "T-SEED"
+    if guard == "channel":
+        available = [channel for channel in available if channel.name != "eng-mech"]
+    elif guard == "scope":
+        scopes -= {"chat:write.customize"}
+    elif guard == "files-scope":
+        scopes -= {"files:write"}
+    elif guard == "team":
+        team = "T-OTHER"
+    elif guard == "world":
+        saved.world = "another-world"
+        write_map(path, saved)
+    else:
+        available = [
+            replace(channel, id="S-NEW") if channel.name == "eng-mech" else channel
+            for channel in available
+        ]
+    client = FakeSlackSeedClient(world, channels=available, scopes=scopes, team_id=team)
+    before = path.read_bytes()
+
+    with pytest.raises(SeedBlocked):
+        seed(
+            world,
+            [changed],
+            client,
+            path,
+            pace=0,
+            sleep=lambda _: None,
+            dry_run=False,
+            reference=[original],
+        )
+
+    assert reseed_writes(client) == []
+    assert path.read_bytes() == before
+    saved.world = world.name
+    write_map(path, saved)
+    allowed = FakeSlackSeedClient(world)
+    report = seed(
+        world,
+        [changed],
+        allowed,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=[original],
+    )
+    assert reseed_writes(allowed) == [update_call(changed, saved)]
+    assert report.updated == 1
+
+
+def test_rs7a_reference_only_channels_do_not_select_channels(tmp_path: Path, world: World) -> None:
+    kept = post()
+    removed = post(key="C0ENGEF:1791819001.100000", world_channel="C0ENGEF")
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [removed, kept])
+    changed = replace(kept, text="edited")
+    available = [channel for channel in slack_channels(world) if channel.id != "S-C0ENGEF"]
+    client = FakeSlackSeedClient(world, channels=available)
+
+    report = seed(
+        world,
+        [changed],
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=[removed, kept],
+    )
+
+    assert reseed_writes(client) == [update_call(changed, saved)]
+    assert report.updated == 1 and report.removed == (removed.key,)
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_rs8_dry_run_prints_updates_and_removals_before_blockers_without_writes(
+    tmp_path: Path, world: World, capsys: pytest.CaptureFixture[str], blocked: bool
+) -> None:
+    kept, early, late = [post(key=f"C0ENGME:179181900{i}.100000") for i in range(3)]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [early, kept, late])
+    changed = replace(kept, text="edited")
+    added = post(key="C0ENGME:1791819003.100000")
+    scopes = ALL_SCOPES - {"chat:write.customize"} if blocked else ALL_SCOPES
+    client = FakeSlackSeedClient(world, scopes=scopes)
+    before = path.read_bytes()
+
+    report = seed(
+        world,
+        [changed, added],
+        client,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=True,
+        reference=[late, kept, early],
+    )
+
+    expected = [
+        "eng-mech: 1 posts, 0 files",
+        "updates: 1",
+        f"removed: {late.key}",
+        f"removed: {early.key}",
+    ]
+    if blocked:
+        expected.append("missing scope: chat:write.customize")
+    assert capsys.readouterr().out.splitlines() == expected
+    assert reseed_writes(client) == [] and path.read_bytes() == before
+    assert (report.posts, report.updated, report.files, report.channels) == (0, 0, 0, 0)
+    assert report.complete is (not blocked)
+    allowed = FakeSlackSeedClient(world)
+    seed(
+        world,
+        [changed],
+        allowed,
+        path,
+        pace=0,
+        sleep=lambda _: None,
+        dry_run=False,
+        reference=[late, kept, early],
+    )
+    assert reseed_writes(allowed) == [update_call(changed, saved)]
+
+
+@pytest.mark.parametrize("empty_reference", [False, True], ids=["none", "empty"])
+def test_rs8_empty_reference_selects_new_summary_and_skips_mapped_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World, empty_reference: bool
+) -> None:
+    original_event = event().model_copy(
+        update={"reactions": (Reaction(name="eyes", user_id="U0EE01", ts="1791819001.100000"),)}
+    )
+    edited_event = original_event.model_copy(update={"text": "edited"})
+    original = plan_seed(world, [original_event], None)[0]
+    changed = plan_seed(world, [edited_event], None)[0]
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, [original])
+    client = FakeSlackSeedClient(world)
+    prepare_cli(monkeypatch, client)
+    destination = tmp_path / "data" / "world" / "kestrel"
+    shutil.copytree(ROOT / "data" / "world" / "kestrel", destination)
+    (destination / "events.jsonl").write_text(
+        edited_event.model_dump_json() + "\n", encoding="utf-8"
+    )
+    reference_path = tmp_path / "reference.jsonl"
+    reference_path.write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = ["seed", "--world", "kestrel", "--map", str(path), "--pace", "0"]
+    if empty_reference:
+        args.extend(["--reference", str(reference_path)])
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    counts = "0 posts, 0 updates and 0 files" if empty_reference else "0 posts and 0 files"
+    assert result.output.splitlines() == [
+        f"seeded {counts} in 0 channels; 1 reactions not seeded; map {path}"
+    ]
+    assert reseed_writes(client) == []
+    reference_path.write_text(original_event.model_dump_json() + "\n", encoding="utf-8")
+    compared = FakeSlackSeedClient(world)
+    prepare_cli(monkeypatch, compared)
+    monkeypatch.chdir(tmp_path)
+    positive = runner.invoke(
+        app,
+        [
+            "seed",
+            "--world",
+            "kestrel",
+            "--map",
+            str(path),
+            "--reference",
+            str(reference_path),
+            "--pace",
+            "0",
+        ],
+    )
+    assert positive.exit_code == 0, positive.output
+    assert reseed_writes(compared) == [update_call(changed, saved)]
+    assert positive.output.splitlines()[-1] == (
+        f"seeded 0 posts, 1 updates and 0 files in 1 channels; 1 reactions not seeded; map {path}"
+    )
+
+
+class UpdateWebClient:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.error = error
+
+    def chat_update(self, **kwargs: Any) -> SlackResponse:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return slack_response(data={"ok": True, "ts": "1700000000.000700"})
+
+
+@pytest.mark.parametrize("rate_limited", [False, True])
+def test_rs9_adapter_update_sends_exact_arguments_and_maps_429(rate_limited: bool) -> None:
+    response = slack_response(
+        data={"ok": False, "error": "ratelimited"}, status=429, headers={"Retry-After": "7"}
+    )
+    web = UpdateWebClient(SlackApiError("rate limited", response) if rate_limited else None)
+    adapter = SlackWebSeedClient(web)
+    metadata = {"event_type": "downstream_world_event", "event_payload": {"world": "kestrel"}}
+
+    if rate_limited:
+        with pytest.raises(RateLimited) as caught:
+            adapter.update("S-C0ENGME", "1700000000.000700", "edited", metadata=metadata)
+        assert caught.value.retry_after == 7
+    else:
+        assert adapter.update("S-C0ENGME", "1700000000.000700", "edited", metadata=metadata) is None
+    assert web.calls == [
+        {"channel": "S-C0ENGME", "ts": "1700000000.000700", "text": "edited", "metadata": metadata}
+    ]
+
+
+@pytest.mark.parametrize("mode", ["both", "events-only", "reference-only"])
+def test_rs9_cli_reads_selected_corpora_and_applies_until_day_to_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, world: World, mode: str
+) -> None:
+    root_ts = timestamp_at(world, 1, time(23, 30))
+    reply_ts = timestamp_at(world, 1, time(23, 31))
+    removed_ts = timestamp_at(world, 1, time(23, 32))
+    second_removed_ts = timestamp_at(world, 1, time(23, 33))
+    later_ts = timestamp_at(world, 2, time(0, 30))
+    root = event(ts=root_ts, text="old <@U0ME01>")
+    removed = event(ts=removed_ts, text="removed")
+    later = event(ts=later_ts, text="old day two")
+    second_removed = event(ts=second_removed_ts, text="also removed")
+    reference_events = [second_removed, later, root, removed]
+    edited_events = [
+        later.model_copy(update={"text": "new day two"}),
+        event(ts=reply_ts, thread_ts=root_ts, text="new reply"),
+        root.model_copy(update={"text": "new <@U0ME01>"}),
+    ]
+    client = FakeSlackSeedClient(world)
+    prepare_cli(monkeypatch, client)
+    destination = tmp_path / "data" / "world" / "kestrel"
+    shutil.copytree(ROOT / "data" / "world" / "kestrel", destination)
+    reference_path, edited_path = tmp_path / "reference.jsonl", tmp_path / "edited.jsonl"
+    reference_path.write_text(
+        "".join(item.model_dump_json() + "\n" for item in reference_events), encoding="utf-8"
+    )
+    edited_path.write_text(
+        "".join(item.model_dump_json() + "\n" for item in edited_events), encoding="utf-8"
+    )
+    (destination / "events.jsonl").write_text(
+        edited_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "seed.json"
+    saved = reseed_map(path, world, plan_seed(world, reference_events, None))
+    args = ["seed", "--world", "kestrel", "--map", str(path), "--until-day", "1", "--pace", "0"]
+    if mode != "reference-only":
+        args.extend(["--events", str(edited_path)])
+        # The explicit corpus must win over the world's default file.
+        (destination / "events.jsonl").write_text(root.model_dump_json() + "\n", encoding="utf-8")
+    if mode != "events-only":
+        args.extend(["--reference", str(reference_path)])
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    changed_root, added = plan_seed(world, edited_events, 1)
+    expected = [] if mode == "events-only" else [update_call(changed_root, saved)]
+    expected.append(
+        {
+            "method": "post",
+            "channel_id": saved.messages[changed_root.key].channel,
+            "text": "new reply",
+            "thread_ts": saved.messages[changed_root.key].ts,
+            "username": added.username,
+            "icon_emoji": added.icon_emoji,
+            "metadata": added.metadata,
+        }
+    )
+    assert reseed_writes(client) == expected
+    counts = "1 posts and 0 files" if mode == "events-only" else "1 posts, 1 updates and 0 files"
+    suffix = [f"seeded {counts} in 1 channels; 0 reactions not seeded; map {path}"]
+    if mode != "events-only":
+        suffix.extend(
+            [
+                f"not deleted: {second_removed.channel_id}:{second_removed.ts}",
+                f"not deleted: {removed.channel_id}:{removed.ts}",
+            ]
+        )
+    assert result.output.splitlines()[-len(suffix) :] == suffix
+    after = SeedMap.load(path)
+    assert (
+        after is not None
+        and after.messages[f"{later.channel_id}:{later.ts}"]
+        == saved.messages[f"{later.channel_id}:{later.ts}"]
+    )
