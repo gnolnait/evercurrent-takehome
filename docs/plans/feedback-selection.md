@@ -1,7 +1,7 @@
 # Plan: selection reads the feedback log
 
-Status: v0.2, 2026-10-14. Process stage 1 (`docs/process.md`), full process. v0.2 folds
-in the advisor review and an independent Codex plan review. Depends on the interactive
+Status: v0.3, 2026-10-14. Process stage 1 (`docs/process.md`), full process. v0.2 folds
+in the advisor review and an independent Codex plan review; v0.3 reads a feedback store only when the caller names it. Depends on the interactive
 slice of `docs/plans/m5-bot.md` (branch `m5-bot-plan`), which builds `digest.feedback`
 and the feedback store. Tests start after that slice merges.
 
@@ -37,10 +37,12 @@ it. It writes nothing: the items table and the log stay as they are (D26).
 - `select_digest(..., *, previous_digest=None, feedback=None)`: `None` means an empty
   state. `select(..., recent_messages, feedback: FeedbackState)`: a new required
   parameter.
-- Callers: `digest post` and `digest demo` read the feedback store when the file exists
-  (`--feedback-db PATH`, default `.digest/feedback.sqlite`), and use an empty state when it
-  does not. `digest run`, `digest diff`, the demo room, the web page and the eval pass no
-  feedback: they show the recorded world.
+- Callers: a feedback store is read only when the caller names it, never because a file
+  exists, so real clicks from a live bot check cannot change a replay. `digest post`
+  reads its `--db` when `--db` is given or `--interactive` is on, the same condition under
+  which it writes the store (`docs/plans/m5-exposure.md`). `digest demo` reads one only
+  with `--feedback-db PATH`. `digest run`, `digest diff`, `digest serve`, the web page and
+  the eval pass no feedback: they show the recorded world.
 - Precondition, stated in the docstrings: the state passed for a reader was built for that
   reader and day.
 
