@@ -158,6 +158,10 @@ In order. Each item names its trigger. Measured numbers are from
     list, so the change re-renders the corpus. Trigger: the next re-render.
 14. Bounded delay for a real-time alert tier: hold an urgent line for a short window
     instead of an instant interruption. Trigger: a real-time tier.
+15. Configured bands for the relevance levels. `personal_relevance` still uses the
+    constants 1.0, 0.8 and 0.4 in code; SPEC section 5 step 6 asks for a band per term in
+    `config/priors.yaml`. Only the recent-activity value is configured
+    (`docs/plans/recent-activity.md`). Trigger: the ablation table.
 
 ## Interaction (D27), after the 2026-10-14 interview
 

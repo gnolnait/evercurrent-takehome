@@ -78,7 +78,9 @@ workspace `kestrel-k2.slack.com`, which does not exist.
   received that has no reply.
 - Other lines are ranked by importance (type and severity) times the role's interest in
   the item type times personal relevance (1.0 for an owned entity, 0.8 for the reader's
-  role, else 0.4). A line needs a score of at least 0.15, and each section shows at most
+  role, else 0.4). An item at 0.4 that shares an entity with the threads the reader wrote
+  in during the last three working days gets 0.8, so the digest follows what the reader
+  works on now; the line's reason names the shared entities. A line needs a score of at least 0.15, and each section shows at most
   5 ranked lines. Not happened holds only absences, which are must-see for the readers
   they name and are not ranked.
 
