@@ -15,7 +15,6 @@ import digest.cli as cli
 from digest.daily.profile import Profile
 from digest.daily.render import context_lines, render_digest, select_digest
 from digest.daily.select import Line, Section, Selection
-from digest.daily.slack import slack_digest
 from digest.models import AbsenceDetail, Evidence, Item, Role
 from digest.project import ChecklistTask, Gate, PhaseWindow, ProjectConfig
 from digest.seed import MappedFile, MappedMessage, SeedMap
@@ -232,7 +231,10 @@ def test_top_block_order_and_context(
     selected = chosen(profile, *((row(),) if has_item else ()), hidden=hidden)
     messages = build_digest(world, selected)
     expected = [
-        {"type": "header", "text": {"type": "plain_text", "text": "Kestrel K2 · Mon 19 Oct"}},
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Kestrel K2 · Mon 19 Oct · Nadia (ME)"},
+        },
         context("\n".join(context_lines(world, selected))),
         section("*1 to read first*. 1 of 1 are new." if has_item else "Nothing new for you."),
     ]
@@ -1294,7 +1296,7 @@ def expected_calls(world: World, selections: list[Selection], *, dm: bool) -> li
     calls: list[dict[str, Any]] = [{"method": "conversations_open", "users": "U111"}] if dm else []
     number = 0
     for selected in selections:
-        messages = build_digest(world, selected, threaded=dm, reader_in_header=True)
+        messages = build_digest(world, selected, threaded=dm)
         number += 1
         calls.append(
             {
@@ -1574,35 +1576,28 @@ def test_ask_fold_only_moves_risk_to_an_earlier_section(
         assert rendered[0][1].startswith("*Asked of you*")
 
 
-@pytest.mark.parametrize("reader_in_header", [None, False, True])
 @pytest.mark.parametrize("long_program", [False, True])
 @pytest.mark.parametrize(
     "role, suffix", [("ME", "Nadia (ME)"), ("supply_chain", "Nadia (supply chain)")]
 )
-def test_header_reader_option_and_150_character_limit(
+def test_header_names_reader_and_keeps_150_character_limit(
     world: World,
     profile: Profile,
-    reader_in_header: bool | None,
     long_program: bool,
     role: Role,
     suffix: str,
 ) -> None:
-    """A24: the reader is optional. A long program still has a cut header."""
+    """A24: name the reader and cut a long header to 150 characters."""
     program = "Kestrel " * 30 if long_program else "Kestrel K2"
     world = world.model_copy(update={"program": program})
     profile = profile.model_copy(update={"role": role})
-    options: dict[str, Any] = (
-        {} if reader_in_header is None else {"reader_in_header": reader_in_header}
-    )
-    messages = slack_digest(world, chosen(profile, row()), links=None, authors={}, **options)
-    for index, message in enumerate(messages):
-        check_message(message, None, top=index == 0)
+    messages = build_digest(world, chosen(profile, row()))
     header = messages[0]["blocks"][0]["text"]["text"]
     if long_program:
         assert len(header) <= 150
         assert header.endswith("…")
     else:
-        assert header == "Kestrel K2 · Mon 19 Oct" + (f" · {suffix}" if reader_in_header else "")
+        assert header == f"Kestrel K2 · Mon 19 Oct · {suffix}"
 
 
 @pytest.mark.parametrize("dm", [False, True])

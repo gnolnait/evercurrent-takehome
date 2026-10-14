@@ -21,7 +21,6 @@ from digest.seed import (
     MappedMessage,
     SeedMap,
     channel_of,
-    files_of,
     message_permalink,
 )
 from digest.world.load import load_world
@@ -256,7 +255,7 @@ def test_mapped_root_reply_files_and_one_channel_render_in_source_order(
     assert "prefix.pdf" not in text
 
 
-def test_mapped_sources_in_two_channels_render_channels_in_source_order_without_files(
+def test_mapped_sources_in_two_channels_render_first_thread_without_second_channel_or_files(
     world: World, profile: Profile
 ) -> None:
     sources = (
@@ -397,27 +396,6 @@ def test_channel_of_returns_mapped_channel_or_none() -> None:
     assert channel_of(links, "C0ENGME:absent") is None
 
 
-def test_files_of_keeps_map_order_and_isolates_message_prefix() -> None:
-    links = seed_map(
-        files={
-            "C0ENGME:root/z-last.pdf": MappedFile(permalink="https://seed-test.slack.com/files/z"),
-            "C0ENGME:root/a-first.pdf": MappedFile(permalink="https://seed-test.slack.com/files/a"),
-            "C0ENGME:rootish/not-a-child.pdf": MappedFile(
-                permalink="https://seed-test.slack.com/files/no"
-            ),
-            "C0KPROG:root/unrelated.pdf": MappedFile(
-                permalink="https://seed-test.slack.com/files/unrelated"
-            ),
-        }
-    )
-
-    assert files_of(links, "C0ENGME:root") == [
-        ("z-last.pdf", "https://seed-test.slack.com/files/z"),
-        ("a-first.pdf", "https://seed-test.slack.com/files/a"),
-    ]
-    assert files_of(links, "C0ENGME:absent") == []
-
-
 def test_cli_without_seed_map_does_not_authenticate(
     monkeypatch: pytest.MonkeyPatch,
     world: World,
@@ -439,7 +417,7 @@ def test_cli_without_seed_map_does_not_authenticate(
         "chat_postMessage",
         "chat_postMessage",
     ]
-    assert dm_payloads(client) == [build_digest(world, selected, reader_in_header=True)[0]] * 3
+    assert dm_payloads(client) == [build_digest(world, selected)[0]] * 3
     assert webhook.calls == []
 
 
@@ -667,7 +645,7 @@ def test_cli_dm_with_matching_team_sends_three_mapped_payloads_in_order(
     assert dm_payloads(client) == [
         message
         for selected in selections
-        for message in build_digest(world, selected, links=loaded, reader_in_header=True)
+        for message in build_digest(world, selected, links=loaded)
     ]
     delivered = block_text(dm_payloads(client)[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
@@ -736,9 +714,7 @@ def test_cli_counts_every_unmapped_occurrence_before_the_block_cut_and_send(
     assert webhook.calls == [
         message
         for selected in selections
-        for message in build_digest(
-            world, selected, links=loaded, threaded=False, reader_in_header=True
-        )
+        for message in build_digest(world, selected, links=loaded, threaded=False)
     ]
     delivered = block_text(webhook.calls[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
@@ -835,11 +811,7 @@ def test_cli_prints_no_unmapped_count_when_every_source_is_mapped(
 
     assert result.exit_code == 0, result.output
     assert "source links are not in the seed map" not in result.output
-    assert (
-        webhook.calls
-        == [build_digest(world, selected, links=loaded, threaded=False, reader_in_header=True)[0]]
-        * 3
-    )
+    assert webhook.calls == [build_digest(world, selected, links=loaded, threaded=False)[0]] * 3
     delivered = block_text(webhook.calls[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
     assert "https://ws.slack.com/files/U1/F9/drawing.step" in delivered
@@ -847,15 +819,23 @@ def test_cli_prints_no_unmapped_count_when_every_source_is_mapped(
 
 
 @pytest.mark.parametrize(
-    "field, nested",
+    "field, nested, bad",
     [
-        ("team_id", None),
-        ("workspace_url", None),
-        ("channels", None),
-        ("messages", "channel"),
-        ("messages", "ts"),
-        ("messages", "thread_ts"),
-        ("files", "permalink"),
+        ("team_id", None, "<!here>unsafe>"),
+        ("team_id", None, "T123ABC><!here>"),
+        ("workspace_url", None, "<!here>unsafe>"),
+        ("workspace_url", None, "https://scratch.slack.com><!here>"),
+        ("channels", None, "<!here>unsafe>"),
+        ("channels", None, "C123ABC><!here>"),
+        ("messages", "channel", "<!here>unsafe>"),
+        ("messages", "channel", "C123ABC><!here>"),
+        ("messages", "ts", "<!here>unsafe>"),
+        ("messages", "ts", "1761000000.000001><!here>"),
+        ("messages", "thread_ts", "<!here>unsafe>"),
+        ("messages", "thread_ts", "1761000000.000001><!here>"),
+        ("files", "permalink", "<!here>unsafe>"),
+        ("files", "permalink", "https://scratch.slack.com/files/U1/F1/drawing.pdf><!here>"),
+        ("files", "permalink", "https://other.slack.com/files/U1/F1/a.pdf"),
     ],
 )
 @pytest.mark.parametrize("delivery", ["webhook", "dm"])
@@ -866,6 +846,7 @@ def test_cli_seed_map_rejects_values_that_can_inject_slack_tokens(
     profile: Profile,
     field: str,
     nested: str | None,
+    bad: str,
     delivery: str,
 ) -> None:
     """A25: reject each unsafe field before Slack sees a call."""
@@ -887,7 +868,6 @@ def test_cli_seed_map_rejects_values_that_can_inject_slack_tokens(
             }
         },
     }
-    bad = "<!here>unsafe>"
     if nested is not None:
         entry = next(iter(content[field].values()))
         entry[nested] = bad

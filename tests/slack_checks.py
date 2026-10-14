@@ -48,7 +48,6 @@ def build_digest(
     links: SeedMap | None = None,
     authors: dict[str, str] | None = None,
     threaded: bool = True,
-    reader_in_header: bool = False,
 ) -> list[dict[str, Any]]:
     messages = slack_digest(
         world,
@@ -56,7 +55,6 @@ def build_digest(
         links=links,
         authors=authors or {},
         threaded=threaded,
-        reader_in_header=reader_in_header,
     )
     assert 1 <= len(messages) <= 2
     for index, message in enumerate(messages):

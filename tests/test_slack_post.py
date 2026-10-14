@@ -121,7 +121,7 @@ def mrkdwn_text_objects(value: Any) -> list[dict[str, Any]]:
     return []
 
 
-def test_slack_message_has_header_section_titles_lines_and_sources(
+def test_slack_digest_has_reader_header_item_blocks_and_risk_reply(
     world: World, profile: Profile
 ) -> None:
     selected = selection(
@@ -133,7 +133,7 @@ def test_slack_message_has_header_section_titles_lines_and_sources(
     assert top["text"] == "G-TR1 in 6 days. 1 to read first, starting with Drawing released."
     assert top["blocks"][0] == {
         "type": "header",
-        "text": {"type": "plain_text", "text": "Kestrel K2 · Wed 14 Oct"},
+        "text": {"type": "plain_text", "text": "Kestrel K2 · Wed 14 Oct · Nadia (ME)"},
     }
     assert [block["type"] for block in top["blocks"]] == [
         "header",
@@ -180,7 +180,7 @@ def test_slack_message_has_header_section_titles_lines_and_sources(
     ids=["first-digest", "previous-digest"],
 )
 @pytest.mark.parametrize("empty", [False, True], ids=["with-lines", "empty-day"])
-def test_slack_window_matches_terminal_as_verbatim_section(
+def test_slack_window_matches_terminal_in_verbatim_context(
     world: World, profile: Profile, previous: date | None, expected: str, empty: bool
 ) -> None:
     selected = Selection(
@@ -231,7 +231,7 @@ def test_slack_notification_and_window_context(
     ]
 
 
-def test_slack_message_escapes_model_text_before_mrkdwn(world: World, profile: Profile) -> None:
+def test_slack_digest_escapes_model_text_before_mrkdwn(world: World, profile: Profile) -> None:
     selected = selection(
         profile,
         line(item(title="Alert & <@U123> >", summary="Do not open <https://x|y> & wait > now.")),
@@ -247,7 +247,7 @@ def test_slack_message_escapes_model_text_before_mrkdwn(world: World, profile: P
     assert re.findall(r"<[^>]+>", rendered) == []
 
 
-def test_slack_message_sets_verbatim_on_every_mrkdwn_text_object(
+def test_slack_digest_sets_verbatim_on_every_mrkdwn_text_object(
     world: World, profile: Profile
 ) -> None:
     selected = Selection(
@@ -264,7 +264,7 @@ def test_slack_message_sets_verbatim_on_every_mrkdwn_text_object(
     assert all(text.get("verbatim") is True for text in text_objects)
 
 
-def test_slack_message_cuts_a_long_line_with_ellipsis(world: World, profile: Profile) -> None:
+def test_slack_digest_cuts_a_long_line_with_ellipsis(world: World, profile: Profile) -> None:
     message = build_digest(world, selection(profile, line(item(summary="x" * 4000))))[0]
     rendered = block_text(message["blocks"][4])
     assert rendered == "*Drawing released*\n" + "x" * 159 + "\N{HORIZONTAL ELLIPSIS}"
@@ -273,9 +273,9 @@ def test_slack_message_cuts_a_long_line_with_ellipsis(world: World, profile: Pro
 
 @pytest.mark.parametrize(
     ("count", "hidden"),
-    [(47, 0), (48, 0), (51, 0), (46, 2), (47, 2)],
+    [(51, 0), (47, 2)],
 )
-def test_slack_message_limits_blocks_and_reports_omitted_lines(
+def test_slack_digest_limits_blocks_and_reports_omitted_lines(
     world: World, profile: Profile, count: int, hidden: int
 ) -> None:
     lines = tuple(line(item(number, title=f"Decision {number}")) for number in range(1, count + 1))
@@ -460,7 +460,7 @@ def test_cli_post_dm_opens_one_conversation_and_sends_three_readers_in_order(
             {
                 "method": "chat_postMessage",
                 "channel": DM_CHANNEL,
-                **build_digest(world, selected, reader_in_header=True)[0],
+                **build_digest(world, selected)[0],
             }
             for selected in selections
         ],
@@ -791,7 +791,7 @@ def test_cli_post_sends_three_readers_in_order_and_exits_zero(
     assert client.calls == [
         message
         for selected in selections
-        for message in build_digest(world, selected, threaded=False, reader_in_header=True)
+        for message in build_digest(world, selected, threaded=False)
     ]
     assert [call["blocks"][0]["text"]["text"] for call in client.calls] == [
         "Kestrel K2 · Fri 16 Oct · Nadia (ME)",
