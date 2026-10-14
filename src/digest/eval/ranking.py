@@ -57,7 +57,7 @@ _DayValues = tuple[float | None, float | None, float | None, float | None]
 # Item ids of the overall top 5 and of the ranked-lane top 5.
 _Top5 = tuple[tuple[str, ...], tuple[str, ...]]
 # The facts an item can deliver, in golden order.
-_Candidates = Callable[[Item], list[_FactKey]]
+_Candidates = Callable[[Item], Sequence[_FactKey]]
 
 
 class RankingRefused(ValueError):
