@@ -531,7 +531,7 @@ def test_extract_does_not_retry_status_error(
     llm_request: LLMRequest,
     response: LLMResponse,
 ) -> None:
-    """Setup a transport error / Action extract / Assert no retry or cassette write."""
+    """Setup a status error / Action extract / Assert no retry or cassette write."""
     sent = llm_request.model_copy(update={"output_schema": Item.model_json_schema()})
     error = LLMOutputError("openrouter status 503", raw="body")
     backend = RaisingBackend(error, response)
@@ -565,6 +565,7 @@ def test_openrouter_request_error_becomes_safe_refusal(
         with caplog.at_level(logging.INFO), pytest.raises(LLMOutputError) as caught:
             backend.complete(llm_request)
 
+    assert type(caught.value) is LLMOutputError
     assert str(caught.value) == f"openrouter unreachable: {error_class.__name__}"
     assert caught.value.raw == ""
     assert caught.value.__suppress_context__ is True
@@ -607,6 +608,7 @@ def test_openrouter_non_json_reply_becomes_refusal(
         backend = OpenRouterBackend("sk-test-SENTINEL-KEY", models, client=client)
         with pytest.raises(LLMOutputError) as caught:
             backend.complete(llm_request)
+    assert type(caught.value) is LLMOutputError
     assert str(caught.value) == "openrouter reply is not JSON"
     assert caught.value.raw == "not json"
 

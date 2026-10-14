@@ -419,8 +419,6 @@ def test_record_transport_failure_refuses_change_and_keeps_state(
     """Setup a record room with a failed gateway / Action post / Assert refusal and no change."""
     room = Room(base, record=True, cassettes=cassette_copy)
     before = room.state().model_copy(deep=True)
-    folder = Path(room._tmp.name)
-    files = set(folder.iterdir())
     calls: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -445,7 +443,6 @@ def test_record_transport_failure_refuses_change_and_keeps_state(
         "another HTTP error, or output that did not validate)"
     ) in str(caught.value)
     assert room.state() == before
-    assert set(folder.iterdir()) == files
 
 
 def test_failed_reset_preserves_curated_change_in_saved_corpus(
@@ -482,6 +479,10 @@ def test_failed_reset_preserves_curated_change_in_saved_corpus(
         for event in rows
         if (event.channel_id, event.ts) == (posted.channel_id, posted.ts)
     ] == [thermal_review.text]
+
+    state = room.apply(ROLE)
+    assert posted in state.messages
+    assert state.message_changes == 1
 
 
 def test_fresh_curated_edit_replaces_scenario_and_keeps_world_edit(

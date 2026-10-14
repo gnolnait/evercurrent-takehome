@@ -556,6 +556,10 @@ def test_rebuild_failure_returns_page_and_safe_log(
             if field_name not in {"exc_info", "exc_text"}:
                 assert "ROOM-SENTINEL" not in str(value)
     assert later.status_code == 200
+    later_page = Page(later.text)
+    for selection in state.selections:
+        for row in selection.lines:
+            assert " ".join(row.item.summary.split()) in " ".join(later_page.root.text().split())
 
 
 @pytest.mark.parametrize(
