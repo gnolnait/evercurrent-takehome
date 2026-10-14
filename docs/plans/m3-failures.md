@@ -53,26 +53,30 @@ unchanged:
 
 ## Behaviours
 
-B11.1 The gateway backend over an `httpx2.MockTransport` whose handler raises
-`httpx2.ConnectError`, one that raises `httpx2.ReadTimeout`, and one that raises
-`httpx2.DecodingError` raises `LLMOutputError` with the F1 message, `raw == ""`,
-`__cause__` and `__context__` suppressed (`__suppress_context__` true), and neither the
-API key nor the request body in the message; one `llm_unreachable` record is logged.
-B11.2 A 200 reply with a body that is not JSON raises `LLMOutputError("openrouter reply
-is not JSON")`.
+B11.1 The gateway backend with the key `sk-test-SENTINEL-KEY` over an
+`httpx2.MockTransport` whose handler raises `httpx2.ConnectError`, `httpx2.ReadTimeout` or
+`httpx2.DecodingError`, each built with the message `BODY-SENTINEL` and the key: the
+raised `LLMOutputError` has the message exactly `"openrouter unreachable: <Class>"`,
+`raw == ""` and `__suppress_context__` true; one `llm_unreachable` record is logged with
+`backend == "openrouter"` and `error_class == "<Class>"` and no sentinel in any field. A
+handler that raises `TypeError` propagates `TypeError` unchanged.
+B11.2 A 200 reply with the body `not json` raises `LLMOutputError` with the message
+exactly `"openrouter reply is not JSON"`.
 B11.3 A record-mode room whose gateway raises a transport error (seam: `from_settings`
-in `digest.room` patched to return an `LLM` over the B11.1 backend with a test key)
-refuses an unrecorded message change with a `ValueError` whose text has the F2 cause,
+in `digest.room` patched to return an `LLM` over the B11.1 backend) refuses an unrecorded
+message change with a `ValueError` whose text holds the F2 cause "a network failure",
 keeps its state and leaves no new store file in the room's folder.
 B11.4 A room with a curated message change applied, whose next build raises
 `RuntimeError`: `reset` raises, the room's state and message changes are unchanged, and
 a following `save` writes a corpus that holds the curated change.
-B11.5 `POST /edit` and `POST /reset` with a fake room that raises `RuntimeError("secret
-path C:/x")` answer 500 with the page and the F4 refusal; the page does not contain the
-exception's message; one `room_rebuild_failed` record with `route` and `error_class` is
-logged with `exc_info`; a following `GET /` answers 200.
-B11.6 `ValueError` refusals keep their 400 and their message (unit 9 and 10 tests stay
-green unchanged).
+B11.5 `POST /edit` and `POST /reset` with a fake room that raises
+`RuntimeError("ROOM-SENTINEL C:/secret")` answer 500 with the page and the exact F4
+refusal; neither the page nor any log record field other than the traceback holds
+`ROOM-SENTINEL`; exactly one `room_rebuild_failed` record has `route` equal to the route,
+`error_class == "RuntimeError"` and `exc_info` set; a following `GET /` answers 200.
+B11.6 `POST /edit` and `POST /reset` with a fake room that raises `ValueError("bad
+field")` answer 400 with "bad field" on the page and log no `room_rebuild_failed`.
+`POST /save` keeps its existing `OSError` and `ValueError` refusal with status 400.
 
 ## Test seams
 
