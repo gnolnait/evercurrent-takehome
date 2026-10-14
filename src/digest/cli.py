@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 from collections import Counter
 from collections.abc import Iterator, Set
-from contextlib import contextmanager, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import combinations
 from pathlib import Path
@@ -659,6 +659,70 @@ def _replace_file(path: Path, content: bytes) -> None:
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)
         raise
+
+
+@app.command("mcp")
+def mcp_cmd(
+    day: int = typer.Option(6, "--day", help="World day of the demo store; used without --db."),
+    world: str | None = typer.Option(
+        None, "--world", help="World under data/world; default the store's world."
+    ),
+    db: Path | None = typer.Option(
+        None, "--db", help="Store to serve; default the demo store of --day."
+    ),
+) -> None:
+    """Serve the query tools to an MCP client on stdio (docs/plans/m4-mcp.md M5).
+
+    Without --db, the command builds the store of the bundled world for --day as
+    `digest serve` does, in a temporary directory that lasts until the server stops. With
+    --db, it serves that store, and --world defaults to the store's world. Each tool call
+    opens the store, so a replay between two calls shows in the next call. Nothing but the
+    protocol goes to stdout. The command reads no API key.
+    """
+    # The mcp extra is optional. A top-level import would break `digest demo` on a plain
+    # `uv sync`, as `serve` avoids for the web extra.
+    # The refusal comes after the try statement, so no exception chains to it.
+    try:
+        from digest.mcp_server import build_server, check_store
+    except ImportError:
+        installed = False
+    else:
+        installed = True
+    if not installed:
+        _refuse("digest mcp needs the mcp extra; run uv sync --extra mcp")
+    failure: str | None = None
+    with ExitStack() as stack:
+        if db is None:
+            if world is not None:
+                _refuse("--world needs --db; without --db the command serves the bundled world")
+            loaded, priors, store = stack.enter_context(_demo_store(day))
+            store.close()
+            name = _DEMO_WORLD
+            path = Path(store.path)
+        else:
+            path = db
+            if world is None:
+                if not path.is_file():
+                    _refuse(f"no store at {path}; run digest replay first")
+                with _open_store_readonly(path) as store:
+                    world = _stored(store, "world")
+            name = world
+            loaded = _named_world(name)
+            try:
+                priors = load_priors(DEFAULT_PRIORS_PATH)
+            except OSError as error:
+                failure = f"{DEFAULT_PRIORS_PATH}: {error.strerror or error}"
+            except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as error:
+                failure = f"{DEFAULT_PRIORS_PATH}: {_with_notes(error)}"
+            if failure is not None:
+                _refuse(failure)
+        try:
+            check_store(path, loaded, name, priors)
+        except ValueError as error:  # a refused store
+            failure = str(error)
+        if failure is not None:
+            _refuse(failure)
+        build_server(path, loaded, priors).run("stdio")
 
 
 @app.command("eval")
@@ -1455,7 +1519,12 @@ def _checked_say(store: Store, world: World, line: ScriptLine) -> tuple[Event, d
 
 def _store_world(store: Store) -> World:
     """The world that the store holds, loaded from data/world; refuse a missing or bad file."""
-    source = Path("data") / "world" / _stored(store, "world") / "world.yaml"
+    return _named_world(_stored(store, "world"))
+
+
+def _named_world(name: str) -> World:
+    """The world `name`, loaded from data/world; refuse a missing or bad file."""
+    source = Path("data") / "world" / name / "world.yaml"
     try:
         return load_world(source)
     except OSError as error:

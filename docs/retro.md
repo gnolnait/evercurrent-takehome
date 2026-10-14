@@ -74,3 +74,19 @@ lists passed. The test review caught it before any code existed.
 Change. When a function takes caller SQL, probe each write path (`VACUUM INTO`,
 `ATTACH`, pragmas, temp tables) and the result size on a real connection before the
 plan is reviewed.
+
+
+
+## M4 unit 12b, the MCP server (2026-10-14)
+
+Caught. The plan review found that a context kept for the server's life would read a
+stale day after a replay and would hold a Windows file handle, so each tool call now
+opens the store and closes it. A spike before the plan found that SDK 2.x cannot be
+imported on this laptop, which set the SDK to 1.30.0.
+
+Missed. The first test round compared each tool's result with the bare view, but the
+SDK wraps a tuple or an optional view in a "result" field; two reviewers caught it from
+a probe of the installed SDK.
+
+Change. Before a plan names an SDK's output shape, call the SDK once on each return type
+the plan uses and paste what comes back into the plan.
