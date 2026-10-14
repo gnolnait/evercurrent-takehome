@@ -1,6 +1,6 @@
 # Plan: M5 slice, feedback recording and Slack interaction (`digest bot`)
 
-Status: v0.4 (RC review applied: store before ack, actor rule, episode key), 2026-10-13. Process stage 1 (`docs/process.md`).
+Status: v0.5 (re-baselined: ack first, one serial worker), 2026-10-13. Process stage 1 (`docs/process.md`).
 Stacked on the layout unit (`docs/plans/m5-layout.md` v0.4, branch `m5-layout`): it adds
 menus to the v6 top message and thread reply that `slack_digest` builds. Rebased onto
 `main` after the layout unit merges. This is "Next" of the layout plan and part of step 1
@@ -42,8 +42,8 @@ digest bot [--db PATH]
   `digest post` opens it only with `--interactive`: after the `--dm` and token checks and
   before it builds a digest, so a refused store sends nothing. Both commands open it with
   `_open_store`, so a file of another schema version, or a file that is not SQLite,
-  exits 1 with today's text. `digest bot` opens it once at start (this creates the
-  tables), closes it, and then opens it again for each click (I15).
+  exits 1 with today's text. `digest bot`: the worker opens it once and keeps it
+  open (I15); a Why click opens it read-only (I12).
 - `digest bot` runs a slack-bolt `App` in Socket Mode until Ctrl-C. It reads
   `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` with `_env_value` (environment, then `.env`).
   Refusals, each exit 1 before any connection: a missing token gives `_not_set(<key>)`;
@@ -56,8 +56,11 @@ digest bot [--db PATH]
   interrupts with `KeyboardInterrupt`. A `finally` calls `handler.close()`. An exception
   from `connect` exits 1 with `digest bot could not connect: <exception type name>`; the
   text of the exception is not printed, because it can hold a token. On Ctrl-C the
-  command prints `stopped` and the exit code is 0. `_socket_handler(bot_token, app_token,
-  db)` in `cli.py` builds the bolt `App` and the handler; the tests patch it.
+  command closes the handler (no new clicks arrive), then lets the worker of I15 finish
+  the clicks in its queue, for at most 10 seconds. It then prints `stopped`, or `stopped;
+  <n> clicks were not applied` when the 10 seconds end first, and the exit code is 0.
+  `_socket_handler(bot_token, app_token, jobs, db)` in `cli.py` builds the bolt `App`,
+  registers the listeners of I11 and returns the handler; the tests patch it.
 - `--demo-actor` (on `bot`, off by default): the actor rule of I7. Without it, only a
   clicker whose Slack user id is the item's owner resolves the item.
 
@@ -114,6 +117,10 @@ records nothing, when the target's `reader`, `day` or `item_id` differs from the
 given: the posted record's reader and day, and the key of the clicked item. It raises
 ValueError, and records nothing, when the target does not exist, is itself an `undo`, or
 is already undone.
+
+`record` and `undo` each run their checks and their insert inside one `BEGIN IMMEDIATE`
+transaction. So two calls on two connections (another adapter, such as the MCP server)
+cannot both undo one event: the second sees the first undo and raises ValueError.
 
 I6. **Idempotency and the derived state.** `idempotency_key` is unique in the table:
 `<channel>:<message ts>:<action_ts>:<block_id>` of the Slack action. `record` and `undo`
@@ -200,21 +207,23 @@ the digest for <reader>: the message has no ts; its message was sent<note>`, wit
 ### Listener (`digest bot`)
 
 I11. **Accept a click.** The bolt adapter registers `item_menu` and `item_undo`. Each
-calls `handle_action(body, ack=ack, ...)`. The handler calls `ack()` exactly once:
+listener calls `ack()` first, then:
 
-- for `done`, `snooze` and `undo`: after the feedback write of I13 or I14, or after the
-  handler decides to ignore the click, and before any Slack call;
-- for `Why this item?`: before `views.open`;
-- when the handler raises before `ack()`: in a `finally`.
+- for the `why:#<n>` option of `item_menu`: handles it at once, in the listener (I12);
+- for every other click: puts the payload on the job queue of I15 and returns.
 
-So the event is in the store before Slack gets the ack (D7). A crash after the ack cannot
-lose a click. The write is one SQLite insert through a connection with a 1-second busy
-timeout, inside Slack's 3-second limit, and it does not wait for the lock of I15. No SQLite
-transaction is open during a Slack call. The handler reads the
-`posted_messages` row for `(container.channel_id, container.message_ts)`. The payload's
-`message.metadata` is a cross-check only: missing metadata is accepted. The handler
-ignores the click, with the log event `bot_action_ignored` and a `reason` field, and
-calls no Slack method, when:
+The listener does no other work, so it acks within Slack's 3-second limit, and it never
+waits for the worker, the store or another click.
+
+Ack first is a decision against the D7 amendment's "store before ack", which is about
+Events API events. A crash after the ack loses a queued click. For a click, the loss is
+visible: the line shows no mark, and the reader clicks again. An Events API event that is
+lost has no such sign.
+
+The worker handles one job at a time (`handle_action`). It reads the `posted_messages`
+row for `(container.channel_id, container.message_ts)`. The payload's `message.metadata`
+is a cross-check only: missing metadata is accepted. The worker ignores the click, with
+the log event `bot_action_ignored` and a `reason` field, and calls no Slack method, when:
 
 | Reason | Condition |
 |---|---|
@@ -227,28 +236,28 @@ calls no Slack method, when:
 
 The reader is always the row's `reader` (I7).
 
-I12. **Why this item?** The handler opens its own read-only connection
+I12. **Why this item?** The listener opens its own read-only connection
 (`Store.open_readonly(db)`), reads the posted row, closes the connection, and calls
-`views.open` at once with the click's `trigger_id`. It does not take the mutation lock of
-I15, so a slow update of another click cannot delay it past Slack's 3-second
-`trigger_id` limit. The modal: title `Why this item?`, close button `Close`, no submit,
-and three blocks, each a mrkdwn section with `verbatim: true`: `*<title>*`; `*Why it is
-here*\n<reason>`; `*Sources*\n<one line per source>`. `<title>` is the displayed title of
-the line (layout 5.2), `<reason>` the line's `reason` from `select.py`. The sources are
-the evidence entries of the kept item, then of each member, each once, at most 10 lines.
-A line follows layout 6.1: mapped, `<permalink|Message> in <#C...>` (`Thread` for a thread
-root); unmapped, `In <#C...>` or `In #<name>`, with no link. Every text passes the layout
-pipeline (flatten, escape, the 3000 cut). The click records nothing (it is not a SPEC
-feedback event).
+`views.open` at once with the click's `trigger_id`. The store is in WAL mode, so the read
+never waits for a commit of the worker, and the job queue cannot delay the modal past
+Slack's 3-second `trigger_id` limit. The modal: title `Why this item?`, close button
+`Close`, no submit, and three blocks, each a mrkdwn section with `verbatim: true`:
+`*<title>*`; `*Why it is here*\n<reason>`; `*Sources*\n<one line per source>`. `<title>`
+is the displayed title of the line (layout 5.2), `<reason>` the line's `reason` from
+`select.py`. The sources are the evidence entries of the kept item, then of each member,
+each once, at most 10 lines. A line follows layout 6.1: mapped, `<permalink|Message> in
+<#C...>` (`Thread` for a thread root); unmapped, `In <#C...>` or `In #<name>`, with no
+link. Every text passes the layout pipeline (flatten, escape, the 3000 cut). The click
+records nothing (it is not a SPEC feedback event). A Why value that names no item of the
+row logs `bot_action_ignored` with `bad_value`.
 
-I13. **Record and update.** For `done` and `snooze`: build the `Subject` from the
-`PostedItem` and call `feedback.record` through the handler's own connection, outside the
-lock of I15. Then call `ack()`. A None result (a repeated delivery) logs
-`bot_action_repeated` and stops: no update. Else, inside the lock: add 1 to the row's
-`revision` and call `chat.update` with the row's channel, ts, `text` and metadata, and the
-blocks of I14. A crash after the write and before the update leaves the event without a
-mark on the message; the next update of that message shows it, because I14 reads
-`shown_marks`.
+I13. **Record and update.** For `done` and `snooze`, the worker builds the `Subject` from
+the `PostedItem` and calls `feedback.record`. A None result (a repeated delivery) logs
+`bot_action_repeated` and stops: no update. Else it adds 1 to the row's `revision` and
+calls `chat.update` with the row's channel, ts, `text` and metadata, and the blocks of
+I14. When the store write raises (`sqlite3.Error`), the worker logs `bot_store_failed`
+with the exception type, makes no update and no retry, and goes on to the next job: the
+line shows no mark, so the reader sees that the click did not apply.
 
 I14. **The updated message.** The blocks are the row's posted blocks, with every item
 block id carrying the new revision, and, for each item `<n>` whose key is in
@@ -267,21 +276,17 @@ restores the line, and a click on another item of the same message keeps the ear
 marks. For `item_undo`: the clicked item is item `<n>` of the block id;
 a value that is not a decimal integer is `bad_value`. The handler calls
 `feedback.undo(int(value), reader=<row reader>, day=<row day>, item_id=<clicked item
-key>, ...)` outside the lock, then calls `ack()`. None logs `bot_action_repeated`;
-`UndoMismatch` is `undo_mismatch`; another ValueError is `bad_undo`; else the handler
-updates the message inside the lock, as in I13.
+key>, ...)`. None logs `bot_action_repeated`; `UndoMismatch` is `undo_mismatch`; another
+ValueError is `bad_undo`; a `sqlite3.Error` is `bot_store_failed`, as in I13; else the
+worker updates the message as in I13.
 
-I15. **Locks and connections.** Bolt can run listeners on worker threads, and `Store.open`
-makes a connection that only its own thread may use. So:
-
-- The feedback write of `done`, `snooze` and `undo` opens its own connection
-  (`Store.open(db)`) outside any lock; SQLite orders two writes.
-- The update step holds one process-wide `threading.Lock` from the revision read to the
-  end of `chat.update`, and opens and closes its own connection inside the lock. Two
-  clicks on one message then update it in turn, and the second update shows both marks.
-  The ack of a click never waits for this lock.
-- `Why this item?` reads through its own connection outside the lock (I12). The posted
-  row's fields that Why reads never change after the post.
+I15. **One worker.** `digest bot` starts one worker thread before the handler connects.
+The worker opens the store once (`Store.open(db)`, which creates the tables) on its own
+thread, keeps that one connection for the life of the process, and takes jobs from a
+`queue.Queue` in order. There is no lock: one thread makes every feedback write and every
+`chat.update`. Two clicks on one message are two jobs; the second update shows both
+marks. A slow `chat.update` delays the jobs behind it, never an ack or a Why modal. A
+`None` job stops the worker.
 
 I16. **Slack failures.** A failed `views.open` or `chat.update` logs `bot_slack_failed`
 with `method` and `error` (the Slack error code, else the exception type; the
@@ -443,8 +448,16 @@ class BotSlackClient(Protocol):
                metadata: dict[str, Any]) -> None: ...
 
 def save_posted(store: Store, message: PostedMessage) -> None: ...              # I10
-def handle_action(body: Mapping[str, Any], db: Path, client: BotSlackClient, *,
-                  now: Callable[[], datetime]) -> None: ...                       # I11 to I16
+ActorRule = Literal["clicker", "demo_reader"]                                 # I7
+
+def handle_action(store: Store, body: Mapping[str, Any], client: BotSlackClient, *,
+                  actor_rule: ActorRule, now: Callable[[], datetime]) -> None: ...  # I11, I13 to I16
+def handle_why(body: Mapping[str, Any], db: Path, client: BotSlackClient) -> None: ...  # I12
+def run_worker(jobs: Queue[Mapping[str, Any] | None], db: Path, client: BotSlackClient, *,
+               actor_rule: ActorRule, now: Callable[[], datetime]) -> None: ...     # I15
+def listeners(jobs: Queue[Mapping[str, Any] | None], db: Path, client: BotSlackClient
+              ) -> tuple[Callable[..., None], Callable[..., None]]: ...
+    # I11: the item_menu and item_undo listeners; each takes ack and body
 def why_view(item: PostedItem) -> dict[str, Any]: ...                            # I12
 
 # digest/cli.py
@@ -515,7 +528,9 @@ otherwise.
   ValueError, no row. In every case the `items` table is unchanged.
 - A3 (I4). Snooze on day 6 (Mon 19 Oct 2026) gives `until` 2026-10-20; on a Friday it
   gives the Monday after.
-- A4 (I5). Undo of a live event writes one `undo` row. Undo of an unknown id, of an undo,
+- A4 (I5). Two threads, each with its own connection, undo one event at once with two
+  keys: one `undo` row; the other call raises ValueError. Undo of a live event writes one
+  `undo` row. Undo of an unknown id, of an undo,
   and of an undone event each raise ValueError and write nothing. Undo of another
   reader's event, of another day's event and of another line's event each raise
   `UndoMismatch` and write nothing.
@@ -552,28 +567,29 @@ otherwise.
   accepted. Metadata with another reader, day, run id, world or `event_type` than the row
   gives `metadata_mismatch`.
 - A11 (I12). `Why this item?` calls `open_view` with the click's `trigger_id` and the I12
-  modal; mapped and unmapped sources; escaped text; no row is written. While a fake
-  `update` of another click is blocked inside the lock (it waits on a `threading.Event`),
-  a Why click on another thread calls `open_view` and returns before the event is set.
+  modal; mapped and unmapped sources; escaped text; no row is written; nothing is put on
+  the queue. While the worker is blocked in a fake `update` (it waits on a
+  `threading.Event`), a Why click through the listener calls `open_view` and returns
+  before the event is set.
 - A12 (I13, I14). Each action updates the message once with the suffix and an `Undo`
   button holding the event id; the update keeps `text` and metadata; every item block id
   in the update carries the next revision, and the row's `revision` grows by 1; an undo
   click restores the posted blocks of that item (with the new revision); marks on two
   items of one message both show; a repeated delivery makes no update.
-- A13 (I15). Two handler calls from two threads on one message both write their rows, and
-  the last update shows both marks.
+- A13 (I15). Two jobs on one message, through `run_worker`: both rows are written, and
+  the last update shows both marks. A store write that raises `sqlite3.OperationalError`
+  logs `bot_store_failed`, makes no update, and the next job is still applied.
 - A14 (I16, I17). A `BotCallFailed` from `update` or `open_view` logs `bot_slack_failed`
   and keeps the row; with a token in the fake error, no captured log record and no output
   holds it; the `bot` command refuses a missing or malformed `SLACK_APP_TOKEN` or
   `SLACK_BOT_TOKEN` without printing the value.
-- A15 (I11, adapter and ack order). The bolt listener functions of the adapter, called
-  with a fake `ack` and a payload, pass the payload and `ack` to `handle_action`
-  unchanged. No bolt `App` is constructed. With one event log shared by the fakes: for
-  `done`, `snooze` and `undo`, the row exists when `ack` is called, and `ack` comes before
-  `update`; for Why, `ack` comes before `open_view`; an ignored click calls `ack` once;
-  a handler that raises before the ack still calls `ack` once. While a fake `update` of
-  another click is blocked inside the lock, a `done` click on another thread writes its
-  row and calls `ack` before the block is released.
+- A15 (I11, listeners). The listener functions of `listeners`, called with a fake `ack`
+  and a payload: `ack` is called first, once; a done, snooze or undo payload is put on the
+  queue unchanged and nothing else is called; a Why payload calls `open_view` and puts
+  nothing on the queue. While the worker is blocked in a fake `update`, a done click
+  through the listener calls `ack` and returns. No bolt `App` is constructed.
+- A19 (feedback.episode). `episode("checklist", "TST-1", "C0X", "1.2")` equals
+  `Episode("checklist", "TST-1", "C0X:1.2")`; another `message_ts` gives another episode.
 - A16 (I14, undo binding). An `item_undo` click whose value names an event of another line
   of the same message gives `undo_mismatch`; one whose value names another reader's event
   gives `undo_mismatch`; neither writes a row or updates the message.
@@ -590,7 +606,11 @@ otherwise.
   fake records `connect` then `close`, and no `start`; the output holds the listening
   line and then `stopped`; the exit code is 0. With a `connect` that raises an error
   whose text holds a token, `close` is still called, the output is `digest bot could not
-  connect: <exception type name>` with no token, and the exit code is 1.
+  connect: <exception type name>` with no token, and the exit code is 1. A job in the
+  queue at Ctrl-C is applied before `stopped` is printed; with a worker that does not
+  finish in 10 seconds (a patched wait), the output is `stopped; 1 clicks were not
+  applied`. With `--demo-actor`, the worker gets `actor_rule="demo_reader"`; without it,
+  `"clicker"`.
 
 ## Test seams
 
@@ -603,8 +623,9 @@ otherwise.
   `auth.test`. The adapter's listener functions take `ack` and `body` and are tested
   alone (A15).
 - The CLI with `CliRunner` and the Slack clients patched, as `tests/test_slack_post.py`
-  does. `digest bot` with `_socket_handler` and `time.sleep` patched (A18). No test
-  touches the network.
+  does. `digest bot` with `_socket_handler` and `time.sleep` patched (A18). `run_worker`
+  with a `Queue` filled by the test and a `None` job at the end. No test touches the
+  network.
 
 ## Next units
 
