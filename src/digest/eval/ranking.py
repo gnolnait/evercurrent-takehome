@@ -86,13 +86,27 @@ class ConfigScores(Frozen):
 class AblationRow(Frozen):
     term: str
     drops: dict[str, float | None]  # metric name -> relative drop; None: no vote
+    moved: dict[str, int]  # metric name -> persona-days whose value differs from C0 (plan R8a)
     verdict: Verdict
+
+
+class BelowThreshold(Frozen):
+    """C0's must-see facts in the ranked lane that score below the configured min_score (plan R11)."""
+
+    type: str
+    severity: str
+    count: int
 
 
 class RankingReport(Frozen):
     configs: tuple[ConfigScores, ...]  # C0, C1 to C4, role-only, send-everything
     ablation: tuple[AblationRow, ...]
     min_effect: float
+    min_score: float  # the configured daily.min_score
+    zero_threshold: tuple[ConfigScores, ...]  # the seven configurations at min_score 0 (plan R10)
+    zero_ablation: tuple[AblationRow, ...]
+    below_threshold: tuple[BelowThreshold, ...]  # by count descending, then type, then severity
+    must_see_facts: int  # must-see facts in the readers' sets over all persona-days
 
 
 def recall_at_5(lines: Sequence[int], facts: Sequence[int]) -> float | None:
