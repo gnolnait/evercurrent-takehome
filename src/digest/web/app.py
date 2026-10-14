@@ -18,8 +18,12 @@ from digest.driver import Change, LineView
 from digest.models import Role
 from digest.room import (
     Edit,
+    EditMessage,
+    PostMessage,
+    ReseedLike,
     RoomLike,
     RoomState,
+    RunScenario,
     SetGateDate,
     SetMembership,
     SetOwner,
@@ -50,7 +54,7 @@ _BOOLEANS = {"true": True, "false": False}
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def create_app(room: RoomLike) -> FastAPI:
+def create_app(room: RoomLike, *, reseed: ReseedLike | None = None) -> FastAPI:
     """Routes: GET /, POST /edit, POST /reset."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -234,3 +238,5 @@ def _describe(edit: Edit, names: dict[str, str], channels: dict[str, str]) -> st
             return f"{edit.gate_id}: date {edit.date.isoformat()}"
         case SetTaskOwner():
             return f"{edit.task_id}: owner role {edit.role}"
+        case EditMessage() | PostMessage() | RunScenario():
+            raise NotImplementedError

@@ -64,10 +64,62 @@ class SetTaskOwner(Frozen):
     role: Role
 
 
+class EditMessage(Frozen):
+    """Rewrite a stored message (plan m3-room-edits M2)."""
+
+    kind: Literal["edit_message"]
+    channel_id: str
+    ts: str
+    text: str
+    files: tuple[str, ...] = ()
+
+
+class PostMessage(Frozen):
+    """Post a new message as a persona (plan m3-room-edits M3)."""
+
+    kind: Literal["post_message"]
+    user_id: str
+    channel_id: str
+    text: str
+    thread_ts: str | None = None
+
+
+class RunScenario(Frozen):
+    """Post a recorded unit 7 script line (plan m3-room-edits M4)."""
+
+    kind: Literal["run_scenario"]
+    name: Literal["d2-bracket-delay", "d3-gate-delay"]
+
+
+MessageChange = EditMessage | PostMessage | RunScenario
+
 Edit = Annotated[
-    SetRole | SetMembership | SetPrivate | SetOwner | SetGateDate | SetTaskOwner,
+    SetRole
+    | SetMembership
+    | SetPrivate
+    | SetOwner
+    | SetGateDate
+    | SetTaskOwner
+    | EditMessage
+    | PostMessage
+    | RunScenario,
     Field(discriminator="kind"),
 ]
+
+
+class MessageView(Frozen):
+    """One message in the room store up to the room's day, for the Messages panel."""
+
+    channel_id: str
+    channel_name: str
+    thread_ts: str
+    ts: str
+    user_id: str
+    author: str  # persona name
+    text: str
+    files: tuple[str, ...]
+    edited: bool
+    posted: bool  # true for a message the room added
 
 
 class RoomBase(Frozen):
@@ -94,6 +146,10 @@ class RoomState(Frozen):
     # Per reader: lines the latest edit added, removed, changed or reworded.
     last_effect: tuple[int, ...]
     owners: dict[str, tuple[str, ...]]  # entity id -> sorted user ids whose owned set holds it
+    # Every message in the room store up to the room's day, after the message changes, by
+    # channel, thread and ts (plan m3-room-edits). Empty for a hand-built state.
+    messages: tuple[MessageView, ...] = ()
+    message_changes: int = 0  # message changes since the last reset
 
 
 def apply_world_edits(world: World, edits: Sequence[Edit]) -> World:
@@ -177,6 +233,8 @@ def _apply(world: World, edit: Edit) -> World:
                 for g in world.project.gates
             )
             return _with_gates(world, gates)
+        case EditMessage() | PostMessage() | RunScenario():
+            return world  # a message change changes the room store, never the world
         case _:
             assert_never(edit)
 
@@ -309,11 +367,22 @@ class RoomLike(Protocol):
     def state(self) -> RoomState: ...
 
 
+class ReseedLike(Protocol):
+    """The seed owner's reseed of a saved corpus copy (plan m3-room-edits S2)."""
+
+    def __call__(self, copy_dir: Path, *, dry_run: bool) -> str: ...
+
+
 class Room:
     """Keeps the store path, never an open connection: each rebuild opens and closes it."""
 
-    def __init__(self, base: RoomBase) -> None:
-        """Build the first state; ValueError when `base.store_path` is not an existing file."""
+    def __init__(
+        self, base: RoomBase, *, record: bool = False, cassettes: Path = Path("data/cassettes")
+    ) -> None:
+        """Build the first state; ValueError when `base.store_path` is not an existing file.
+
+        `record` allows model calls for message changes with no cassette (plan M5).
+        """
         # Store.open creates a missing file, so check before the first build.
         if not base.store_path.is_file():
             raise ValueError(f"room store {base.store_path} is not an existing file")
@@ -332,6 +401,10 @@ class Room:
 
     def state(self) -> RoomState:
         return self._state
+
+    def save(self, path: Path) -> Path:
+        """Write the corpus copy with the room's message changes (plan S1); return `path`."""
+        raise NotImplementedError
 
     def _build(self, edits: Sequence[Edit]) -> RoomState:
         with Store.open(self._base.store_path) as store:
