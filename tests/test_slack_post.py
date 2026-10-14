@@ -18,7 +18,6 @@ from digest.cli import app
 from digest.daily.profile import Profile
 from digest.daily.render import render_digest
 from digest.daily.select import Line, Section, Selection
-from digest.daily.slack import slack_message
 from digest.extract.stage import ExtractReport
 from digest.extract.verify import DROP_FIELDS
 from digest.models import Evidence, Item
@@ -26,6 +25,7 @@ from digest.project import Gate
 from digest.store import Store
 from digest.world.load import load_world
 from digest.world.schema import World
+from slack_checks import build_digest
 
 ROOT = Path(__file__).parents[1]
 WORLD_PATH = ROOT / "data" / "world" / "kestrel" / "world.yaml"
@@ -124,32 +124,51 @@ def mrkdwn_text_objects(value: Any) -> list[dict[str, Any]]:
 def test_slack_message_has_header_section_titles_lines_and_sources(
     world: World, profile: Profile
 ) -> None:
-    """Set up two sections; build the message; assert its Block Kit shape and content."""
     selected = selection(
         profile,
-        line(item(evidence=(evidence(1), evidence(2))), must_see=True),
+        line(item(), must_see=True),
         line(item(3, type="risk", title="Tooling risk"), "risks"),
     )
-
-    message = slack_message(world, selected)
-
-    header = "Daily digest for Nadia Brenner (ME) - 2026-10-14"
-    assert set(message) == {"text", "blocks"}
-    assert message["text"] == header + "\nFirst digest: the last 5 working days\n" + PHASE
-    assert message["blocks"][0]["type"] == "header"
-    assert message["blocks"][0]["text"]["type"] == "plain_text"
-    assert block_text(message["blocks"][0]) == header
-    blocks = message["blocks"][1:]
-    assert [block["type"] for block in blocks] == ["section"] * 5
-    texts = [block_text(block) for block in blocks]
-    assert texts[0] == "First digest: the last 5 working days\n" + PHASE
-    assert texts[1] == "*Decisions*"
-    assert "*Drawing released*" in texts[2]
-    assert "*[must see]*" in texts[2]
-    assert f"<{evidence(1).permalink}|source>" in texts[2]
-    assert f"<{evidence(2).permalink}|source>" in texts[2]
-    assert texts[3] == "*Risks*"
-    assert "*Tooling risk*" in texts[4]
+    top, reply = build_digest(world, selected)
+    assert top["text"] == "G-TR1 in 6 days. 1 to read first, starting with Drawing released."
+    assert top["blocks"][0] == {
+        "type": "header",
+        "text": {"type": "plain_text", "text": "Kestrel K2 · Wed 14 Oct"},
+    }
+    assert [block["type"] for block in top["blocks"]] == [
+        "header",
+        "context",
+        "section",
+        "divider",
+        "section",
+        "context",
+        "divider",
+        "context",
+    ]
+    assert top["blocks"][4] == {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*Drawing released*\nRelease PN-51010 Rev C for tooling.",
+            "verbatim": True,
+        },
+    }
+    assert top["blocks"][5] == {
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": "*On your PN-51010* · Owner: Hamid (supply chain) · Open since Thu 9 Oct · In #eng-me",
+                "verbatim": True,
+            }
+        ],
+    }
+    assert reply["text"] == "More from your digest: Risks 1"
+    assert [block["type"] for block in reply["blocks"]] == ["section", "section", "context"]
+    assert block_text(reply["blocks"][0]) == "*Risks* · 1"
+    assert block_text(reply["blocks"][1]) == "*Tooling risk*\nRelease PN-51010 Rev C for tooling."
+    assert "[must see]" not in str([top, reply])
+    assert WORKSPACE not in str([top, reply])
 
 
 @pytest.mark.parametrize(
@@ -173,17 +192,17 @@ def test_slack_window_matches_terminal_as_verbatim_section(
         first_working_days=3,
     )
 
-    message = slack_message(world, selected)
+    message = build_digest(world, selected)[0]
     terminal_window = render_digest(world, selected).splitlines()[1]
 
     assert terminal_window == expected
     assert message["blocks"][1] == {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": terminal_window + "\n" + PHASE, "verbatim": True},
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": terminal_window + "\n" + PHASE, "verbatim": True}],
     }
     if empty:
         assert len(message["blocks"]) == 3
-        assert block_text(message["blocks"][2]) == "Nothing new for Nadia Brenner."
+        assert block_text(message["blocks"][2]).splitlines()[-1] == "Nothing new for you."
 
 
 @pytest.mark.parametrize(
@@ -205,34 +224,27 @@ def test_slack_fallback_has_escaped_header_then_window(
         previous_digest=previous,
         first_working_days=3,
     )
-
-    message = slack_message(world, selected)
-
-    assert message["text"] == (
-        "Daily digest for Nadia &amp; &lt;ME&gt; (ME) - 2026-10-14\n" + expected + "\n" + PHASE
-    )
+    message = build_digest(world, selected)[0]
+    assert message["text"] == "G-TR1 in 6 days. Nothing new for you."
+    assert message["blocks"][1]["elements"] == [
+        {"type": "mrkdwn", "text": expected + "\n" + PHASE, "verbatim": True}
+    ]
 
 
 def test_slack_message_escapes_model_text_before_mrkdwn(world: World, profile: Profile) -> None:
     selected = selection(
         profile,
-        line(
-            item(
-                title="Alert & <@U123> >",
-                summary="Do not open <https://x|y> & wait > now.",
-            )
-        ),
+        line(item(title="Alert & <@U123> >", summary="Do not open <https://x|y> & wait > now.")),
     )
-
-    message = slack_message(world, selected)
-
-    assert len(message["blocks"]) == 4
-    rendered = block_text(message["blocks"][3])
-    assert "*Alert &amp; &lt;@U123&gt; &gt;*" in rendered
-    assert "Do not open &lt;https://x|y&gt; &amp; wait &gt; now." in rendered
+    message = build_digest(world, selected)[0]
+    rendered = block_text(message["blocks"][4])
+    assert (
+        rendered
+        == "*Alert &amp; &lt;@U123&gt; &gt;*\nDo not open &lt;https://x|y&gt; &amp; wait &gt; now."
+    )
     assert "<@U123>" not in rendered
     assert "<https://x|y>" not in rendered
-    assert re.findall(r"<[^>]+>", rendered) == [f"<{evidence().permalink}|source>"]
+    assert re.findall(r"<[^>]+>", rendered) == []
 
 
 def test_slack_message_sets_verbatim_on_every_mrkdwn_text_object(
@@ -245,7 +257,7 @@ def test_slack_message_sets_verbatim_on_every_mrkdwn_text_object(
         hidden=1,
     )
 
-    message = slack_message(world, selected)
+    message = build_digest(world, selected)[0]
 
     text_objects = mrkdwn_text_objects(message)
     assert text_objects
@@ -253,45 +265,40 @@ def test_slack_message_sets_verbatim_on_every_mrkdwn_text_object(
 
 
 def test_slack_message_cuts_a_long_line_with_ellipsis(world: World, profile: Profile) -> None:
-    selected = selection(profile, line(item(summary="x" * 4000)))
-
-    message = slack_message(world, selected)
-
-    assert len(message["blocks"]) == 4
-    rendered = block_text(message["blocks"][3])
+    message = build_digest(world, selection(profile, line(item(summary="x" * 4000))))[0]
+    rendered = block_text(message["blocks"][4])
+    assert rendered == "*Drawing released*\n" + "x" * 159 + "\N{HORIZONTAL ELLIPSIS}"
     assert len(rendered) <= 3000
-    assert rendered.endswith("\N{HORIZONTAL ELLIPSIS}")
 
 
 @pytest.mark.parametrize(
-    ("count", "hidden", "kept", "omitted"),
-    [(47, 0, 47, 0), (48, 0, 46, 2), (51, 0, 46, 5), (46, 2, 46, 0), (47, 2, 45, 2)],
-    ids=["exactly-50", "one-over", "51-lines", "exactly-50-with-footer", "one-over-with-footer"],
+    ("count", "hidden"),
+    [(47, 0), (48, 0), (51, 0), (46, 2), (47, 2)],
 )
 def test_slack_message_limits_blocks_and_reports_omitted_lines(
-    world: World, profile: Profile, count: int, hidden: int, kept: int, omitted: int
+    world: World, profile: Profile, count: int, hidden: int
 ) -> None:
     lines = tuple(line(item(number, title=f"Decision {number}")) for number in range(1, count + 1))
-    selected = Selection(profile=profile, day=DAY, lines=lines, hidden=hidden)
-
-    message = slack_message(world, selected)
-
-    assert len(message["blocks"]) == 50
-    texts = [block_text(block) for block in message["blocks"]]
-    assert [text.split("*", 2)[1] for text in texts if text.startswith("*Decision ")] == [
-        f"Decision {number}" for number in range(1, kept + 1)
-    ]
-    assert texts[2] == "*Decisions*"
-    assert [text.split("*", 2)[1] for text in texts[3 : 3 + kept]] == [
-        f"Decision {number}" for number in range(1, kept + 1)
-    ]
-    footer = []
+    top, reply = build_digest(
+        world, Selection(profile=profile, day=DAY, lines=lines, hidden=hidden)
+    )
+    assert [
+        block_text(block).split("*", 2)[1]
+        for block in top["blocks"]
+        if block["type"] == "section" and block_text(block).startswith("*Decision ")
+    ] == ["Decision 1", "Decision 2", "Decision 3"]
+    assert len(reply["blocks"]) == 50
+    assert block_text(reply["blocks"][0]) == f"*Decisions* · {count - 3}"
+    assert [
+        block_text(block).split("*", 2)[1]
+        for block in reply["blocks"]
+        if block["type"] == "section" and block_text(block).startswith("*Decision ")
+    ] == [f"Decision {number}" for number in range(4, 28)]
+    assert reply["blocks"][-1]["elements"][0]["text"] == f"{count - 27} more items not shown"
+    foot = f"In the thread: Decisions {count - 3}"
     if hidden:
-        footer.append("2 items hidden by the visibility filter.")
-    if omitted:
-        footer.append(f"{omitted} lines left out.")
-    assert texts[3 + kept :] == footer
-    assert texts[1] == "First digest: the last 5 working days\n" + PHASE
+        foot += ". 2 items left out: from channels you cannot see."
+    assert top["blocks"][-1]["elements"][0]["text"] == foot
 
 
 class FakeResponse:
@@ -383,6 +390,7 @@ def prepare_post(
     extract: Callable[..., ExtractReport] = successful_extract,
     webhook_url: str | None = WEBHOOK_URL,
 ) -> None:
+    monkeypatch.setattr(cli.tempfile, "tempdir", str(tmp_path))
     cassettes = tmp_path / "cassettes"
     cassettes.mkdir()
     # The replaced extract step does not read this cassette.
@@ -452,7 +460,7 @@ def test_cli_post_dm_opens_one_conversation_and_sends_three_readers_in_order(
             {
                 "method": "chat_postMessage",
                 "channel": DM_CHANNEL,
-                **slack_message(world, selected),
+                **build_digest(world, selected)[0],
             }
             for selected in selections
         ],
@@ -746,7 +754,7 @@ def test_cli_post_dm_invalid_auth_names_token_source(
             encoding="utf-8",
         )
     selected = selection(profile, line(item()))
-    monkeypatch.setattr(cli, "_demo_selections", lambda day: (world, [selected] * 3))
+    monkeypatch.setattr(cli, "_demo_selections", lambda day: (world, [selected] * 3, {}))
     error = SlackApiError("authentication failed", {"error": "invalid_auth"})
     monkeypatch.setattr(cli, "_slack_web_client", lambda token: FakeSlackWebClient({1: error}))
 
@@ -780,16 +788,15 @@ def test_cli_post_sends_three_readers_in_order_and_exits_zero(
     result = runner.invoke(app, ["post", "--day", "5"])
 
     assert result.exit_code == 0, result.output
-    assert client.calls == [slack_message(world, selected) for selected in selections]
-    phase = (
-        "\nPhase: EVT since 2026-08-03. Next gate: G-TR1 "
-        "Top-cover tooling and texture release (PN-51010), in 2 working days."
-    )
-    assert [call["text"] for call in client.calls] == [
-        "Daily digest for Nadia Brenner (ME) - 2026-10-16\nSince your digest of 2026-10-15" + phase,
-        "Daily digest for Hamid Rostami (supply_chain) - 2026-10-16\n"
-        "Since your digest of 2026-10-15" + phase,
-        "Daily digest for Grace Okonkwo (EM) - 2026-10-16\nSince your digest of 2026-10-15" + phase,
+    assert client.calls == [
+        message
+        for selected in selections
+        for message in build_digest(world, selected, threaded=False)
+    ]
+    assert [call["blocks"][0]["text"]["text"] for call in client.calls] == [
+        "Kestrel K2 · Fri 16 Oct",
+        "Kestrel K2 · Fri 16 Oct",
+        "Kestrel K2 · Fri 16 Oct",
     ]
     assert WEBHOOK_URL not in result.output
     assert all(WEBHOOK_URL not in str(vars(record)) for record in caplog.records)
@@ -1024,20 +1031,15 @@ def test_phase_line_gate_name_is_plain_or_escaped_once(
     if surface == "terminal":
         assert render_digest(world, selected).splitlines()[2] == plain
     else:
-        message = slack_message(world, selected)
+        message = build_digest(world, selected)[0]
         window = "First digest: the last 5 working days"
         if surface == "slack-block":
             assert message["blocks"][1] == {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": window + "\n" + escaped, "verbatim": True},
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": window + "\n" + escaped, "verbatim": True}],
             }
         else:
-            assert message["text"] == (
-                "Daily digest for Nadia &amp; &lt;ME&gt; (ME) - 2026-10-14\n"
-                + window
-                + "\n"
-                + escaped
-            )
+            assert message["text"] == "Nothing new for you."
 
 
 @pytest.mark.parametrize(
@@ -1058,7 +1060,7 @@ def test_renderers_omit_phase_before_first_window(
     assert render_digest(world, selected) == (
         header + "\n" + context + "\n\nNothing new for Nadia Brenner."
     )
-    message = slack_message(world, selected)
-    assert message["text"] == header + "\n" + context
-    assert block_text(message["blocks"][1]) == context
+    message = build_digest(world, selected)[0]
+    assert message["text"] == "Nothing new for you."
+    assert message["blocks"][1]["elements"][0]["text"] == context
     assert len(message["blocks"]) == 3

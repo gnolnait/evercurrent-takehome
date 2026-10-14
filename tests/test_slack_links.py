@@ -15,7 +15,6 @@ import digest.cli as cli
 from digest.cli import app
 from digest.daily.profile import Profile
 from digest.daily.select import Line, Selection
-from digest.daily.slack import slack_message
 from digest.models import Evidence, Item
 from digest.seed import (
     MappedFile,
@@ -27,6 +26,7 @@ from digest.seed import (
 )
 from digest.world.load import load_world
 from digest.world.schema import World
+from slack_checks import build_digest
 
 ROOT = Path(__file__).parents[1]
 WORLD_PATH = ROOT / "data" / "world" / "kestrel" / "world.yaml"
@@ -112,7 +112,13 @@ def section_texts(message: dict[str, Any]) -> list[str]:
 
 
 def block_text(message: dict[str, Any]) -> str:
-    return "\n".join(section_texts(message))
+    return "\n".join(
+        block["text"]["text"]
+        if block["type"] == "section"
+        else "\n".join(element["text"] for element in block["elements"])
+        for block in message["blocks"]
+        if block["type"] in {"section", "context"}
+    )
 
 
 def dm_payloads(client: FakeSlackWebClient) -> list[dict[str, Any]]:
@@ -124,7 +130,13 @@ def dm_payloads(client: FakeSlackWebClient) -> list[dict[str, Any]]:
 
 
 def line_text(message: dict[str, Any]) -> str:
-    return next(text for text in section_texts(message) if "Drawing released" in text)
+    blocks = message["blocks"]
+    index = next(
+        index
+        for index, block in enumerate(blocks)
+        if block["type"] == "section" and "Drawing released" in block["text"]["text"]
+    )
+    return blocks[index]["text"]["text"] + "\n" + blocks[index + 1]["elements"][0]["text"]
 
 
 class FakeResponse:
@@ -191,7 +203,7 @@ def prepare_cli(
     selections: list[Selection],
     webhook: FakeWebhookClient,
 ) -> None:
-    monkeypatch.setattr(cli, "_demo_selections", lambda day: (world, selections))
+    monkeypatch.setattr(cli, "_demo_selections", lambda day: (world, selections, {}))
     monkeypatch.setattr(cli, "_webhook_url", lambda: WEBHOOK_URL)
     monkeypatch.setattr(cli, "_webhook_client", lambda url: webhook)
 
@@ -232,15 +244,15 @@ def test_mapped_root_reply_files_and_one_channel_render_in_source_order(
         },
     )
 
-    text = line_text(slack_message(world, selection(profile, item(1, (root, reply))), links))
+    text = line_text(
+        build_digest(world, selection(profile, item(1, (root, reply))), links=links)[0]
+    )
 
     expected = (
-        "<https://ws.slack.com/archives/C111/p1761000000000001|source> "
-        "<https://ws.slack.com/files/U1/F9/z.pdf|z&amp;last.pdf> "
-        "<https://ws.slack.com/files/U1/F1/a.step|a&lt;first&gt;.step> "
-        "<https://ws.slack.com/archives/C111/p1761000000000002?"
-        "thread_ts=1761000000.000001&cid=C111|source> "
-        "in <#C111>"
+        "*Decision* · Open since Thu 9 Oct · "
+        "<https://ws.slack.com/archives/C111/p1761000000000001|Thread> in <#C111> · "
+        ":paperclip: <https://ws.slack.com/files/U1/F9/z.pdf|z&amp;last.pdf> "
+        "<https://ws.slack.com/files/U1/F1/a.step|a&lt;first&gt;.step>"
     )
     assert text.splitlines()[-1] == expected
     assert text.count("<#C111>") == 1
@@ -266,12 +278,13 @@ def test_mapped_sources_in_two_channels_render_channels_in_source_order_without_
         }
     )
 
-    text = line_text(slack_message(world, selection(profile, item(1, sources)), links))
+    text = line_text(build_digest(world, selection(profile, item(1, sources)), links=links)[0])
 
     assert text.splitlines()[-1] == (
-        "<https://ws.slack.com/archives/C222/p1762000000000001|source> "
-        "<https://ws.slack.com/archives/C111/p1761000000000001|source> in <#C222> <#C111>"
+        "*Decision* · Open since Thu 9 Oct · "
+        "<https://ws.slack.com/archives/C222/p1762000000000001|Thread> in <#C222>"
     )
+    assert "<#C111>" not in text
     assert "files" not in text
 
 
@@ -288,12 +301,15 @@ def test_mixed_mapped_and_unmapped_sources_keep_source_order(
         }
     )
 
-    text = line_text(slack_message(world, selection(profile, item(1, (mapped, unmapped))), links))
+    text = line_text(
+        build_digest(world, selection(profile, item(1, (mapped, unmapped))), links=links)[0]
+    )
 
     assert text.splitlines()[-1] == (
-        "<https://ws.slack.com/archives/C222/p1762000000000001|source> "
-        "<https://world.slack.com/original|source> in <#C222>"
+        "*Decision* · Open since Thu 9 Oct · "
+        "<https://ws.slack.com/archives/C222/p1762000000000001|Thread> in <#C222>"
     )
+    assert "https://world.slack.com" not in text
 
 
 def test_mapped_message_escapes_text_keeps_verbatim_and_cuts_complete_tokens(
@@ -307,7 +323,7 @@ def test_mapped_message_escapes_text_keeps_verbatim_and_cuts_complete_tokens(
             )
         },
         files={
-            f"C0ENGME:1760000000.000001/{'z' * 400}&<cut>.pdf": MappedFile(
+            f"C0ENGME:1760000000.000001/{'z' * 3100}&<cut>.pdf": MappedFile(
                 permalink="https://ws.slack.com/files/U1/F1/a.pdf"
             )
         },
@@ -317,15 +333,15 @@ def test_mapped_message_escapes_text_keeps_verbatim_and_cuts_complete_tokens(
         item(1, (source,), summary="A & B < C > D " + "x" * 2750),
     )
 
-    message = slack_message(world, selected, links)
+    message = build_digest(world, selected, links=links)[0]
     text = line_text(message)
 
     assert "A &amp; B &lt; C &gt; D" in text
-    mapped_root = "<https://ws.slack.com/archives/C111/p1761000000000001|source>"
+    mapped_root = "<https://ws.slack.com/archives/C111/p1761000000000001|Thread>"
     assert mapped_root in text
     assert text.count(mapped_root) == 1
     assert "https://ws.slack.com/files/U1/F1/a.pdf" not in text
-    assert len(text) <= 3000
+    assert len(text.splitlines()[-1]) <= 3000
     assert text.endswith("\N{HORIZONTAL ELLIPSIS}")
     assert re.search(r"<[^>]*$|&[a-z]*$", text[:-1]) is None
     assert all(
@@ -351,12 +367,12 @@ def test_uncut_mapped_message_escapes_summary_and_file_name(world: World, profil
     )
     selected = selection(profile, item(1, (source,), summary="A & B < C > D"))
 
-    text = line_text(slack_message(world, selected, links))
+    text = line_text(build_digest(world, selected, links=links)[0])
 
     assert "A &amp; B &lt; C &gt; D" in text
-    assert "<https://ws.slack.com/archives/C111/p1761000000000001|source>" in text
+    assert "<https://ws.slack.com/archives/C111/p1761000000000001|Thread>" in text
     assert "<https://ws.slack.com/files/U1/F1/a.pdf|a&amp;&lt;b&gt;.pdf>" in text
-    assert text.endswith("in <#C111>")
+    assert "|Thread> in <#C111> · :paperclip:" in text
 
 
 def test_message_permalink_handles_root_reply_and_absent_key() -> None:
@@ -423,7 +439,7 @@ def test_cli_without_seed_map_does_not_authenticate(
         "chat_postMessage",
         "chat_postMessage",
     ]
-    assert dm_payloads(client) == [slack_message(world, selected)] * 3
+    assert dm_payloads(client) == [build_digest(world, selected)[0]] * 3
     assert webhook.calls == []
 
 
@@ -648,7 +664,9 @@ def test_cli_dm_with_matching_team_sends_three_mapped_payloads_in_order(
     assert client.calls[1] == {"method": "conversations_open", "users": "U012ABC"}
     assert all(call["channel"] == DM_CHANNEL for call in client.calls[2:])
     assert dm_payloads(client) == [
-        slack_message(world, selected, links=loaded) for selected in selections
+        message
+        for selected in selections
+        for message in build_digest(world, selected, links=loaded)
     ]
     delivered = block_text(dm_payloads(client)[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
@@ -715,7 +733,9 @@ def test_cli_counts_every_unmapped_occurrence_before_the_block_cut_and_send(
     assert result.output.count(count_line) == 1
     assert events.index(count_line) < events.index("send")
     assert webhook.calls == [
-        slack_message(world, selected, links=loaded) for selected in selections
+        message
+        for selected in selections
+        for message in build_digest(world, selected, links=loaded, threaded=False)
     ]
     delivered = block_text(webhook.calls[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
@@ -812,7 +832,7 @@ def test_cli_prints_no_unmapped_count_when_every_source_is_mapped(
 
     assert result.exit_code == 0, result.output
     assert "source links are not in the seed map" not in result.output
-    assert webhook.calls == [slack_message(world, selected, links=loaded)] * 3
+    assert webhook.calls == [build_digest(world, selected, links=loaded, threaded=False)[0]] * 3
     delivered = block_text(webhook.calls[0])
     assert "https://ws.slack.com/archives/C111/p1761000000000001" in delivered
     assert "https://ws.slack.com/files/U1/F9/drawing.step" in delivered
